@@ -26,9 +26,9 @@ The harness does **not** parse flags; you get the raw `$ARGUMENTS` string. Parse
    Then require the remainder to be **empty**: if any other token remains — a scope flag, free text,
    `--issue-rounds`, `--max-rounds`, or `--debate-low` — stop with exactly
    `--continue takes the scope and limits from the finished run; don't combine it with another flag.`
-   Then **skip the rest of Step 1 and Step 2** and follow **Step 1.5** instead (it sources the scope
-   and limits from the finished run). If `--continue` is absent, leave `CONT` unset and parse the
-   rest of Step 1 (round limits, `--debate-low`, scope) normally.
+   Then **skip the rest of Step 1** and follow **Step 1.5** instead (which runs Step 2's resolve+hash
+   inline before Step 3, sourcing the scope and limits from the finished run). If `--continue` is
+   absent, leave `CONT` unset and parse the rest of Step 1 (round limits, `--debate-low`, scope) normally.
 1. **Round limits.** Defaults `issue-rounds=2`, `max-rounds=4`. Apply `--issue-rounds N` /
    `--max-rounds N` if present, then validate the **resolved** values: each a positive integer and
    `issue-rounds ≤ max-rounds`. Otherwise stop with a one-line error.
