@@ -84,12 +84,21 @@ Changes:
 - Default profile becomes **`panel-review`** (was `peer-review`):
   `CODEX_PROFILE="${CODEX_PROFILE:-panel-review}"`.
 - **Create-if-missing guard:** before invoking Codex, if
-  `~/.codex/panel-review.config.toml` is absent, write the two-line default:
+  `~/.codex/panel-review.config.toml` is absent, `mkdir -p ~/.codex` and **copy a
+  shipped template** into place (`cp` without overwriting an existing file). The
+  default config is a real, separate file — not a heredoc inside the script — so it
+  can be edited, diffed, and reviewed on its own:
 
-  ```toml
-  model = "gpt-5.5"
-  model_reasoning_effort = "xhigh"
-  ```
+  - Template: **`skills/panel-review/templates/default-panel-review.config.toml`**
+
+    ```toml
+    model = "gpt-5.5"
+    model_reasoning_effort = "xhigh"
+    ```
+
+  - `run_codex` resolves its own location to find the template:
+    `SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"`, template at
+    `$SCRIPT_DIR/../templates/default-panel-review.config.toml`.
 
   Idempotent and cheap; runs on every call. After the guard the file always
   exists, so Codex is always invoked with `--profile panel-review` — no
@@ -99,6 +108,10 @@ Changes:
     guaranteed present exactly when needed, including any standalone call.
   - Keeps `preflight` read-only.
   - Single source of truth; no two-places-must-agree.
+- Rationale for a template file over an inline heredoc: the default config lives in
+  a real `.toml` that is editable/diffable/lintable without touching shell, and a
+  `templates/` sibling dir keeps it clear of `install.sh`'s `chmod +x scripts/*`
+  (no exec bit on a data file, no special-casing).
 - Remove the `peer-review-summarizer` mention from the `run_codex` comment.
 
 ### 3. Drop the summarizer profile entirely
@@ -131,13 +144,15 @@ symmetric rule everywhere it appears:
   get a fresh default `panel-review.config.toml` and won't inherit that tuning.
   This is the intended decoupling; the auto-create makes it seamless (no manual
   step), and they can re-tune the new file. Accepted.
-- Default model/effort values now live in `run_codex` rather than a setup script.
-  Acceptable — that's the point of invocation.
+- Default model/effort values live in a shipped template file
+  (`templates/default-panel-review.config.toml`), copied on first use. Editable on
+  its own, no setup step.
 
 ## Affected files
 
 - `skills/panel-review/scripts/preflight`
 - `skills/panel-review/scripts/run_codex`
+- `skills/panel-review/templates/default-panel-review.config.toml` (new)
 - `README.md`
 - `skills/panel-review-for-agent/SKILL.md`
 - `agents/panel-review-referee.md`
@@ -148,7 +163,8 @@ symmetric rule everywhere it appears:
 - `preflight` with: both peers present; only `codex`; only `agy`; neither
   (expect the single hard-fail); missing `jq`/`git`/non-writable cwd still fail.
   Verify the `CODEX:`/`GEMINI:` tail lines.
-- `run_codex` with the profile absent: confirm it creates the 2-line file and runs;
-  with it present: confirm it is not overwritten.
+- `run_codex` with the profile absent: confirm it copies the template to
+  `~/.codex/panel-review.config.toml` and runs; with it present: confirm it is not
+  overwritten. Confirm the shipped template carries no exec bit after `install.sh`.
 - Confirm a review with `codex` absent but `agy` present runs end-to-end 2-way and
   labels Codex as the down seat (not "fully vetted").
