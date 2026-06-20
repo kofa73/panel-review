@@ -9,6 +9,7 @@
 # Output (stdout), exactly one of:
 #   fresh                  no marker dir -> start a new run
 #   resume <ID>            marker + valid matching /tmp state -> can resume
+#   continuable <ID>       finished run (no open issues) with unresolved/contested left -> --continue
 #   stale <ID>             marker but /tmp/<ID> missing/empty -> drop & start fresh
 #   moved <ID>             /tmp state exists but scope/limits/diff-hash differ -> ask/stop
 #   ambiguous             more than one marker dir -> needs manual cleanup
@@ -60,7 +61,16 @@ if ! m_scope=$(jq -r '.scope' "$man" 2>/dev/null) \
 fi
 
 if [ "$m_scope" = "$scope" ] && [ "$m_iss" = "$iss" ] && [ "$m_mx" = "$mx" ] && [ "$m_dh" = "$dh" ]; then
-  echo "resume $id"
+  # A FINISHED run has no open issues; if it also handed back unresolved/contested
+  # issues it is continuable. An interrupted run still has open issues -> plain resume.
+  # On any jq error, default to resume (open_n=1) — never mislabel as continuable.
+  open_n="$(jq '[.issues[] | select(.state=="open")] | length' "/tmp/$id/index.json" 2>/dev/null || echo 1)"
+  left_n="$(jq '[.issues[] | select(.state=="unresolved" or .state=="contested")] | length' "/tmp/$id/index.json" 2>/dev/null || echo 0)"
+  if [ "$open_n" = "0" ] && [ "$left_n" != "0" ]; then
+    echo "continuable $id"
+  else
+    echo "resume $id"
+  fi
 else
   echo "moved $id"
 fi
