@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# diff_hash — canonical hash of the resolved review scope.
+#
+# Reads the resolved diff (or question text) on stdin and prints a stable
+# sha256 hex digest. Used to stamp the run manifest and, on resume, to detect
+# that the code under review changed (stale cards/state -> stop, don't continue).
+#
+# Deliberately dumb: the caller resolves the scope to bytes (git diff / git show
+# / the question text) and pipes it here. Same bytes in -> same hash; the loop
+# control never has to re-derive the scope.
+#
+# Usage: <produce diff> | diff_hash
+set -euo pipefail
+command -v sha256sum >/dev/null 2>&1 || { echo "diff_hash: sha256sum not found" >&2; exit 127; }
+sha256sum | awk '{print $1}'

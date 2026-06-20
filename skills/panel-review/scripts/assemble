@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# assemble — build a reviewer prompt from a static template + dynamic parts,
+# without the LLM ever re-emitting the template or the diff. Prints to stdout.
+#
+# Usage: assemble <template> KEY=file [KEY=file ...]
+#   Each KEY=file maps a sentinel line "{{KEY}}" in the template to the literal
+#   contents of <file>. Example:
+#     assemble prompts/blind_pass.tmpl SCOPE=/tmp/scope DIFF=/tmp/diff
+#
+# Substitution is WHOLE-LINE and LITERAL: a template line that is exactly
+# "{{KEY}}" is replaced by the file's bytes verbatim. This is deliberate —
+# diffs contain $, /, &, backslashes and \1-looking text that sed/envsubst
+# would mangle. awk getline copies the replacement with zero interpretation,
+# so arbitrary diff/code content is safe. Keep each sentinel on its own line.
+#
+# Unreplaced "{{KEY}}" sentinels (no matching arg) are left as-is and reported
+# on stderr; an unreadable replacement file is a hard error. A replacement may be
+# any readable path including /dev/null (used for the no-diff "question" scope).
+set -euo pipefail
+
+[ "$#" -ge 1 ] || { echo "usage: assemble <template> [KEY=file ...]" >&2; exit 2; }
+tmpl="$1"; shift
+[ -f "$tmpl" ] || { echo "assemble: no such template: $tmpl" >&2; exit 1; }
+
+manifest="$(mktemp /tmp/assemble_map.XXXXXX)"
+trap 'rm -f "$manifest"' EXIT
+for pair in "$@"; do
+  case "$pair" in
+    *=*) : ;;
+    *) echo "assemble: bad arg (want KEY=file): $pair" >&2; exit 2 ;;
+  esac
+  key="${pair%%=*}"; file="${pair#*=}"
+  [ -r "$file" ] || { echo "assemble: unreadable file for $key: $file" >&2; exit 1; }
+  printf '{{%s}}\t%s\n' "$key" "$file" >> "$manifest"
+done
+
+awk -v manifest="$manifest" '
+BEGIN {
+  while ((getline ln < manifest) > 0) { i = index(ln, "\t"); map[substr(ln,1,i-1)] = substr(ln,i+1) }
+}
+{
+  if ($0 in map) {
+    f = map[$0]
+    while ((getline x < f) > 0) print x
+    close(f)
+  } else {
+    if ($0 ~ /^{{[A-Za-z0-9_]+}}$/) print "assemble: unreplaced sentinel " $0 > "/dev/stderr"
+    print
+  }
+}
+' "$tmpl"

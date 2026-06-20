@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# extract_block — pull one fenced ```<tag> ... ``` block out of an LLM's raw output
+# and print its inner lines verbatim to stdout. An absent or empty block prints
+# nothing and exits 0. Missing input file is an error (exit 1).
+#
+# Usage:
+#   extract_block <tag> <rawfile>            print the inner lines (default)
+#   extract_block --present <tag> <rawfile>  print nothing; exit 0 if the opening
+#                                            fence exists, 1 if it does not
+#   <tag>      fence tag to capture, e.g. findings | stances | groups
+#   <rawfile>  the model's full stdout
+#
+# The --present mode lets a caller tell "seat emitted an EMPTY block" (ran, found
+# nothing) from "seat emitted NO block" (malfunction) — the default mode prints
+# nothing for both. CRLF tolerated: a trailing \r on a fence still matches and is
+# stripped from emitted lines (LLM CLIs sometimes emit CRLF).
+#
+# WHY a script: the fence-scan must be byte-exact — a wrong match silently yields
+# nothing, which looks like "no output" and corrupts everything downstream.
+# One extractor for every block type so the rule lives in exactly one place.
+set -euo pipefail
+
+present=0
+if [ "${1-}" = "--present" ]; then present=1; shift; fi
+[ "$#" -eq 2 ] || { echo "usage: extract_block [--present] <tag> <rawfile>" >&2; exit 2; }
+tag="$1"; file="$2"
+[ -f "$file" ] || { echo "extract_block: no such file: $file" >&2; exit 1; }
+
+if [ "$present" -eq 1 ]; then
+  # exit 0 iff the opening ```<tag> fence appears at least once.
+  awk -v t="$tag" 'BEGIN{s=1} $0 ~ ("^```" t "[ \t\r]*$"){s=0; exit} END{exit s}' "$file"
+  exit
+fi
+
+# Capture lines strictly between an opening ```<tag> fence and the next bare ```
+# fence; strip a trailing \r from each emitted line.
+awk -v t="$tag" '
+  $0 ~ ("^```" t "[ \t\r]*$") { f=1; next }
+  f && /^```[ \t\r]*$/ { f=0; next }
+  f { sub(/\r$/, ""); print }
+' "$file"

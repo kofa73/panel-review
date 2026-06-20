@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# regen_cards — rebuild every card from the canonical index (used on resume).
+# State is never inferred from cards; cards are always re-derived from the index.
+# Orphan cards (a card whose issue id is no longer in the index) are quarantined
+# to .orphan rather than deleted, so nothing is silently lost.
+#
+# Usage: regen_cards --id ID --workdir DIR
+set -euo pipefail
+here="$(cd "$(dirname "$0")" && pwd)"; . "$here/_panel_common.sh"
+
+id="" workdir=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --id) id="$2"; shift 2;;
+    --workdir) workdir="$2"; shift 2;;
+    *) echo "regen_cards: unknown arg: $1" >&2; exit 2;;
+  esac
+done
+panel_require_id "$id"; [ -n "$workdir" ] || { echo "regen_cards: need --workdir" >&2; exit 2; }
+command -v jq >/dev/null 2>&1 || { echo "regen_cards: jq not found" >&2; exit 127; }
+
+f="/tmp/$id/index.json"; [ -f "$f" ] || { echo "regen_cards: no index for $id" >&2; exit 1; }
+dir="$workdir/.panel-review/$id"; mkdir -p "$dir"
+# state_version lives in the manifest, NOT the index — read it from there
+# (reading $f always yielded 0, leaving card index_rev headers wrong).
+irev="$(jq -r '.state_version // 0' "/tmp/$id/manifest.json" 2>/dev/null || echo 0)"
+
+# Render each issue's card.
+live=" "
+failed=0
+while IFS= read -r rec; do
+  [ -n "$rec" ] || continue
+  iid="$(printf '%s' "$rec" | jq -r '.id')"
+  live="$live$iid "
+  printf '%s' "$rec" | "$here/project_card" --id "$id" --workdir "$workdir" --index-rev "$irev" >/dev/null \
+    || { echo "regen_cards: skipped $iid" >&2; failed=1; continue; }
+done < <(jq -c '.issues[]' "$f")
+
+# Quarantine orphan cards.
+for card in "$dir"/issue-*.md; do
+  [ -e "$card" ] || continue
+  base="$(basename "$card" .md)"; iid="${base#issue-}"
+  case "$live" in *" $iid "*) : ;; *) mkdir -p "$dir/.orphan"; mv -f "$card" "$dir/.orphan/" 2>/dev/null || true ;; esac
+done
+
+[ "$failed" -eq 0 ] || exit 1

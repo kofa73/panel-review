@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# preflight — verify the panel-review environment.
+#
+# Hard requirements (2-way core): codex CLI, jq, the peer-review Codex profile.
+# Soft: codex login, the summarizer profile, and the Gemini seat (agy).
+#
+# Exit 1 if the core is unusable; exit 0 otherwise. Prints human-readable
+# status. The final line is "GEMINI: yes|no" for scripted seat detection.
+#
+# Single source of truth for both the skill and /panel-review's
+# prereq report — keep the checks here so the two can't drift.
+set -uo pipefail   # not -e: accumulate all failures before reporting
+
+hard_fail=0
+
+command -v codex >/dev/null 2>&1 || { echo "ERROR: install codex CLI: npm i -g @openai/codex"; hard_fail=1; }
+command -v jq    >/dev/null 2>&1 || { echo "ERROR: install jq"; hard_fail=1; }
+command -v git   >/dev/null 2>&1 || { echo "ERROR: install git"; hard_fail=1; }
+[ -f "$HOME/.codex/peer-review.config.toml" ] || { echo "ERROR: run /codex-peer-review init (peer-review profile missing)"; hard_fail=1; }
+
+# Runtime needs a git work tree (diff resolution, .git/info/exclude) and a
+# writable cwd (cards live in .panel-review/ under the repo root).
+if command -v git >/dev/null 2>&1; then
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || { echo "ERROR: run from inside a git work tree"; hard_fail=1; }
+fi
+[ -w "." ] || { echo "ERROR: working directory is not writable (cards need .panel-review/ here)"; hard_fail=1; }
+
+# Soft checks
+[ -f "$HOME/.codex/peer-review-summarizer.config.toml" ] || echo "NOTE: summarizer profile missing — run /codex-peer-review init (distillation degrades)."
+if command -v codex >/dev/null 2>&1; then
+  codex login --check >/dev/null 2>&1 || echo "WARNING: run 'codex login'"
+fi
+
+if command -v agy >/dev/null 2>&1; then
+  echo "GEMINI: yes"
+else
+  echo "NOTE: agy CLI not found — running 2-way (Claude + Codex) only."
+  echo "GEMINI: no"
+fi
+
+exit "$hard_fail"

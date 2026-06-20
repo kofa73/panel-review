@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# project_card — render ONE issue record (JSON on stdin) into its anonymized
+# Markdown card and write it atomically to .panel-review/<ID>/issue-<id>.md.
+#
+# The card is the seat-facing projection: claim, location, severity, and the
+# pro/contra evidence POINTS — with NO provenance, NO seat names, NO stance tally.
+# An empty contra while not-yet-peer-reviewed renders the explicit "not reviewed
+# yet" note (never blank, so absence is never read as consensus). A header
+# comment carries run/card/index revs for staleness checks on resume.
+#
+# Usage:
+#   echo '<issue-record-json>' | project_card --id ID --workdir DIR [--index-rev N]
+set -euo pipefail
+here="$(cd "$(dirname "$0")" && pwd)"; . "$here/_panel_common.sh"
+
+id="" workdir="" irev="0"
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --id) id="$2"; shift 2;;
+    --workdir) workdir="$2"; shift 2;;
+    --index-rev) irev="$2"; shift 2;;
+    *) echo "project_card: unknown arg: $1" >&2; exit 2;;
+  esac
+done
+panel_require_id "$id"
+[ -n "$workdir" ] || { echo "project_card: need --workdir" >&2; exit 2; }
+command -v jq >/dev/null 2>&1 || { echo "project_card: jq not found" >&2; exit 127; }
+
+rec="$(cat)"
+iid="$(printf '%s' "$rec" | jq -r '.id')"
+[ -n "$iid" ] && [ "$iid" != "null" ] || { echo "project_card: record has no .id" >&2; exit 1; }
+# .id is interpolated into the card path — never let a malformed record escape
+# the issue-<id>.md namespace (same charset discipline as run IDs).
+panel_valid_id "$iid" || { echo "project_card: invalid issue id: '$iid'" >&2; exit 1; }
+crev="$(printf '%s' "$rec" | jq -r '.card_rev // 0')"
+
+# Render points: "- location  assertion (when: precondition) [impact]".
+# location may be a string or an array; missing precondition/impact omitted.
+render_points='
+  def loc: if (.location|type)=="array" then (.location|join(", ")) else (.location // "analysis") end;
+  if length==0 then ""
+  else (map("- " + loc + "  " + (.assertion // "")
+            + (if .precondition and .precondition!="" then " (when: " + .precondition + ")" else "" end)
+            + (if .impact and .impact!="" then " [" + .impact + "]" else "" end)) | join("\n"))
+  end'
+
+pro="$(printf '%s' "$rec"  | jq -r ".evidence_pro    // [] | $render_points")"
+contra="$(printf '%s' "$rec" | jq -r ".evidence_contra // [] | $render_points")"
+peer="$(printf '%s' "$rec"  | jq -r '.peer_reviewed // false')"
+claim="$(printf '%s' "$rec" | jq -r '.claim // ""')"
+locn="$(printf '%s' "$rec"  | jq -r 'if (.location|type)=="array" then (.location|join(", ")) else (.location // "") end')"
+sev="$(printf '%s' "$rec"   | jq -r '.severity // ""')"
+
+if [ -z "$contra" ]; then
+  if [ "$peer" = "true" ]; then contra="_(no counter-evidence stands)_"
+  else contra="_Not peer-reviewed yet — no panel stance has been collected; this is NOT consensus._"; fi
+fi
+[ -n "$pro" ] || pro="_(none)_"
+
+card="$workdir/.panel-review/$id/issue-$iid.md"
+{
+  printf '<!-- panel run_id=%s issue_id=%s card_rev=%s index_rev=%s -->\n' "$id" "$iid" "$crev" "$irev"
+  printf '# %s\n\n' "$iid"
+  printf '**Claim:** %s\n' "$claim"
+  printf '**Location:** %s\n' "$locn"
+  printf '**Severity:** %s\n\n' "$sev"
+  printf 'Review skeptically — verify each point against the actual code. Do NOT treat the\n'
+  printf 'length of either side as a vote.\n\n'
+  printf '## Evidence for\n%s\n\n' "$pro"
+  printf '## Evidence against\n%s\n' "$contra"
+} | panel_atomic_write "$card"
+printf '%s\n' "$card"

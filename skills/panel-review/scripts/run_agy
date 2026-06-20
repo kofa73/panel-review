@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# run_agy — the ONLY sanctioned way to call the agy CLI for the Gemini seat.
+#
+# Usage:
+#   run_agy "<prompt>"        # prompt as $1
+#   run_agy < promptfile      # prompt on stdin (no args)
+# Output: final assistant response on stdout. Nonzero exit = failed (caller
+#         degrades to 2-way). agy's own stderr is forwarded.
+#
+# WHY this wrapper exists (all verified to cause empty output / exit 124 hangs):
+#  - agy --print DRAINS STDIN TO EOF in print mode. A non-TTY stdin with no EOF
+#    (background subagent, open pipe) blocks forever -> timeout kills it, 0 bytes.
+#    Fix: always feed the prompt via a file (< file) so stdin hits EOF instantly.
+#  - --print-timeout defaults to 5m0s, which kills real reviews mid-stream.
+#    We force 30m + a wall `timeout` >= that.
+#  - Do NOT pass --dangerously-skip-permissions: it is unnecessary. In --print
+#    mode agy already auto-approves any tool call not explicitly DENIED in
+#    ~/.gemini/antigravity-cli/settings.json (allow-list entries are not required).
+#    Verified: without the flag the seat reads files, runs grep/awk, and even
+#    writes files + runs shell via its run_command/write_to_file tools. So the flag
+#    grants nothing here. IMPORTANT: withholding it does NOT make the seat
+#    read-only — agy is a full agentic tool user and, as currently configured, can
+#    write the working tree and execute commands (unlike run_codex, which pins
+#    --sandbox read-only). agy --sandbox does NOT prevent this (tested: repo writes
+#    still succeed). The seat is constrained only by the deny-list in that settings
+#    file + the disposable-container trust model. (An older note claimed the flag
+#    hangs print mode into an agentic loop; not reproducible on the current agy —
+#    likely a side effect of a previously-loaded agy skill, now gone.)
+#  - Model is pinned to the current highest Gemini (Pro > Flash, High effort,
+#    highest version). Update the line below when a new top model ships;
+#    verify names with `agy models`. Do NOT use agy's Claude/GPT-OSS entries.
+
+set -euo pipefail
+
+MODEL="Gemini 3.1 Pro (High)"
+PRINT_TIMEOUT="30m"
+WALL_TIMEOUT=1860   # seconds, >= PRINT_TIMEOUT
+
+command -v agy >/dev/null 2>&1 || { echo "run_agy: agy CLI not found" >&2; exit 127; }
+
+promptfile="$(mktemp /tmp/agy_prompt.XXXXXX)"
+trap 'rm -f "$promptfile"' EXIT
+
+if [ "$#" -ge 1 ]; then
+  printf '%s' "$1" > "$promptfile"
+else
+  cat > "$promptfile"   # prompt on stdin; cat reaches EOF here
+fi
+
+timeout "$WALL_TIMEOUT" agy --print \
+  --model "$MODEL" \
+  --print-timeout "$PRINT_TIMEOUT" \
+  < "$promptfile"   # EXIT trap propagates agy's exit code and cleans the tmp file

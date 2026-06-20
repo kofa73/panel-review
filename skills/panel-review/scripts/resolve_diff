@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# resolve_diff — turn a canonical scope token into the diff text under review,
+# printed to stdout. ONE place owns scope->diff so the dispatcher (which hashes
+# the diff for the resume check) and the agent (which reviews it) can't drift.
+#
+# Usage: resolve_diff <scope-token>     (run from cwd = repo root)
+#   base=BRANCH    git diff BRANCH...HEAD
+#   uncommitted    staged + unstaged + untracked file CONTENTS, with the
+#                  .panel-review/ card dir excluded so cards never enter scope
+#   commit=SHA     git show SHA
+#   question=TEXT  no diff (a free-text question) -> prints nothing, exit 0
+#
+# Empty diff is NOT an error here (caller decides what to do); a bad git ref is.
+set -euo pipefail
+command -v git >/dev/null 2>&1 || { echo "resolve_diff: git not found" >&2; exit 127; }
+
+tok="${1-}"; [ -n "$tok" ] || { echo "usage: resolve_diff <scope-token>" >&2; exit 2; }
+
+case "$tok" in
+  base=*)
+    br="${tok#base=}"
+    [ -n "$br" ] || { echo "resolve_diff: empty base branch" >&2; exit 2; }
+    git rev-parse --verify --quiet "$br" >/dev/null || { echo "resolve_diff: no such ref: $br" >&2; exit 1; }
+    git diff "$br...HEAD"
+    ;;
+  commit=*)
+    sha="${tok#commit=}"
+    [ -n "$sha" ] || { echo "resolve_diff: empty commit" >&2; exit 2; }
+    git rev-parse --verify --quiet "${sha}^{commit}" >/dev/null || { echo "resolve_diff: no such commit: $sha" >&2; exit 1; }
+    git show "$sha"
+    ;;
+  uncommitted)
+    # tracked changes, excluding the card dir
+    git diff -- . ':(exclude).panel-review/**'
+    git diff --cached -- . ':(exclude).panel-review/**'
+    # untracked file contents (names alone would hide new code from reviewers).
+    # -z + read -d '' so filenames with spaces/tabs/quotes/newlines survive
+    # (git would otherwise C-quote them and the path wouldn't resolve).
+    while IFS= read -r -d '' uf; do
+      [ -n "$uf" ] || continue
+      case "$uf" in .panel-review/*) continue;; esac
+      git diff --no-index -- /dev/null "$uf" || true   # --no-index exits 1 when files differ
+    done < <(git ls-files -z --others --exclude-standard -- . ':(exclude).panel-review/**')
+    ;;
+  question=*)
+    : # no diff for a free-text question scope
+    ;;
+  *)
+    echo "resolve_diff: unrecognized scope token: $tok" >&2; exit 2
+    ;;
+esac

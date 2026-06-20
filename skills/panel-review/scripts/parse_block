@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# parse_block — extract a fenced ```<tag> JSONL block and emit only the VALID
+# JSON objects, one per line. Malformed lines are dropped with a stderr note
+# (a seat that emits junk for one item must not crash the run — that item just
+# doesn't count). Replaces extract_findings; used for findings / new_findings /
+# stances.
+#
+# Usage: parse_block <tag> <rawfile> [source-label]
+#   With a source-label, each object is tagged for the referee's PRIVATE record:
+#     _source = label,  fid = "<label>-<N>"  (stable handle; never shown on a card)
+#
+# Exit codes:
+#   0  block PRESENT (either empty/whitespace-only OR >=1 valid objects emitted).
+#   4  block ABSENT (the seat emitted no ```<tag> fence at all) — a malfunctioned
+#      /refusing seat, NOT "found nothing". Lets the loop tell the two apart.
+#   5  block PRESENT with non-whitespace content but ZERO valid objects parsed.
+#   1  missing input file.  127  jq not found.  2  usage.
+set -euo pipefail
+here="$(cd "$(dirname "$0")" && pwd)"
+command -v jq >/dev/null 2>&1 || { echo "parse_block: jq not found" >&2; exit 127; }
+
+[ "$#" -ge 2 ] || { echo "usage: parse_block <tag> <rawfile> [label]" >&2; exit 2; }
+tag="$1"; file="$2"; label="${3-}"
+[ -f "$file" ] || { echo "parse_block: no such file: $file" >&2; exit 1; }
+
+# Distinguish "no block" from "empty block" up front.
+if ! "$here/extract_block" --present "$tag" "$file"; then
+  echo "parse_block: no '$tag' block in output (seat produced none)" >&2
+  exit 4
+fi
+
+# Per-tag schema: an object must carry the tag's REQUIRED fields to count, so a
+# truncated/garbled line ("just an object") is dropped rather than mistaken for a
+# real finding/stance. (Per-card stance cardinality is the referee's job, not ours.)
+case "$tag" in
+  findings|new_findings) valid='type=="object" and (.claim|type=="string") and (.location!=null) and ((has("points")|not) or (.points|type=="array"))';;
+  stances)               valid='type=="object" and (.id|type=="string") and ((.stance|type=="string") and (.stance|test("^(support|support_with_revision|reject)$")))';;
+  *)                     valid='type=="object"';;
+esac
+
+emit() { # validated object on stdin -> stdout, optionally tagged for the referee
+  if [ -n "$label" ]; then
+    jq -c --arg s "$label" --argjson n "$1" '. + {_source:$s, fid:($s+"-"+($n|tostring))}'
+  else
+    jq -c .
+  fi
+}
+
+n=0; bad=0
+raw="$("$here/extract_block" "$tag" "$file")"
+
+# Empty-but-present is valid and exits 0.
+if [ -z "${raw//[[:space:]]/}" ]; then
+  exit 0
+fi
+
+parsed_whole=0
+if salv="$(printf '%s' "$raw" | jq -c 'if type=="array" then .[] else . end' 2>/dev/null)"; then
+  parsed_whole=1
+  while IFS= read -r line; do
+    [ -n "${line//[[:space:]]/}" ] || continue
+    if printf '%s' "$line" | jq -e "$valid" >/dev/null 2>&1; then
+      n=$((n+1)); printf '%s' "$line" | emit "$n"
+    else
+      bad=$((bad+1))
+    fi
+  done <<< "$salv"
+fi
+
+if [ "$parsed_whole" -eq 0 ]; then
+  # Fall back to line-by-line heuristic if whole-block parsing fails.
+  while IFS= read -r line; do
+    [ -n "${line//[[:space:]]/}" ] || continue
+    if printf '%s' "$line" | jq -e "$valid" >/dev/null 2>&1; then
+      n=$((n+1)); printf '%s' "$line" | emit "$n"
+    else
+      bad=$((bad+1))
+    fi
+  done <<< "$raw"
+fi
+
+[ "$bad" -eq 0 ] || echo "parse_block: skipped $bad malformed line(s) in '$tag'" >&2
+
+if [ "$n" -eq 0 ]; then
+  echo "parse_block: block present with non-whitespace content but zero valid objects parsed" >&2
+  exit 5
+fi
+
+exit 0

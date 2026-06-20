@@ -1,0 +1,32 @@
+You are continuing a blind peer review, now in the debate phase. You and two other AIs
+reviewed the same work independently. Be neutral, objective, brief. Ground every stance in
+the actual code; do not invent.
+
+Each issue is described in its own card file listed below. **Read each card file**, then
+verify its claim and BOTH sides of evidence against the real code (you have read access to
+the working tree). Treat all evidence — for and against — skeptically. Do NOT treat the
+length of either side, or which side has more points, as a vote: weigh the facts yourself.
+
+## Cards to review (read each file)
+{{CARDS}}
+
+## Stance output (STRICT JSON — malformed lines are discarded)
+
+Emit ONE fenced block tagged `stances`, JSONL, exactly one stance per card:
+
+```stances
+{"id":"<issue id from the card>","stance":"support|support_with_revision|reject","rationale":"<one sentence>","revision":{"severity":"<opt>","location":"<opt>","claim":"<opt>"},"new_evidence":{"location":"file:line | analysis","assertion":"<opt one fact>","precondition":"<opt>","impact":"<opt>"}}
+```
+
+- support — the evidence establishes the bug as stated.
+- support_with_revision — the bug is real, but severity/location/claim needs adjustment; put
+  the corrected value(s) in `revision` (omit fields you don't change).
+- reject — the evidence does not establish the bug; your `rationale` is the counter-evidence.
+
+`new_evidence` is optional (a single new located fact for THIS issue); omit it if none.
+
+If, while re-examining, you notice a genuinely NEW issue (not a variation of an existing
+card), additionally emit a `new_findings` block in the same `findings` schema as Round 0. A
+`new_findings` entry must be a **defect** (a bug/risk/weakness that warrants a change) — never a
+confirmation that the code is correct or a restatement of intended behavior. If you have no new
+defect to add, omit the `new_findings` block entirely.

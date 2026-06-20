@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# run_codex — the ONLY sanctioned way to call the Codex peer-review seat.
+# Mirror of run_agy for the OpenAI/GPT participant.
+#
+# Usage:
+#   run_codex "<prompt>"     # prompt as $1
+#   run_codex < promptfile   # prompt on stdin (no args)
+# Output: final assistant message on stdout. Nonzero exit = seat failed
+#         (caller degrades). codex missing -> exit 127.
+#
+# Pins the two non-negotiables structurally so they can't be fat-fingered:
+#  - --profile peer-review   (NEVER hardcode -m / a raw model; the profile owns
+#                             model selection. Override only the profile name via
+#                             CODEX_PROFILE, e.g. peer-review-summarizer.)
+#  - --sandbox read-only     (Codex may read the working tree to investigate
+#                             cross-file context, but never write.)
+# Set CODEX_JSONL=/path to also capture the raw --json event stream (default
+# discarded); --json is required because -o writes only the final message.
+set -euo pipefail
+
+PROFILE="${CODEX_PROFILE:-peer-review}"
+JSONL="${CODEX_JSONL:-/dev/null}"
+
+command -v codex >/dev/null 2>&1 || { echo "run_codex: codex CLI not found" >&2; exit 127; }
+
+promptfile="$(mktemp /tmp/codex_prompt.XXXXXX)"
+outfile="$(mktemp /tmp/codex_out.XXXXXX)"
+trap 'rm -f "$promptfile" "$outfile"' EXIT
+
+if [ "$#" -ge 1 ]; then
+  printf '%s' "$1" > "$promptfile"
+else
+  cat > "$promptfile"
+fi
+
+# -o writes the final assistant message to outfile; --json events go to JSONL.
+if ! codex exec --profile "$PROFILE" --sandbox read-only \
+       -o "$outfile" --json < "$promptfile" > "$JSONL" 2>/dev/null; then
+  echo "run_codex: codex exec failed (profile=$PROFILE)" >&2
+  exit 1
+fi
+
+cat "$outfile"

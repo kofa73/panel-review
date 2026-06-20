@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# sweep — checkpointed debate sweeps, so a crash mid-sweep never double-counts.
+# A sweep = one full pass over the open issues across all engaged seats. Per-seat
+# outputs are cached as they land; a sweep is "committed" only when complete, and
+# ONLY a committed sweep increments rounds_debated. On resume, cached outputs let
+# the referee rerun just the missing seats.
+#
+# Subcommands:
+#   sweep begin  <ID> <round>                 create the sweep dir
+#   sweep record <ID> <round> <seat> <file> [batch] cache one seat/batch's raw output
+#   sweep has    <ID> <round> <seat> [batch]        exit 0 if that seat/batch already recorded
+#   sweep commit <ID> <round>                 commit the sweep; bump issue ids on stdin (one per line)
+#   sweep done   <ID> <round>                 exit 0 if the sweep is committed
+#
+# Idempotency: the durable record of "this round was counted" lives in the index
+# (.committed_rounds), not in the marker file. `commit` delegates the bump to
+# `index commit-round`, which is a no-op if the round is already committed — so a
+# crash mid-commit, then a resume + re-commit, never double-counts. `done`
+# queries that same committed_rounds, so it is the single source of truth.
+set -euo pipefail
+here="$(cd "$(dirname "$0")" && pwd)"; . "$here/_panel_common.sh"
+
+cmd="${1-}"; id="${2-}"; panel_require_id "$id"
+round="${3-}"
+case "$round" in ''|*[!0-9]*) echo "sweep: round must be a number" >&2; exit 2;; esac
+sd="/tmp/$id/sweeps/round-$round"
+
+idx="/tmp/$id/index.json"
+
+case "$cmd" in
+  begin)  mkdir -p "$sd" ;;
+  record) seat="$4"; src="$5"; batch="${6-all}"
+	          case "$seat" in ''|*[!A-Za-z0-9._-]*) echo "sweep: bad seat name" >&2; exit 2;; esac
+	          case "$batch" in ''|*[!A-Za-z0-9._-]*) echo "sweep: bad batch name" >&2; exit 2;; esac
+	          [ -f "$src" ] || { echo "sweep record: no such file: $src" >&2; exit 1; }
+	          mkdir -p "$sd"
+	          # Atomic temp+sync+rename (via panel_atomic_write) so an interrupted copy
+	          # never leaves a truncated $seat.$batch.out that `has` would accept.
+	          panel_atomic_write "$sd/$seat.$batch.out" < "$src" ;;
+  has)    seat="$4"; batch="${5-all}"
+	          case "$batch" in ''|*[!A-Za-z0-9._-]*) echo "sweep: bad batch name" >&2; exit 2;; esac
+	          [ -f "$sd/$seat.$batch.out" ] ;;
+  done)   [ -f "$idx" ] && jq -e --argjson r "$round" '((.committed_rounds // []) | any(. == $r))' "$idx" >/dev/null 2>&1 ;;
+  commit)
+          [ -d "$sd" ] || { echo "sweep commit: no sweep $round for $id" >&2; exit 1; }
+          # The round's full decision payload (states, flags, evidence, new issues,
+          # and the `bump` id list — see `index commit-sweep`) arrives on stdin.
+          # Apply it as ONE atomic, idempotent step so a crash never leaves a
+          # half-applied round, then drop the audit marker (committed_rounds in the
+          # index is the real source of truth, this file is just for inspection).
+          cat | "$here/index" commit-sweep "$id" "$round"
+          date -Is | panel_atomic_write "$sd/sweep_complete" ;;
+  *) echo "usage: sweep {begin|record|has|done|commit} <ID> <round> ..." >&2; exit 2 ;;
+esac

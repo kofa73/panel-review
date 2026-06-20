@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# init_run — start a fresh review run: mint an ID, create the canonical state
+# dir, write the manifest, then create the workdir marker LAST (so a marker
+# always implies valid /tmp state). Prints the minted <ID> on stdout.
+#
+# Usage:
+#   init_run --workdir DIR --scope STR --issue-rounds N --max-rounds N --diff-hash HEX
+#
+# Creates:
+#   /tmp/<ID>/manifest.json           (canonical; persistent volume)
+#   /tmp/<ID>/{sweeps,raw,audit}/     (state subdirs)
+#   /tmp/<ID>/index.json              (empty issue index)
+#   <workdir>/.panel-review/<ID>/   (marker / per-worktree lock)
+# and adds `.panel-review/` to <workdir>/.git/info/exclude.
+set -euo pipefail
+here="$(cd "$(dirname "$0")" && pwd)"; . "$here/_panel_common.sh"
+
+workdir="" scope="" iss="" mx="" dh=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --workdir) workdir="$2"; shift 2;;
+    --scope) scope="$2"; shift 2;;
+    --issue-rounds) iss="$2"; shift 2;;
+    --max-rounds) mx="$2"; shift 2;;
+    --diff-hash) dh="$2"; shift 2;;
+    *) echo "init_run: unknown arg: $1" >&2; exit 2;;
+  esac
+done
+[ -n "$workdir" ] && [ -n "$scope" ] && [ -n "$iss" ] && [ -n "$mx" ] && [ -n "$dh" ] \
+  || { echo "init_run: need --workdir --scope --issue-rounds --max-rounds --diff-hash" >&2; exit 2; }
+command -v jq >/dev/null 2>&1 || { echo "init_run: jq not found" >&2; exit 127; }
+
+# Mint an ID and claim ONLY /tmp/<ID> with exclusive mkdir; retry on rare clash.
+# The workdir marker is published LAST (after canonical state exists), so a
+# marker on disk always implies a valid /tmp state behind it.
+for _try in 1 2 3 4 5; do
+  id="panel-$(date +%Y%m%d-%H%M%S)-$(openssl rand -hex 4 2>/dev/null || printf '%04x%04x' "$RANDOM" "$RANDOM")"
+  panel_valid_id "$id" || { id=""; continue; }
+  if mkdir "/tmp/$id" 2>/dev/null; then break; fi
+  id=""
+done
+[ -n "${id:-}" ] || { echo "init_run: could not allocate a run id" >&2; exit 1; }
+
+mkdir -p "/tmp/$id/sweeps" "/tmp/$id/raw" "/tmp/$id/audit"
+
+jq -n --arg id "$id" --arg wd "$workdir" --arg scope "$scope" \
+      --argjson iss "$iss" --argjson mx "$mx" --arg dh "$dh" \
+      --arg created "$(date -Is)" '{
+  id:$id, workdir:$wd, scope:$scope,
+  limits:{issue_rounds:$iss, max_rounds:$mx},
+  diff_hash:$dh, phase:"round0", state_version:1, created:$created
+}' | panel_atomic_write "/tmp/$id/manifest.json"
+
+printf '{"issues":[],"round":0,"phase":"round0","committed_rounds":[]}\n' | panel_atomic_write "/tmp/$id/index.json"
+
+# Marker LAST: canonical /tmp state is now durably in place. Serialize marker
+# publication per worktree so concurrent fresh starts converge on one run.
+base="$workdir/.panel-review"
+mkdir -p "$base"
+exec 9>"$base/.init.lock"
+flock -x 9
+for d in "$base"/*/; do
+  [ -f "$d/.panel-run" ] || continue
+  winner="$(basename "$d")"
+  if panel_valid_id "$winner"; then
+    rm -rf -- "/tmp/$id"
+    printf '%s\n' "$winner"
+    exit 0
+  fi
+done
+marker="$base/$id"
+mkdir "$marker" 2>/dev/null || { echo "init_run: marker already exists: $marker" >&2; exit 1; }
+printf '%s\n' "$id" | panel_atomic_write "$marker/.panel-run"
+
+panel_git_exclude_add "$workdir" ".panel-review/"
+
+printf '%s\n' "$id"

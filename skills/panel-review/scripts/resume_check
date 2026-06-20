@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# resume_check — decide whether a prior run can be resumed. Prints ONE verdict
+# line for the dispatcher to act on (the dispatcher, not this script, asks the
+# user, because only the main context has AskUserQuestion).
+#
+# Usage:
+#   resume_check --workdir DIR --scope STR --issue-rounds N --max-rounds N --diff-hash HEX
+#
+# Output (stdout), exactly one of:
+#   fresh                  no marker dir -> start a new run
+#   resume <ID>            marker + valid matching /tmp state -> can resume
+#   stale <ID>             marker but /tmp/<ID> missing/empty -> drop & start fresh
+#   moved <ID>             /tmp state exists but scope/limits/diff-hash differ -> ask/stop
+#   ambiguous             more than one marker dir -> needs manual cleanup
+set -euo pipefail
+here="$(cd "$(dirname "$0")" && pwd)"; . "$here/_panel_common.sh"
+
+workdir="" scope="" iss="" mx="" dh=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --workdir) workdir="$2"; shift 2;;
+    --scope) scope="$2"; shift 2;;
+    --issue-rounds) iss="$2"; shift 2;;
+    --max-rounds) mx="$2"; shift 2;;
+    --diff-hash) dh="$2"; shift 2;;
+    *) echo "resume_check: unknown arg: $1" >&2; exit 2;;
+  esac
+done
+[ -n "$workdir" ] || { echo "resume_check: need --workdir" >&2; exit 2; }
+command -v jq >/dev/null 2>&1 || { echo "resume_check: jq not found" >&2; exit 127; }
+
+base="$workdir/.panel-review"
+[ -d "$base" ] || { echo "fresh"; exit 0; }
+
+# Collect our marker dirs (each named for its <ID>, with our marker file).
+ids=(); for d in "$base"/*/; do [ -f "$d/.panel-run" ] || continue; ids+=("$(basename "$d")"); done
+[ "${#ids[@]}" -eq 0 ] && { echo "fresh"; exit 0; }
+[ "${#ids[@]}" -gt 1 ] && { echo "ambiguous"; exit 0; }
+
+id="${ids[0]}"
+panel_valid_id "$id" || { echo "ambiguous"; exit 0; }   # unexpected name -> hands off to human
+
+man="/tmp/$id/manifest.json"
+if [ ! -s "/tmp/$id/index.json" ] || [ ! -s "$man" ]; then echo "stale $id"; exit 0; fi
+if ! jq -e . "/tmp/$id/index.json" >/dev/null 2>&1; then
+  if [ -s "/tmp/$id/index.json.bak" ] && jq -e . "/tmp/$id/index.json.bak" >/dev/null 2>&1; then
+    panel_atomic_write "/tmp/$id/index.json" < "/tmp/$id/index.json.bak"
+  else
+    echo "stale $id"; exit 0
+  fi
+fi
+
+# A corrupt/partially-written manifest must NOT crash the check (set -e) — that
+# would block the dispatcher. Degrade to "stale" so it can cleanly start fresh.
+if ! m_scope=$(jq -r '.scope' "$man" 2>/dev/null) \
+   || ! m_iss=$(jq -r '.limits.issue_rounds' "$man" 2>/dev/null) \
+   || ! m_mx=$(jq -r '.limits.max_rounds' "$man" 2>/dev/null) \
+   || ! m_dh=$(jq -r '.diff_hash' "$man" 2>/dev/null); then
+  echo "stale $id"; exit 0
+fi
+
+if [ "$m_scope" = "$scope" ] && [ "$m_iss" = "$iss" ] && [ "$m_mx" = "$mx" ] && [ "$m_dh" = "$dh" ]; then
+  echo "resume $id"
+else
+  echo "moved $id"
+fi

@@ -1,0 +1,47 @@
+You are performing an independent code review. Two other AIs are reviewing the
+same work in parallel. You will not see their findings until after this pass.
+Be neutral, objective, brief, simple but accurate: keep info, relevant details.
+accuracy wins over simplicity. no praise, no sycophancy. voice concerns, point out mistakes.
+
+## Scope
+{{SCOPE}}
+
+## Files / Diff
+{{DIFF}}
+
+## Review lenses (apply BOTH)
+
+1. CRITIC LENS: approach the diff adversarially — trace bad inputs, concurrent actions,
+   and partial failures through the changed paths. Every finding MUST carry at least one
+   concrete, checkable evidence point (a located fact, exploit path, failing case, or
+   specific failure mode). Vague concerns ("could be improved", "might be fragile") are
+   REJECTED. If the same bug pattern occurs at several sites (e.g. three call sites passing
+   NULL), list each site as its own evidence point — they are separate evidence.
+
+2. DEFENDER LENS: before raising an issue, check whether an existing test covers it, a
+   codebase invariant/convention makes it impossible, or it is intentional per a
+   comment/commit. If so, do not raise it.
+
+## What a finding is (and is NOT)
+A finding is a **defect**: a bug, risk, regression, missing case, or weakness that warrants a
+change. It is NOT a confirmation. Do **not** emit "the logic is correct", "behaves as intended",
+"verified the chain", or any restatement of correct behavior as a finding — even with evidence and
+even at `low`/`style`. If the code is fine, the `findings` block is **empty** and you say so in the
+prose summary. `low`/`style` are for genuine minor defects (a real but small problem), never for
+"all good". A finding's `claim` must describe something that is *wrong or should change*.
+
+## Grounding
+Every finding must be defensible from the provided diff/context and the code you can read.
+Do not invent files, lines, or paths. Express uncertainty in the prose summary, not in fields.
+
+## Output format (STRICT JSON — malformed lines are discarded)
+
+Emit ONE fenced block tagged `findings`, JSONL, one candidate issue per line:
+
+```findings
+{"claim":"<one sentence>","location":"file:line | file:start-end | analysis","severity":"critical|high|medium|low|style","category":"security|correctness|performance|maintainability|style","points":[{"location":"file:line | analysis","assertion":"<one concise technical fact>","precondition":"<optional: when it triggers>","impact":"<optional>"}]}
+```
+
+`points` is the evidence FOR the issue (one located fact each). If you find no issues, emit
+an empty `findings` block. After the block, write 2-3 sentences on overall quality and your
+confidence.

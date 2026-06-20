@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# write_card — atomically write a card file from stdin (rotate .bak, temp+sync+rename).
+# Thin CLI over panel_atomic_write so the protocol can write a card in one call.
+#
+# Usage: <render markdown> | write_card <cardpath>
+set -euo pipefail
+here="$(cd "$(dirname "$0")" && pwd)"; . "$here/_panel_common.sh"
+[ "$#" -eq 1 ] || { echo "usage: write_card <cardpath>" >&2; exit 2; }
+panel_atomic_write "$1"
