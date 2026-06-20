@@ -45,7 +45,7 @@ The harness does **not** parse flags; you get the raw `$ARGUMENTS` string. Parse
 ## Step 2 — prereqs + scope hash
 
 ```bash
-"$SC/preflight" || { echo "Core prerequisites missing (see above)."; exit 1; }   # also prints GEMINI: yes|no
+"$SC/preflight" || { echo "Core prerequisites missing (see above)."; exit 1; }   # also prints CODEX: yes|no / GEMINI: yes|no
 # Resolve to a FILE and check the exit code separately — do NOT pipe resolve_diff
 # into diff_hash: a bad ref makes resolve_diff fail but diff_hash succeeds on the
 # empty input, so the pipeline would silently hash an empty diff and proceed.
@@ -57,8 +57,9 @@ fi
 DH="$("$SC/diff_hash" < "$DIFF_FILE")"      # hash the exact diff; resume compares this
 rm -f "$DIFF_FILE"
 ```
-If `preflight` hard-fails, stop and surface its message. A `GEMINI: no` is fine (the review runs
-2-way) — pass it through. For a diff scope whose resolved diff is empty, you may stop early with
+If `preflight` hard-fails, stop and surface its message. A `CODEX: no` or `GEMINI: no` is fine (the
+review runs with the remaining seats) — pass it through. For a diff scope whose resolved diff is
+empty, you may stop early with
 "no changes in scope" rather than dispatching.
 
 ## Step 3 — resume / fresh decision
@@ -130,7 +131,7 @@ First check whether the agent's return ends with a control line of the form:
 ```
 
 - **No gate line** (the normal case) → present the verdict **verbatim** — do not re-summarize,
-  re-classify, or add commentary. If it reports a degrade-to-2-way (Gemini/agy down), pass that note
+  re-classify, or add commentary. If it reports a degrade (any peer seat — Codex or Gemini — down), pass that note
   through as-is. Done.
 
 - **Gate line present** → Round 0 found only low-severity items and the agent skipped the debate to

@@ -54,9 +54,9 @@ byte-exact parsing.
 SC="$HOME/.claude/skills/panel-review/scripts"
 PR="$HOME/.claude/skills/panel-review/prompts"
 
-"$SC/preflight"                              # env check; last line "GEMINI: yes|no"; exit 1 = core unusable
+"$SC/preflight"                              # env check; tail "CODEX: yes|no"/"GEMINI: yes|no"; exit 1 = core unusable (needs jq, git, work-tree, ≥1 peer)
 "$SC/assemble" TMPL KEY=file ...             # splice files into a template's {{KEY}} sentinels -> stdout
-"$SC/run_codex" < prompt > raw 2> err        # Codex seat (pins --profile peer-review, --sandbox read-only)
+"$SC/run_codex" < prompt > raw 2> err        # Codex seat (pins --profile panel-review, --sandbox read-only; auto-creates the profile)
 "$SC/run_agy"   < prompt > raw 2> err        # Gemini seat (pins model/timeout/stdin)
 "$SC/parse_block" <tag> <raw> [label]        # ```<tag> block -> validated JSONL; exit 4 = NO block (down), 5 = malformed (retry once)
 "$SC/index"   {get|put|issue|bump|state|flag|commit-round} <id> ...   # ONLY writer of index.json
@@ -90,7 +90,7 @@ subagent's returned message to a raw file and parse it exactly like a CLI seat:
 "$SC/parse_block" findings /tmp/$id/raw/round0.claude.txt claude
 ```
 
-A "full panel" = all seats `preflight` reported available (Gemini may be absent → 2-way). An
+A "full panel" = every seat `preflight` reported available (either peer may be absent → run with the rest). An
 **engaged** seat is one that returned a parseable block **this pass**. Settling a point needs
 **≥2 engaged**. One dead seat ≠ aborted review; record it in Process notes.
 
@@ -440,8 +440,9 @@ Never return raw seat output, card text, or per-round transcripts.
 
 - ✅ Seats only via `scripts/` — `run_agy` for Gemini, `run_codex` for Codex; the Claude seat only
   as a fresh `panel-review-claude-seat` subagent (**never fork**). Never raw `agy`/`codex`.
-- ✅ `run_codex` pins `--sandbox read-only` + `--profile peer-review` (never `-m`). **Never** create,
-  edit, or delete `~/.codex/config.toml` or any `~/.codex/*.config.toml`.
+- ✅ `run_codex` pins `--sandbox read-only` + `--profile panel-review` (never `-m`); it auto-creates
+  `~/.codex/panel-review.config.toml` from the shipped default. **Never** hand-create, edit, or delete
+  `~/.codex/config.toml` or other `~/.codex/*.config.toml` profiles yourself.
 - ✅ Gemini seat uses a **Gemini** model (run_agy's pin), never agy's Claude/GPT-OSS entries.
 - ✅ `index.json` is written **only** through the `index`/`sweep` scripts; cards **only** through
   `project_card`/`regen_cards`. Never hand-write state files.

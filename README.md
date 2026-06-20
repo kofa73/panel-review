@@ -29,8 +29,9 @@ Three rules govern how it treats the result:
   contested goes to you — there is no majority vote and no referee fact-checking inside the loop.
 - **Nothing is hidden.** Every issue is shown, including rejected ones, with the reason it was
   dropped.
-- **Graceful degradation.** If Gemini is unavailable, the review runs 2-way (Claude + Codex) and
-  says so. One dead seat never aborts the review.
+- **Graceful degradation.** Either peer seat — Codex or Gemini — may be missing or fail mid-review.
+  The review runs with whatever seats engage (Claude plus at least one peer) and says which seat was
+  down. One dead seat never aborts the review.
 
 It extends the upstream `codex-peer-review` (Claude + Codex only); the additions are the Gemini
 seat, the blind debate, and crash-resumable state.
@@ -144,11 +145,11 @@ fat-fingered. Static prompt templates live in `skills/panel-review/prompts/`.
 
 | Script | Job |
 |--------|-----|
-| `preflight` | Check codex / jq / git / work-tree / writable cwd / profiles; report whether `agy` (Gemini) is present |
+| `preflight` | Check jq / git / work-tree / writable cwd and that ≥1 peer seat (`codex` or `agy`) is present; emit `CODEX:` / `GEMINI:` availability |
 | `resolve_diff` | Turn a scope token into the diff text — **one** place owns scope→diff (dispatcher hashes it, referee reviews it) |
 | `diff_hash` | Stable hash of the resolved diff, for the manifest and the resume check |
 | `assemble` | Splice scope + diff (or card paths) into a prompt template without an LLM retyping them |
-| `run_codex` | The **only** way to call the Codex seat — pins `--sandbox read-only`, defaults `--profile peer-review` |
+| `run_codex` | The **only** way to call the Codex seat — pins `--sandbox read-only`, defaults `--profile panel-review` (auto-creates the profile from a shipped default) |
 | `run_agy` | The **only** way to call the Gemini seat — pins the Gemini model and the timeout/stdin fixes |
 | `extract_block` / `parse_block` | Pull a `findings` / `stances` / `new_findings` block → validated JSONL; `parse_block` exit 4 = no block (down seat) vs empty-but-present |
 | `init_run` / `resume_check` / `cleanup` | Mint a run (marker-last); decide resume vs fresh; tear down after the verdict |
@@ -196,8 +197,9 @@ the marker for you to remove.
   `disable-model-invocation: true`, so only you launch the heavy three-model run. There is no
   `context: fork` — the dispatcher stays in the main context so it can use `AskUserQuestion` for the
   resume/stop decision (agents can't).
-- **Degrade gracefully.** If `agy`/Gemini is missing or every Gemini call fails, the review runs
-  2-way and says so.
+- **Degrade gracefully.** Any seat whose call fails (CLI missing, error exit, or no parseable block)
+  is treated as down; with ≥2 seats still engaged the review continues and says so. Codex and Gemini
+  are both optional peers — Claude plus at least one peer is the minimum to start.
 
 ---
 
@@ -207,10 +209,11 @@ Behavioral rules the referee must follow. The seat wrappers enforce the flag-pin
 discipline.
 
 - The Gemini seat is called **only** via `scripts/run_agy`, never raw `agy`.
-- The Codex seat is called **only** via `scripts/run_codex` (defaults `--profile peer-review`,
+- The Codex seat is called **only** via `scripts/run_codex` (defaults `--profile panel-review`,
   `--sandbox read-only`), never with a hardcoded `-m`.
-- **Never** create, edit, or delete `~/.codex/config.toml` or any `~/.codex/*.config.toml` — the
-  Codex profiles are owned by `/codex-peer-review init`.
+- **Never** hand-create, edit, or delete `~/.codex/config.toml`. `run_codex` owns
+  `~/.codex/panel-review.config.toml` (auto-created from a shipped default); leave it and any other
+  `~/.codex/*.config.toml` profile to their tools.
 - `index.json` is written **only** through the `index` / `sweep` scripts; cards **only** through
   `project_card` / `regen_cards`. Never hand-write state files.
 - The Claude seat is spawned as a fresh `panel-review-claude-seat` subagent — **never forked**.

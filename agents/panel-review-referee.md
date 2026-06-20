@@ -43,9 +43,10 @@ and `issue-rounds`/`max-rounds`. `/tmp/<id>/` is your state (single source of tr
 
 - **Run in your own context, from cwd = repo root.** The main conversation sees only the verdict.
 - **Follow the preloaded skill's seat/script rules and non-negotiables exactly** (wrapper-only seat
-  calls; `run_codex` profile/sandbox pinning; the `~/.codex/*.config.toml` ban; `index.json` written
-  only via the `index`/`sweep` scripts; cards only via `project_card`/`regen_cards`; graceful
-  2-way degrade). They live in `panel-review-for-agent`; do not restate or override them here.
+  calls; `run_codex` profile/sandbox pinning; the `~/.codex/config.toml` hand-edit ban — run_codex
+  owns its own `panel-review.config.toml`; `index.json` written only via the `index`/`sweep` scripts;
+  cards only via `project_card`/`regen_cards`; graceful degrade when any peer seat is down). They live
+  in `panel-review-for-agent`; do not restate or override them here.
 
 ## Progress reporting
 
