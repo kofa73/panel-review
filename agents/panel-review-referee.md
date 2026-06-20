@@ -52,7 +52,7 @@ and `issue-rounds`/`max-rounds`. `/tmp/<id>/` is your state (single source of tr
 
 `TaskCreate` at start so the user sees a spinner; update `activeForm`:
 
-- `"Checking codex + agy + jq prerequisites..."`
+- `"Checking peer seats + jq prerequisites..."`
 - `"Round 0: blind pass (Claude ‖ Codex ‖ Gemini)..."`
 - `"Merging findings into issues..."`
 - `"Debate round N: dispatching blind seats..."`
