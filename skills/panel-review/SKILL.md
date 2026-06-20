@@ -76,7 +76,7 @@ On `continuable <ID>`, confirm the requested category exists, re-open, and dispa
 ```bash
 have="$(jq --arg c "$CONT" '[.issues[] | select(($c=="both" and (.state=="unresolved" or .state=="contested")) or (.state==$c))] | length' "/tmp/$ID/index.json")"
 [ "$have" -gt 0 ] || { echo "Run $ID has no $CONT issue to continue."; exit 1; }
-"$SC/reopen" --id "$ID" --workdir "$PWD" --category "$CONT" || { echo "Could not re-open run $ID."; exit 1; }
+"$SC/reopen" --id "$ID" --category "$CONT" || { echo "Could not re-open run $ID."; exit 1; }
 ```
 
 Dispatch the `panel-review-referee` agent (Step 4 form) with `mode=resume`, `id=$ID`, the adopted
@@ -127,7 +127,7 @@ Act on the single verdict line:
   `unresolved`/`contested` issues and was preserved (not cleaned up). **Ask the user**
   (`AskUserQuestion`): *Run `<ID>` finished with leftovers — continue debating them, start fresh, or
   stop?*
-  - Continue → `"$SC/reopen" --id "<ID>" --workdir "$PWD" --category both`; dispatch `mode=resume`,
+  - Continue → `"$SC/reopen" --id "<ID>" --category both`; dispatch `mode=resume`,
     `id=<ID>`, `debate-low=true`.
   - Fresh → `"$SC/cleanup" --id "<ID>" --workdir "$PWD"` then `init_run` a new ID; dispatch `mode=fresh`.
   - Stop → halt; leave the run for the user.

@@ -122,24 +122,24 @@ case "$cmd" in
                           | .card_rev=((.card_rev//0)+1)))
                  end' --argjson r "$r" --argjson p "$p" ;;
   reopen)
-         cat="${3-}"
-         case "$cat" in both|unresolved|contested) ;; *) echo "index reopen: category must be both|unresolved|contested" >&2; exit 2;; esac
+         category="${3-}"
+         case "$category" in both|unresolved|contested) ;; *) echo "index reopen: category must be both|unresolved|contested" >&2; exit 2;; esac
          # Count matches first so the caller can distinguish "nothing to do" (exit 3).
-         n="$(jq --arg cat "$cat" '[.issues[] | select(
-                ($cat=="both" and (.state=="unresolved" or .state=="contested"))
-                or ($cat=="unresolved" and .state=="unresolved")
-                or ($cat=="contested" and .state=="contested"))] | length' "$f")"
-         if [ "$n" -eq 0 ]; then echo "index reopen: no $cat issue to re-open" >&2; exit 3; fi
+         n="$(jq --arg category "$category" '[.issues[] | select(
+                ($category=="both" and (.state=="unresolved" or .state=="contested"))
+                or ($category=="unresolved" and .state=="unresolved")
+                or ($category=="contested" and .state=="contested"))] | length' "$f")"
+         if [ "$n" -eq 0 ]; then echo "index reopen: no $category issue to re-open" >&2; exit 3; fi
          # Re-open selected issues + reset global counters; keep evidence; bump card_rev.
          mutate '
            .committed_rounds=[] | .round=0
            | (.issues[] | select(
-               ($cat=="both" and (.state=="unresolved" or .state=="contested"))
-               or ($cat=="unresolved" and .state=="unresolved")
-               or ($cat=="contested" and .state=="contested")
+               ($category=="both" and (.state=="unresolved" or .state=="contested"))
+               or ($category=="unresolved" and .state=="unresolved")
+               or ($category=="contested" and .state=="contested")
              )) |= (.state="open" | .rounds_debated=0
                     | .peer_reviewed=false | .fully_vetted=false | .detail_contested=false
                     | .card_rev=((.card_rev//0)+1))
-         ' --arg cat "$cat" ;;
+         ' --arg category "$category" ;;
   *) echo "usage: index {get|put|issue|bump|state|flag|commit-round|commit-sweep|reopen} <ID> ..." >&2; exit 2 ;;
 esac

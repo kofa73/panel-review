@@ -3,7 +3,7 @@
 # engine behind the dispatcher's `--continue`). Counterpart to init_run: init_run
 # starts a run; reopen revives a finished one in place.
 #
-# Usage: reopen --id ID --workdir DIR --category both|unresolved|contested
+# Usage: reopen --id ID --category both|unresolved|contested
 #
 # Resets the selected issues + global round counters via `index reopen` (the only
 # writer of index.json), then CLEARS /tmp/<ID>/sweeps/. Clearing is mandatory:
@@ -14,17 +14,15 @@
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"; . "$here/_panel_common.sh"
 
-id="" workdir="" category=""
+id="" category=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --id) id="$2"; shift 2;;
-    --workdir) workdir="$2"; shift 2;;
     --category) category="$2"; shift 2;;
     *) echo "reopen: unknown arg: $1" >&2; exit 2;;
   esac
 done
 panel_require_id "$id"
-[ -n "$workdir" ] || { echo "reopen: need --workdir" >&2; exit 2; }
 case "$category" in both|unresolved|contested) ;; *) echo "reopen: --category must be both|unresolved|contested" >&2; exit 2;; esac
 [ -s "/tmp/$id/index.json" ] || { echo "reopen: no index for $id" >&2; exit 1; }
 
