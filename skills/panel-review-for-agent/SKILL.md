@@ -20,7 +20,7 @@ you cannot adjudicate, goes to the human. **Every issue is presented** — accep
 ## Two hard rules that make this work
 
 1. **Blindness.** No seat may learn *who* raised a point or the *stance tally* (the 2:1 vote).
-   You hold all provenance; the cards the seats see carry none. The Claude seat is a **separate
+   You hold every point's origins; the cards the seats see carry none. The Claude seat is a **separate
    cold subagent**, never a fork — it must not remember what you (the referee) know.
 2. **State follows votes, not evidence presence.** An issue's state is decided from the seats'
    stances, never from whether an evidence array happens to be populated. Evidence accumulates
@@ -121,11 +121,12 @@ A **point**: `{"location":"file:line"|["file:line",...]|"analysis","assertion":"
 - `detail_contested` → existence accepted but a detail (severity/claim/location) never converged.
 - `card_rev`/`rounds_debated` are bumped by the `index`/`sweep` scripts — never hand-edit them.
 
-**Provenance is yours alone.** Keep origin seats, Round-0 agreement count, original raw wording,
-per-round stances, and the field-mutation/merge audit in `/tmp/<id>/provenance/` and
+**Origins are yours alone.** Keep origin seats, Round-0 agreement count, original raw wording, and
+per-round stances in `/tmp/<id>/origins/`, and the field-mutation/merge audit trail in
 `/tmp/<id>/audit/` (write them with any atomic means, e.g. `index`-style temp files or
-`project_card`'s sibling `write_card`). **None of this ever enters a card or a seat prompt.**
-`project_card` only renders the reviewer-facing fields, so provenance never leaks even if adjacent.
+`project_card`'s sibling `write_card`). The `audit/` trail is for human inspection only; nothing
+reads it back. **None of this ever enters a card or a seat prompt.** `project_card` only renders the
+reviewer-facing fields, so the origins never leak even if adjacent.
 
 ---
 
@@ -199,7 +200,7 @@ per-round stances, and the field-mutation/merge audit in `/tmp/<id>/provenance/`
    - Raisers agree it exists but differ on severity/location → `accepted` + `detail_contested=true`.
    - Otherwise (raised by only some, or a single seat) → `state=open` for peer review.
    - **Drop `severity:style`** issues from the debate set — keep them aside for the Style section.
-   - Assign ids `i1,i2,…`. Record provenance (which seats, raw wording) under `/tmp/<id>/provenance/`.
+   - Assign ids `i1,i2,…`. Record origins (which seats, raw wording) under `/tmp/<id>/origins/`.
 
 6. **Install the index and project cards:**
 
@@ -280,7 +281,7 @@ For `round = 1, 2, … max-rounds`, while any issue is `open`:
    - `bump`: the open issues that reached **≥2 engaged** this sweep (only these advance `rounds_debated`).
    - `set_flag`: `peer_reviewed=true` for any issue that reached ≥2 engaged; `fully_vetted=true` for
      any issue that, after this round, has been evaluated by **every configured seat** at least once
-     (track per-issue who has evaluated it across rounds in provenance); `detail_contested=true` when
+     (track per-issue who has evaluated it across rounds in origins); `detail_contested=true` when
      existence is accepted but a detail didn't converge.
    - `set_state`: terminal/`open` per the table.
    - `add_evidence`: **all** new evidence, unconditionally — every `reject` rationale and every
@@ -338,7 +339,7 @@ stance). `support_with_revision` counts as **support for existence**.
 - An issue that reaches ≥2 engaged seats gets `peer_reviewed=true` (in the round payload).
 - **`fully_vetted`** flips to `true` the round in which the **last configured seat** finally
   evaluates the issue — including a seat that was down at Round 0 but re-engages later. Track, per
-  issue in provenance, the set of seats that have evaluated it; once that set covers the full
+  issue in origins, the set of seats that have evaluated it; once that set covers the full
   configured panel, add `fully_vetted=true` to that round's `set_flag`. It never reverts.
 - **Security findings use this exact table** — no vote-skip, no auto-escalation — but are listed
   separately and prominently in the verdict.
@@ -377,8 +378,8 @@ human's intent when they chose to continue. Do **not** re-apply the gate on resu
 
 # Verdict synthesis
 
-Read the final `"$SC/index" get "$id"` and your provenance. Present **everything**, surfacing
-provenance only here. Severity → headings: `critical`/`high` → **Critical**, `medium` →
+Read the final `"$SC/index" get "$id"` and your origins. Present **everything**, surfacing
+origins only here. Severity → headings: `critical`/`high` → **Critical**, `medium` →
 **Important**, `low` → **Minor**, `style` → **Style notes**.
 
 ```markdown
@@ -446,6 +447,6 @@ Never return raw seat output, card text, or per-round transcripts.
 - ✅ Gemini seat uses a **Gemini** model (run_agy's pin), never agy's Claude/GPT-OSS entries.
 - ✅ `index.json` is written **only** through the `index`/`sweep` scripts; cards **only** through
   `project_card`/`regen_cards`. Never hand-write state files.
-- ✅ Cards carry **no** provenance and **no** stance tally. Settle only on unanimity among ≥2
+- ✅ Cards carry **no** origins and **no** stance tally. Settle only on unanimity among ≥2
   engaged seats. Present every issue, including rejected and unresolved.
 - ✅ Degrade gracefully: one dead seat ≠ aborted review. Run everything from cwd = repo root.

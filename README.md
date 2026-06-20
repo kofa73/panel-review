@@ -114,11 +114,11 @@ dispatcher ── presents that verdict verbatim
 
 Blindness is the whole point, and two choices enforce it:
 
-- **No seat learns provenance or the tally.** No seat ever sees *who* raised a point or the stance
-  count (the "2:1" vote) — those are the real conformity and antagonism triggers. Each seat *does*
-  see every distinct technical point, its location, and both sides of the argument, so it can verify
-  against the actual code. The referee holds all provenance; the **cards** the seats read carry
-  none. A card is the Markdown rendering of an issue with provenance stripped out.
+- **No seat ever sees *who* raised a point or the stance count** (the "2:1" vote) — those are the
+  real conformity and antagonism triggers. Each seat *does* see every distinct technical point, its
+  location, and both sides of the argument, so it can verify against the actual code. The referee
+  alone knows each point's **origins**; the **cards** the seats read carry none. A card is the
+  Markdown rendering of an issue with those origins stripped out.
 - **The Claude seat is a cold subagent, never forked.** It is spawned fresh each pass with no
   memory. A fork would inherit the referee's context and defeat blindness. So all three seats are
   genuinely independent and can fail independently.
@@ -155,8 +155,18 @@ settle an issue), the state advances:
   — though one raised near the global ceiling may run out of rounds to reach the 2-seat quorum, ending
   **unresolved** (or **contested**, if it gets one split review pass first)
 
-Evidence **accumulates unconditionally** every round and is carried to the verdict; nothing a seat
-raised is dropped.
+Beyond its state, each issue record also carries three boolean **flags**, two **counters**, and its
+**evidence**:
+
+- **flags** — `peer_reviewed` (≥2 engaged seats have evaluated it, the settle threshold),
+  `fully_vetted` (every configured seat has evaluated it at least once), and `detail_contested`
+  (existence accepted, but a detail — severity / claim / location — never converged).
+- **counters** — `rounds_debated` (committed debate rounds the issue has been through) and `card_rev`
+  (a revision number bumped on every change, used to detect a stale projected card). Neither is the
+  stance tally: the 2:1 vote is never stored on the issue, only in `origins/`.
+- **evidence** — the `pro` and `contra` points the seats raised, merged and deduplicated (only points
+  at the same location and mechanism are merged). Evidence **accumulates unconditionally** every
+  round and is carried to the verdict; nothing a seat raised is dropped.
 
 ### The wrapper scripts
 
@@ -175,7 +185,7 @@ fat-fingered. Static prompt templates live in `skills/panel-review/prompts/`.
 | `extract_block` / `parse_block` | Pull a `findings` / `stances` / `new_findings` block → validated JSONL; `parse_block` exit 4 = no block (down seat) vs empty-but-present |
 | `init_run` / `resume_check` / `cleanup` | Mint a run (marker-last); decide resume vs fresh; tear down after the verdict |
 | `index` | The **only** writer of the canonical issue index (`/tmp/<id>/index.json`) — state, flags, counters, and the idempotent `commit-sweep` that applies a whole debate round atomically |
-| `project_card` / `regen_cards` | Render issue records → blind cards (no provenance, no tally); rebuild all cards from the index on resume |
+| `project_card` / `regen_cards` | Render issue records → blind cards (no origins, no tally); rebuild all cards from the index on resume |
 | `sweep` | Checkpointed debate sweeps — counters advance **only** on a committed sweep, so a crash never double-counts |
 
 ---
@@ -190,8 +200,11 @@ derived, regenerable cache; state is never inferred from them.
 | `.panel-review/<ID>/issue-<id>.md` | the blind cards (kept in the repo so Codex's read-only sandbox can read them; git-excluded and kept out of every scope so they never contaminate an `--uncommitted` review) |
 | `.panel-review/<ID>/` (the dir) | the per-worktree marker / lock — its name carries `<ID>` |
 | `/tmp/<ID>/manifest.json` | scope, limits, diff hash, phase |
-| `/tmp/<ID>/index.json` | the issue index — states, counters, flags (referee only) |
-| `/tmp/<ID>/sweeps/`, `/raw`, `/audit`, `/provenance` | sweep checkpoints, raw seat outputs, audit, provenance (referee only) |
+| `/tmp/<ID>/index.json` | the **issue index** — the authoritative record of every issue: its state (e.g. `accepted`), flags, counters, and evidence (all defined under [How an issue moves](#how-an-issue-moves-transitions)); cards are rendered from it and the verdict is read off it (referee only) |
+| `/tmp/<ID>/sweeps/` | one subdir per **sweep** — a sweep is one full pass over the open issues across all engaged seats (i.e. one debate round). Holds each seat's cached output so an interrupted round resumes without re-running finished seats; **read back on resume** (referee only) |
+| `/tmp/<ID>/raw/` | each seat's verbatim response text, before parsing; **read back** — `parse_block` turns these into findings/stances, and resume reuses them (referee only) |
+| `/tmp/<ID>/origins/` | who raised each point, its original wording, and the per-round stances — the data the blind cards omit; **read back** by the referee to track review coverage and to attribute findings in the verdict (referee only) |
+| `/tmp/<ID>/audit/` | a human-readable trail of how the referee changed issue fields and merged duplicate findings; **written for inspection only — never read back by the process** (referee only) |
 
 Writes are atomic (temp + `sync` + `rename`, prior version rotated to `.bak`). Init writes `/tmp`
 state first and the marker **last**, so a marker always implies valid state. A clean finish removes

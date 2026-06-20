@@ -3,7 +3,7 @@
 # Markdown card and write it atomically to .panel-review/<ID>/issue-<id>.md.
 #
 # The card is the seat-facing projection: claim, location, severity, and the
-# pro/contra evidence POINTS — with NO provenance, NO seat names, NO stance tally.
+# pro/contra evidence POINTS — with NO origins, NO seat names, NO stance tally.
 # An empty contra while not-yet-peer-reviewed renders the explicit "not reviewed
 # yet" note (never blank, so absence is never read as consensus). A header
 # comment carries run/card/index revs for staleness checks on resume.

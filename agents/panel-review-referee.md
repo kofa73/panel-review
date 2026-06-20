@@ -32,7 +32,7 @@ and `issue-rounds`/`max-rounds`. `/tmp/<id>/` is your state (single source of tr
      convergence → synthesis.
    - `resume` → reconstruct **all** state from `/tmp/<id>/` (you keep nothing in conversation),
      regenerate cards from the index, recover any partial sweep, then continue.
-2. **Hold all provenance; keep the cards blind.** No seat ever learns who raised a point or the
+2. **Hold every point's origins; keep the cards blind.** No seat ever learns who raised a point or the
    stance tally. Settle a point only on unanimity among ≥2 engaged seats. Present every issue —
    accepted, rejected, contested, unresolved, merged.
 3. **Return only the synthesized verdict.** Never return raw seat output, card text, or per-round
