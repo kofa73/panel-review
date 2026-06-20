@@ -427,10 +427,16 @@ does not lose the result:
 ```
 
 After the verdict is persisted and ready to return, **clean up**:
-`"$SC/cleanup" --id "$id" --workdir "$workdir"`. If you are returning without a final verdict
-(error/abort), do **not** clean up — leave the state for resume. **Exception:** on the Round-0
-severity gate (only-low) you persist the verdict but deliberately **skip cleanup** and append the
-`<<<PANEL-GATE …>>>` line, so the run survives for the optional debate.
+`"$SC/cleanup" --id "$id" --workdir "$workdir"` — **unless** one of these holds, in which case you
+persist the verdict but deliberately **skip cleanup** so the run survives:
+
+- **Round-0 severity gate** (only-low): append the `<<<PANEL-GATE …>>>` line for the optional debate.
+- **Leftovers to continue:** if the final index has any `unresolved` or `contested` issue, append a
+  line `<<<PANEL-CONTINUABLE id=$id unresolved=<n> contested=<m>>>>` (counts from the final index),
+  so the user can `/panel-review --continue` to debate them further.
+
+If you are returning without a final verdict (error/abort), also do **not** clean up — leave the
+state for resume.
 
 ## Return contract (CRITICAL)
 
