@@ -62,7 +62,7 @@ PR="$HOME/.claude/skills/panel-review/prompts"
 "$SC/index"   {get|put|issue|bump|state|flag|commit-round} <id> ...   # ONLY writer of index.json
 "$SC/project_card" --id <id> --workdir <dir> [--index-rev N] < issue.json   # one issue record -> its card
 "$SC/regen_cards"  --id <id> --workdir <dir>                                # rebuild ALL cards from the index
-"$SC/index"   commit-sweep <id> <round>      # apply a WHOLE debate round atomically (payload JSON on stdin)
+"$SC/index"   commit-sweep <id> <round> <epoch>  # apply a WHOLE debate round atomically (payload JSON on stdin)
 "$SC/sweep"   {begin|record|has|done|commit} <id> <round> ...               # checkpointed seat/batch debate sweeps
 "$SC/cleanup" --id <id> --workdir <dir>      # remove cards + /tmp state (ONLY after the verdict is produced)
 ```
@@ -245,7 +245,8 @@ manifest). A **round = one full sweep over all currently-open issues** across al
 For `round = 1, 2, … max-rounds`, while any issue is `open`:
 
 1. `OPEN=$( "$SC/index" get "$id" | jq -r '.issues[]|select(.state=="open")|.id' )`. If empty → done.
-2. `"$SC/sweep" begin "$id" $round` and `"$SC/regen_cards" --id "$id" --workdir "$workdir"` (cards
+2. `epoch="$(jq -r '.run_epoch // 0' "/tmp/$id/index.json")"`
+3. `"$SC/sweep" begin "$id" $round "$epoch"` and `"$SC/regen_cards" --id "$id" --workdir "$workdir"` (cards
    reflect all accumulated evidence). Collect the open cards' **paths**
    `.panel-review/<id>/issue-<oid>.md`.
 3. **Over-budget:** a single card always goes **whole** to every engaged seat. If the *set* of
@@ -264,7 +265,7 @@ For `round = 1, 2, … max-rounds`, while any issue is `open`:
    ```bash
    batch=all  # or a stable token such as b1, b2, ... when cards are paginated
    if "$SC/parse_block" stances "/tmp/$id/raw/round$round.$seat.$batch.txt" "$seat" > "/tmp/$id/st.$seat.$batch.json"; then
-     "$SC/sweep" record "$id" $round "$seat" "/tmp/$id/raw/round$round.$seat.$batch.txt" "$batch"   # engaged: cache it
+     "$SC/sweep" record "$id" $round "$epoch" "$seat" "/tmp/$id/raw/round$round.$seat.$batch.txt" "$batch"   # engaged: cache it
    fi   # exit 4 (no block) or 5 (malformed) ⇒ NOT recorded ⇒ stays eligible for retry and for resume
    ```
    This matters: `sweep has`/resume treat a recorded seat as done, so a malformed/down seat must
@@ -303,7 +304,7 @@ For `round = 1, 2, … max-rounds`, while any issue is `open`:
    Then apply the whole round in one shot:
 
    ```bash
-   "$SC/sweep" commit "$id" $round < /tmp/$id/payload.$round.json
+   "$SC/sweep" commit "$id" $round "$epoch" < /tmp/$id/payload.$round.json
    "$SC/regen_cards" --id "$id" --workdir "$workdir"     # cards now carry this round's evidence/states
    ```
    `sweep commit` pipes the payload to `index commit-sweep`, which is **idempotent** (guarded by
@@ -364,9 +365,9 @@ You keep nothing in conversation; reconstruct everything from `/tmp/<id>/`.
    + index build as in fresh mode.
 5. **Debate recovery:** find the highest round dir under `/tmp/$id/sweeps/`. If
    `"$SC/sweep" done "$id" <round>` is **false**, that round never committed (so its decisions were
-   never applied — `index commit-sweep` is all-or-nothing). Reuse every seat/batch where
+   never applied — `index commit-sweep` is all-or-nothing). Run `epoch="$(jq -r '.run_epoch // 0' "/tmp/$id/index.json")"` then `"$SC/sweep" begin "$id" <round> "$epoch"` to initialize or migrate the round. Reuse every seat/batch where
    `"$SC/sweep" has "$id" <round> <seat> <batch>` is true, re-run only the missing seat/batches, then rebuild the round payload from the cached stances and
-   `sweep commit` exactly as in a fresh round. The `committed_rounds` guard makes this safe even if
+   `sweep commit` exactly as in a fresh round (passing the same `epoch` from the index). The `committed_rounds` guard makes this safe even if
    the crash happened mid-commit. Then continue from the next round.
 6. Never restart a committed sweep; never re-bump a committed round.
 

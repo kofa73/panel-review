@@ -43,6 +43,37 @@ panel_valid_id "$id" || { echo "ambiguous"; exit 0; }   # unexpected name -> han
 
 man="/tmp/$id/manifest.json"
 if [ ! -s "/tmp/$id/index.json" ] || [ ! -s "$man" ]; then echo "stale $id"; exit 0; fi
+
+exec 8>"/tmp/$id/.run.lock"
+flock -x 8
+
+pending="/tmp/$id/.reopen.pending"
+if [ -f "$pending" ]; then
+  p_epoch="" staged_token=""
+  IFS='|' read -r p_epoch staged_token < "$pending" || true
+  if [ -n "$p_epoch" ] && [ -n "$staged_token" ]; then
+    case "$staged_token" in
+      */*) ;;
+      .sweeps.reopen.*)
+        swp="/tmp/$id/sweeps"
+        st="/tmp/$id/$staged_token"
+        old="$st/old"
+        c_epoch="$(jq -r '.run_epoch // 0' "/tmp/$id/index.json" 2>/dev/null || echo 0)"
+        if [ "$c_epoch" = "$p_epoch" ]; then
+          if [ -e "$old" ] || [ -L "$old" ]; then
+            rm -rf -- "$swp"
+            mv -- "$old" "$swp"
+          fi
+          rm -rf -- "$st"
+        else
+          rm -rf -- "$st"
+        fi
+        ;;
+    esac
+  fi
+  rm -f "$pending"
+fi
+
 if ! jq -e . "/tmp/$id/index.json" >/dev/null 2>&1; then
   if [ -s "/tmp/$id/index.json.bak" ] && jq -e . "/tmp/$id/index.json.bak" >/dev/null 2>&1; then
     panel_atomic_write "/tmp/$id/index.json" < "/tmp/$id/index.json.bak"

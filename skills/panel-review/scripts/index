@@ -21,7 +21,7 @@
 #                 .committed_rounds, no-op; else append it, set .round, and bump
 #                 (rounds_debated,card_rev) for each issue id in the array. The
 #                 committed_rounds guard makes a re-run after a crash a no-op.
-#   index commit-sweep <ID> <round-int>   (payload JSON on stdin)
+#   index commit-sweep <ID> <round-int> <epoch-int>   (payload JSON on stdin)
 #                 The crash-safe way to apply a whole debate round in ONE atomic,
 #                 idempotent step. Guarded by .committed_rounds exactly like
 #                 commit-round, but applies the round's ENTIRE decision set at once
@@ -87,15 +87,18 @@ case "$cmd" in
                       | (.issues[] | select(.id as $x | ($iids | index($x)) != null)) |=
                           (.rounds_debated = ((.rounds_debated//0)+1) | .card_rev = ((.card_rev//0)+1))
                  end' --argjson r "$r" --argjson iids "$iids" ;;
-	  commit-sweep)
-	         r="${3-}"
+  commit-sweep)
+         r="${3-}"
+         epoch="${4-}"
 	         case "$r" in ''|*[!0-9]*) echo "index commit-sweep: round must be an integer" >&2; exit 2;; esac
+	         case "$epoch" in ''|*[!0-9]*) echo "index commit-sweep: epoch must be an integer" >&2; exit 2;; esac
 	         p="$(cat)"; [ -n "$p" ] || p='{}'
 	         printf '%s' "$p" | jq -e 'type=="object"' >/dev/null 2>&1 || { echo "index commit-sweep: payload must be a JSON object" >&2; exit 2; }
 	         printf '%s' "$p" | jq -e '
 	           (.add_issues // []) | type=="array" and all(.[]; (.id|type=="string") and (.id|test("^[A-Za-z0-9._-]+$")) and (.id!=".") and (.id!=".."))
 	         ' >/dev/null 2>&1 || { echo "index commit-sweep: add_issues contains missing or invalid id" >&2; exit 2; }
-	         mutate 'if ((.committed_rounds // []) | any(. == $r)) then .
+	         mutate 'if (((.run_epoch // 0) | tostring) != $epoch) then error("stale sweep commit: run epoch \(.run_epoch//0) != \($epoch)")
+	                 elif ((.committed_rounds // []) | any(. == $r)) then .
 	                 else .committed_rounds = ((.committed_rounds // []) + [$r])
                    | .round = $r
                    | .issues = (.issues + ($p.add_issues // []))
@@ -120,7 +123,7 @@ case "$cmd" in
                           | .location = ($v.fields.location // .location)
                           | .category = ($v.fields.category // .category)
                           | .card_rev=((.card_rev//0)+1)))
-                 end' --argjson r "$r" --argjson p "$p" ;;
+                 end' --arg epoch "$epoch" --argjson r "$r" --argjson p "$p" ;;
   reopen)
          category="${3-}"
          case "$category" in both|unresolved|contested) ;; *) echo "index reopen: category must be both|unresolved|contested" >&2; exit 2;; esac
@@ -132,7 +135,7 @@ case "$cmd" in
          if [ "$n" -eq 0 ]; then echo "index reopen: no $category issue to re-open" >&2; exit 3; fi
          # Re-open selected issues + reset global counters; keep evidence; bump card_rev.
          mutate '
-           .committed_rounds=[] | .round=0
+           .committed_rounds=[] | .round=0 | .run_epoch=((.run_epoch//0)+1)
            | (.issues[] | select(
                ($category=="both" and (.state=="unresolved" or .state=="contested"))
                or ($category=="unresolved" and .state=="unresolved")

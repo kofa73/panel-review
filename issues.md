@@ -5,4 +5,4 @@
 - need a "--continue" flag to allow continuing with unresolved and contested (--continue continues both, --continue unresolved only the latter). new round to start with same limits as main, but counters (per-item and global) start fresh
 - should document why we put stuff under /tmp/<ID> (.panel-review/<ID>/issue-<id>.md is mentioned: it's intended to be read by workspace-locked agents - wording should change from "so Codex's read-only sandbox can read them" to more future-proof, other agents may come, and read-only is not the important aspect here, it's visibility)
 - no need to actively edit .git/info/exclude: just add .panel-review once, if not there
-
+- the early quit should be applied for all rounds: if only low items remain, the process can stop, no point in burning tokens

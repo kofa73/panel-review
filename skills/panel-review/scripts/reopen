@@ -5,12 +5,12 @@
 #
 # Usage: reopen --id ID --category both|unresolved|contested
 #
-# Resets the selected issues + global round counters via `index reopen` (the only
-# writer of index.json), then CLEARS /tmp/<ID>/sweeps/. Clearing is mandatory:
-# the referee's debate recovery scans sweeps/ and trusts committed_rounds (now [])
-# to decide what to re-apply; a leftover sweep dir would be re-applied and corrupt
-# the continuation. Afterwards the run looks like a Round-0-gated run (issues
-# present, no committed sweeps) and mode=resume starts a clean debate at round 1.
+# Stages stale sweep checkpoints out of the recovery path before `index reopen`
+# clears committed_rounds. This ordering is mandatory: a crash must never expose
+# empty committed_rounds together with a previous cycle's sweep outputs. On a
+# normal index failure the checkpoints are restored. Afterwards the run looks like
+# a Round-0-gated run (issues present, no committed sweeps) and mode=resume starts
+# a clean debate at round 1.
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"; . "$here/_panel_common.sh"
 
@@ -26,12 +26,64 @@ panel_require_id "$id"
 case "$category" in both|unresolved|contested) ;; *) echo "reopen: --category must be both|unresolved|contested" >&2; exit 2;; esac
 [ -s "/tmp/$id/index.json" ] || { echo "reopen: no index for $id" >&2; exit 1; }
 
-# index.json mutation (propagates exit 3 = nothing matched).
-"$here/index" reopen "$id" "$category"
+mkdir -p "/tmp/$id"
+exec 8>"/tmp/$id/.run.lock"
+flock -x 8
 
-# Drop stale debate checkpoints so resume starts the debate clean. /tmp/$id is
-# validated by panel_require_id above; only this subtree is removed.
-rm -rf -- "/tmp/$id/sweeps"
-mkdir -p "/tmp/$id/sweeps"
+pending="/tmp/$id/.reopen.pending"
+curr_epoch="$(jq -r '.run_epoch // 0' "/tmp/$id/index.json")"
+
+open_n="$(jq '[.issues[] | select(.state=="open")] | length' "/tmp/$id/index.json")"
+if [ "$open_n" -gt 0 ]; then echo "reopen: run has open issues" >&2; exit 1; fi
+
+if [ -f "$pending" ]; then
+  p_epoch="" staged_token=""
+  IFS='|' read -r p_epoch staged_token < "$pending" || true
+  if [ -n "$p_epoch" ] && [ -n "$staged_token" ]; then
+    case "$staged_token" in
+      */*) ;;
+      .sweeps.reopen.*)
+        swp="/tmp/$id/sweeps"
+        st="/tmp/$id/$staged_token"
+        old="$st/old"
+        if [ "$curr_epoch" = "$p_epoch" ]; then
+          if [ -e "$old" ] || [ -L "$old" ]; then
+            rm -rf -- "$swp"
+            mv -- "$old" "$swp"
+          fi
+          rm -rf -- "$st"
+        else
+          rm -rf -- "$st"
+        fi
+        ;;
+    esac
+  fi
+  rm -f "$pending"
+fi
+
+# Hide the prior cycle's checkpoints before the index makes them appear
+# uncommitted. Keep them in a private staging path until the index transition
+# succeeds, so a normal "nothing matched" failure leaves the run unchanged.
+sweeps="/tmp/$id/sweeps"
+staged="$(mktemp -d "/tmp/$id/.sweeps.reopen.XXXXXX")"
+tmp_pending="$(mktemp "/tmp/$id/.reopen.pending.XXXXXX")"
+staged_token="${staged##*/}"
+echo "$curr_epoch|$staged_token" > "$tmp_pending"
+mv -- "$tmp_pending" "$pending"
+if [ -e "$sweeps" ] || [ -L "$sweeps" ]; then 
+  mv -- "$sweeps" "$staged/old"
+fi
+
+if mkdir -p "$sweeps" && "$here/index" reopen "$id" "$category"; then
+  rm -rf -- "$staged"
+  rm -f "$pending"
+else
+  status=$?
+  rm -rf -- "$sweeps"
+  if [ -e "$staged/old" ] || [ -L "$staged/old" ]; then mv -- "$staged/old" "$sweeps"; fi
+  rm -rf -- "$staged"
+  rm -f "$pending"
+  exit "$status"
+fi
 
 printf '%s\n' "$id"
