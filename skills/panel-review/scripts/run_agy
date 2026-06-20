@@ -5,7 +5,7 @@
 #   run_agy "<prompt>"        # prompt as $1
 #   run_agy < promptfile      # prompt on stdin (no args)
 # Output: final assistant response on stdout. Nonzero exit = failed (caller
-#         degrades to 2-way). agy's own stderr is forwarded.
+#         degrades, running with the remaining seats). agy's own stderr is forwarded.
 #
 # WHY this wrapper exists (all verified to cause empty output / exit 124 hangs):
 #  - agy --print DRAINS STDIN TO EOF in print mode. A non-TTY stdin with no EOF
