@@ -89,7 +89,8 @@ Changes:
   default config is a real, separate file — not a heredoc inside the script — so it
   can be edited, diffed, and reviewed on its own:
 
-  - Template: **`skills/panel-review/templates/default-panel-review.config.toml`**
+  - Template: **`skills/panel-review/assets/default-panel-review.config.toml`**
+    (`assets/` is the Agent Skills standard subdir for bundled templates/resources)
 
     ```toml
     model = "gpt-5.5"
@@ -98,7 +99,7 @@ Changes:
 
   - `run_codex` resolves its own location to find the template:
     `SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"`, template at
-    `$SCRIPT_DIR/../templates/default-panel-review.config.toml`.
+    `$SCRIPT_DIR/../assets/default-panel-review.config.toml`.
 
   Idempotent and cheap; runs on every call. After the guard the file always
   exists, so Codex is always invoked with `--profile panel-review` — no
@@ -109,9 +110,9 @@ Changes:
   - Keeps `preflight` read-only.
   - Single source of truth; no two-places-must-agree.
 - Rationale for a template file over an inline heredoc: the default config lives in
-  a real `.toml` that is editable/diffable/lintable without touching shell, and a
-  `templates/` sibling dir keeps it clear of `install.sh`'s `chmod +x scripts/*`
-  (no exec bit on a data file, no special-casing).
+  a real `.toml` that is editable/diffable/lintable without touching shell, and the
+  standard `assets/` sibling dir keeps it clear of `install.sh`'s
+  `chmod +x scripts/*` (no exec bit on a data file, no special-casing).
 - Remove the `peer-review-summarizer` mention from the `run_codex` comment.
 
 ### 3. Drop the summarizer profile entirely
@@ -145,14 +146,14 @@ symmetric rule everywhere it appears:
   This is the intended decoupling; the auto-create makes it seamless (no manual
   step), and they can re-tune the new file. Accepted.
 - Default model/effort values live in a shipped template file
-  (`templates/default-panel-review.config.toml`), copied on first use. Editable on
+  (`assets/default-panel-review.config.toml`), copied on first use. Editable on
   its own, no setup step.
 
 ## Affected files
 
 - `skills/panel-review/scripts/preflight`
 - `skills/panel-review/scripts/run_codex`
-- `skills/panel-review/templates/default-panel-review.config.toml` (new)
+- `skills/panel-review/assets/default-panel-review.config.toml` (new)
 - `README.md`
 - `skills/panel-review-for-agent/SKILL.md`
 - `agents/panel-review-referee.md`
