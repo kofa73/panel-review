@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# run_agy — the ONLY sanctioned way to call the agy CLI for the Gemini seat.
+# run_agy — the ONLY approved way to call the agy CLI for the Gemini seat.
 #
 # Usage:
 #   run_agy "<prompt>"        # prompt as $1

@@ -5,6 +5,8 @@ review the same scope independently, then re-argue every issue until they either
 to you. The tool **hunts for issues and presents them to a human — it is not an autonomous
 authority.**
 
+Built on the original version: https://github.com/jcputney/agent-peer-review.
+
 ---
 
 ## What it is
@@ -123,21 +125,40 @@ Blindness is the whole point, and two choices enforce it:
 
 ### How an issue moves (transitions)
 
-State follows the seats' **stances**, never whether an evidence array is populated. Each round, for
-the seats that engaged (returned a parseable stance — at least 2 are needed to settle an issue):
+An issue's **state** follows the **stances** the seats take on it, never whether an evidence array
+is populated. Two small vocabularies drive everything below.
 
-- all `support` / `support_with_revision` → **accepted**
-- all `reject` → **rejected**
-- mix → stays **open** and carries to the next round; at the per-issue threshold or global ceiling
+Each engaged seat takes one of three **stances** on an issue:
+
+- `support` — valid as stated.
+- `support_with_revision` — valid, but a detail (severity, claim, or location) should change.
+- `reject` — not valid.
+
+An issue occupies one of five **states**:
+
+- **open** — not yet settled; carries into the next round.
+- **accepted** — settled: every engaged seat supported it (`support` or `support_with_revision`).
+- **rejected** — settled: every engaged seat rejected it.
+- **contested** — still split at the round limit, but reviewed (≥1 round with the 2-seat quorum) — handed to you.
+- **unresolved** — unsettled at the round limit and never reviewed (the 2-seat quorum was never met) — handed to you.
+
+Each round, for the seats that engaged (returned a parseable stance — at least 2 are needed to
+settle an issue), the state advances:
+
+- supported by all seats (stance: `support` / `support_with_revision`) → **accepted**
+- rejected by all seats (stance: `reject`) → **rejected**
+- mix stances → stays **open** and carries to the next round; at the per-issue threshold or global ceiling
   it becomes **contested** (had ≥1 review pass) or **unresolved** (none)
 - an issue's *existence* can be **accepted** while a *detail* (severity / claim / location) is
   **contested** — flagged for you
 - a finding that emerges mid-review is treated like a Round-0 finding, not penalized for arriving late
+  — though one raised near the global ceiling may run out of rounds to reach the 2-seat quorum, ending
+  **unresolved** (or **contested**, if it gets one split review pass first)
 
 Evidence **accumulates unconditionally** every round and is carried to the verdict; nothing a seat
 raised is dropped.
 
-### Scripts (the only sanctioned plumbing)
+### The wrapper scripts
 
 The referee never hand-rolls flags, writes, index math, or parsing. It calls wrappers in
 `skills/panel-review/scripts/`, so those operations are byte-exact and can't be

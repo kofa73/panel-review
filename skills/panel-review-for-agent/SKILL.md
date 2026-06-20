@@ -43,7 +43,7 @@ The `/panel-review` dispatcher (main context) did the resume/stop decision (only
 
 **Return only the synthesized verdict.** Nothing else reaches the main conversation.
 
-## Plumbing — the only sanctioned tools
+## The wrapper scripts
 
 All mechanics live in `scripts/` under the `panel-review` skill dir; prompt templates in
 `prompts/`. **Never invoke `agy`/`codex`/`awk`/the parsing-or-counting `jq` directly, and never
