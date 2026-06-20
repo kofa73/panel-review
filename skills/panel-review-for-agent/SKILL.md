@@ -353,7 +353,7 @@ You keep nothing in conversation; reconstruct everything from `/tmp/<id>/`.
    invocation and the diff hash is unchanged; if `/tmp/$id` were stale the dispatcher would have
    started fresh instead).
 2. **Re-run `"$SC/preflight"`** — the environment may have changed since the interrupted run (e.g.
-   Gemini is now down, or back). The CURRENT `GEMINI: yes|no` defines the configured panel for the
+   a peer seat is now down, or back). The CURRENT `CODEX: yes|no` / `GEMINI: yes|no` define the configured panel for the
    rest of this run; note any change in Process notes. (A seat absent now simply can't engage; a
    seat that returns means `fully_vetted` can still complete later.)
 3. `"$SC/regen_cards" --id "$id" --workdir "$workdir"` — rebuild every card from the index
@@ -383,7 +383,7 @@ provenance only here. Severity → headings: `critical`/`high` → **Critical**,
 
 ```markdown
 ## Panel Review — {scope}
-**Seats:** Claude + Codex (GPT) + Gemini{" — Gemini unavailable, 2-way" if degraded}
+**Seats:** {seats that engaged — e.g. Claude + Codex (GPT) + Gemini}{" — {down seat(s)} unavailable" if any peer was down}
 **Rounds:** {N debate rounds} ({converged | ceiling reached})
 **Issues:** {X} total
 
@@ -415,7 +415,7 @@ provenance only here. Severity → headings: `critical`/`high` → **Critical**,
 
 ### Process notes
 - independent Round-0 support per accepted issue; notable field mutations ("high → low on agreement")
-- seat health: timeouts / retries / degrade-to-2-way; any blind-leak-check result
+- seat health: timeouts / retries / any peer seat (Codex or Gemini) down; any blind-leak-check result
 ```
 
 Before cleanup, persist the final verdict so a crash after cleanup but before return
