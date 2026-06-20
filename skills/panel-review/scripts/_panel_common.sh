@@ -28,7 +28,7 @@ panel_atomic_write() {
   if [ -e "$dest" ]; then cp -p "$dest" "$dest.bak" 2>/dev/null || true; fi
   tmp="$(mktemp "$dir/.panel.XXXXXX")"
   cat > "$tmp"
-  sync   # durability before the rename (coarse but always available)
+  dd if=/dev/null of="$tmp" conv=notrunc,fsync 2>/dev/null # durability before the rename
   mv -f "$tmp" "$dest"
 }
 
