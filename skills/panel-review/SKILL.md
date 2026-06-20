@@ -2,7 +2,7 @@
 name: panel-review
 description: Three-way symmetric BLIND debate across Claude + OpenAI Codex (GPT) + Google Gemini (agy CLI). Dispatches the review to the panel-review-referee agent. Resumable across crashes.
 disable-model-invocation: true
-argument-hint: "--base <branch> | --uncommitted | --commit <SHA> | <question>  [--issue-rounds N] [--max-rounds N] [--debate-low]"
+argument-hint: "--base <branch> | --uncommitted | --commit <SHA> | <question>  [--issue-rounds N] [--max-rounds N] [--debate-low]  | --continue [unresolved|contested]"
 ---
 
 # Panel Review — dispatcher
@@ -20,6 +20,15 @@ SC="$HOME/.claude/skills/panel-review/scripts"
 
 The harness does **not** parse flags; you get the raw `$ARGUMENTS` string. Parse it yourself:
 
+0. **`--continue [unresolved|contested]` — handle this FIRST, before any other parsing.** If
+   `$ARGUMENTS` contains `--continue`, set `CONT` to `both` (bare `--continue`), or to `unresolved`
+   / `contested` if that word follows; remove `--continue` and its optional value from the string.
+   Then require the remainder to be **empty**: if any other token remains — a scope flag, free text,
+   `--issue-rounds`, `--max-rounds`, or `--debate-low` — stop with exactly
+   `--continue takes the scope and limits from the finished run; don't combine it with another flag.`
+   Then **skip the rest of Step 1** and follow **Step 1.5** instead (which runs Step 2's resolve+hash
+   inline before Step 3, sourcing the scope and limits from the finished run). If `--continue` is
+   absent, leave `CONT` unset and parse the rest of Step 1 (round limits, `--debate-low`, scope) normally.
 1. **Round limits.** Defaults `issue-rounds=2`, `max-rounds=4`. Apply `--issue-rounds N` /
    `--max-rounds N` if present, then validate the **resolved** values: each a positive integer and
    `issue-rounds ≤ max-rounds`. Otherwise stop with a one-line error.
@@ -41,6 +50,38 @@ The harness does **not** parse flags; you get the raw `$ARGUMENTS` string. Parse
    ```
    and stop. (`--uncommitted` legitimately leaves no positional text — that is a valid scope, not
    an error. Never guess a base branch.)
+
+## Step 1.5 — `--continue` path (only when `CONT` is set)
+
+Adopt the finished run's scope + limits instead of parsing them:
+
+```bash
+base="$PWD/.panel-review"
+ids=(); for d in "$base"/*/; do [ -f "$d/.panel-run" ] && ids+=("$(basename "$d")"); done
+[ "${#ids[@]}" -eq 1 ] || { echo "Need exactly one finished run to continue (found ${#ids[@]} in .panel-review/)."; exit 1; }
+ID="${ids[0]}"; man="/tmp/$ID/manifest.json"
+[ -s "$man" ] || { echo "The finished run's state was cleaned up; nothing to continue."; exit 1; }
+scope="$(jq -r '.scope' "$man")"; ISS="$(jq -r '.limits.issue_rounds' "$man")"; MAX="$(jq -r '.limits.max_rounds' "$man")"
+```
+
+Now run **Step 2** (resolve + hash the CURRENT diff for that `scope`) and the **Step 3
+`resume_check`** call, then require its verdict to be `continuable <ID>`:
+
+- `moved <ID>` → the code moved since the finished run. Stop: "The code under review changed since finished run `<ID>`; run a fresh review instead." (this is the scope/diff gate)
+- `resume <ID>` → the run still has open issues (interrupted, not finished). Stop: "Run `<ID>` isn't finished — resume it without `--continue`."
+- `stale <ID>` → the run's `/tmp` state is gone; stop with "Run `<ID>`'s state was cleaned up; nothing to continue." (`fresh`/`ambiguous` cannot occur here — Step 1.5 already required exactly one run dir.)
+
+On `continuable <ID>`, confirm the requested category exists, re-open, and dispatch:
+
+```bash
+have="$(jq --arg c "$CONT" '[.issues[] | select(($c=="both" and (.state=="unresolved" or .state=="contested")) or (.state==$c))] | length' "/tmp/$ID/index.json")"
+[ "$have" -gt 0 ] || { echo "Run $ID has no $CONT issue to continue."; exit 1; }
+"$SC/reopen" --id "$ID" --category "$CONT" || { echo "Could not re-open run $ID."; exit 1; }
+```
+
+Dispatch the `panel-review-referee` agent (Step 4 form) with `mode=resume`, `id=$ID`, the adopted
+`scope`/`issue-rounds`/`max-rounds`, and `debate-low=true`. Present its verdict per Step 5. (Then
+skip the normal Step 2/3 below — they were just run here.)
 
 ## Step 2 — prereqs + scope hash
 
@@ -81,6 +122,15 @@ Act on the single verdict line:
   - Resume → dispatch with `mode=resume`, `id=<ID>`.
   - Stop → tell the user to remove `.panel-review/<ID>/` themselves (not your job to delete
     their state) and halt.
+
+- **`continuable <ID>`** → a prior run on this exact scope **finished** with leftover
+  `unresolved`/`contested` issues and was preserved (not cleaned up). **Ask the user**
+  (`AskUserQuestion`): *Run `<ID>` finished with leftovers — continue debating them, start fresh, or
+  stop?*
+  - Continue → `"$SC/reopen" --id "<ID>" --category both`; dispatch `mode=resume`,
+    `id=<ID>`, `debate-low=true`.
+  - Fresh → `"$SC/cleanup" --id "<ID>" --workdir "$PWD"` then `init_run` a new ID; dispatch `mode=fresh`.
+  - Stop → halt; leave the run for the user.
 
 - **`stale <ID>`** → the marker's `/tmp/<ID>` state is gone (volume cleaned). Drop the dead marker
   and start fresh — no need to ask:
@@ -130,7 +180,7 @@ First check whether the agent's return ends with a control line of the form:
 <<<PANEL-GATE id=<ID> reason=low-only open=<n>>>>
 ```
 
-- **No gate line** (the normal case) → present the verdict **verbatim** — do not re-summarize,
+- **No control line** (the normal case) → present the verdict **verbatim** — do not re-summarize,
   re-classify, or add commentary. If it reports a degrade (any peer seat — Codex or Gemini — down), pass that note
   through as-is. Done.
 
@@ -145,6 +195,12 @@ First check whether the agent's return ends with a control line of the form:
        Round 0 (no seat re-run) and runs the debate loop. Present its returned verdict verbatim.
      - **Finish here** → the verdict is already shown; tear the run down:
        `"$SC/cleanup" --id "<ID>" --workdir "$PWD"`. Done.
+
+- **`<<<PANEL-CONTINUABLE id=<ID> unresolved=<n> contested=<m>>>>` present** → the run finished with
+  leftovers and was preserved (not cleaned up). Present the verdict verbatim **with that line
+  removed**, then append one line: *"`<n>` unresolved, `<m>` contested remain — run `/panel-review
+  --continue [unresolved|contested]` to debate them further, or remove `.panel-review/<ID>/` to
+  discard."* Do **not** clean up.
 
 ## Notes
 

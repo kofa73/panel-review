@@ -12,6 +12,10 @@
 #   index state <ID> <issue-id> <state>       set .state, +1 card_rev
 #   index flag  <ID> <issue-id> <flag> <bool> set a boolean flag, +1 card_rev
 #                 (flag in: peer_reviewed|fully_vetted|detail_contested)
+#   index reopen <ID> both|unresolved|contested
+#                 Re-open leftover issues for another debate cycle: matching issues
+#                 -> state=open, rounds_debated=0, vetting flags false; global round=0,
+#                 committed_rounds=[]. Keeps evidence. Exit 3 if no such issue.
 #   index commit-round <ID> <round-int> <iids-json-array>
 #                 idempotently record a committed sweep: if <round> is already in
 #                 .committed_rounds, no-op; else append it, set .round, and bump
@@ -40,7 +44,7 @@ f="/tmp/$id/index.json"
 
 # Serialize mutations on index.json for a given run ID.
 case "$cmd" in
-  put|bump|state|flag|commit-round|commit-sweep)
+  put|bump|state|flag|commit-round|commit-sweep|reopen)
     mkdir -p "/tmp/$id"
     touch "/tmp/$id/.index.lock"
     exec 9>"/tmp/$id/.index.lock"
@@ -117,5 +121,25 @@ case "$cmd" in
                           | .category = ($v.fields.category // .category)
                           | .card_rev=((.card_rev//0)+1)))
                  end' --argjson r "$r" --argjson p "$p" ;;
-  *) echo "usage: index {get|put|issue|bump|state|flag|commit-round|commit-sweep} <ID> ..." >&2; exit 2 ;;
+  reopen)
+         category="${3-}"
+         case "$category" in both|unresolved|contested) ;; *) echo "index reopen: category must be both|unresolved|contested" >&2; exit 2;; esac
+         # Count matches first so the caller can distinguish "nothing to do" (exit 3).
+         n="$(jq --arg category "$category" '[.issues[] | select(
+                ($category=="both" and (.state=="unresolved" or .state=="contested"))
+                or ($category=="unresolved" and .state=="unresolved")
+                or ($category=="contested" and .state=="contested"))] | length' "$f")"
+         if [ "$n" -eq 0 ]; then echo "index reopen: no $category issue to re-open" >&2; exit 3; fi
+         # Re-open selected issues + reset global counters; keep evidence; bump card_rev.
+         mutate '
+           .committed_rounds=[] | .round=0
+           | (.issues[] | select(
+               ($category=="both" and (.state=="unresolved" or .state=="contested"))
+               or ($category=="unresolved" and .state=="unresolved")
+               or ($category=="contested" and .state=="contested")
+             )) |= (.state="open" | .rounds_debated=0
+                    | .peer_reviewed=false | .fully_vetted=false | .detail_contested=false
+                    | .card_rev=((.card_rev//0)+1))
+         ' --arg category "$category" ;;
+  *) echo "usage: index {get|put|issue|bump|state|flag|commit-round|commit-sweep|reopen} <ID> ..." >&2; exit 2 ;;
 esac

@@ -211,6 +211,21 @@ state first and the marker **last**, so a marker always implies valid state. A c
 both the cards and `/tmp/<ID>/`; an interruption leaves them for resume; a "stop" decision leaves
 the marker for you to remove.
 
+### Continuing a finished review
+
+A review that ends with **contested** or **unresolved** issues is **kept**, not cleaned up (just like
+the Round-0 low-severity gate). Push those issues further with:
+
+- `/panel-review --continue` — re-debate both contested and unresolved
+- `/panel-review --continue unresolved` — only unresolved
+- `/panel-review --continue contested` — only contested
+
+`--continue` reuses the finished run's scope and round limits (don't pass them again) and re-resolves
+the diff: if the code under review changed, it refuses and asks for a fresh review. The selected
+issues return to **open** with their per-issue and the global round counters reset to zero, so they
+get a full budget again; their accumulated evidence is kept, and already-settled issues are carried
+into the new verdict unchanged.
+
 ---
 
 ## Key design decisions

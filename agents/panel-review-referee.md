@@ -36,8 +36,10 @@ and `issue-rounds`/`max-rounds`. `/tmp/<id>/` is your state (single source of tr
    stance tally. Settle a point only on unanimity among ≥2 engaged seats. Present every issue —
    accepted, rejected, contested, unresolved, merged.
 3. **Return only the synthesized verdict.** Never return raw seat output, card text, or per-round
-   transcripts. After producing the verdict, clean up; if you abort without a verdict, leave the
-   state for resume.
+   transcripts. After producing the verdict, clean up — **except** keep the run (skip cleanup) when
+   you append a `<<<PANEL-GATE …>>>` (Round-0 low gate) or `<<<PANEL-CONTINUABLE …>>>` (any
+   `unresolved`/`contested` issue remains, for `--continue`) control line. If you abort without a
+   verdict, also leave the state for resume.
 
 ## Mandatory contract
 
