@@ -20,19 +20,21 @@ SC="$HOME/.claude/skills/panel-review/scripts"
 
 The harness does **not** parse flags; you get the raw `$ARGUMENTS` string. Parse it yourself:
 
+0. **`--continue [unresolved|contested]` — handle this FIRST, before any other parsing.** If
+   `$ARGUMENTS` contains `--continue`, set `CONT` to `both` (bare `--continue`), or to `unresolved`
+   / `contested` if that word follows; remove `--continue` and its optional value from the string.
+   Then require the remainder to be **empty**: if any other token remains — a scope flag, free text,
+   `--issue-rounds`, `--max-rounds`, or `--debate-low` — stop with exactly
+   `--continue takes the scope and limits from the finished run; don't combine it with another flag.`
+   Then **skip the rest of Step 1 and Step 2** and follow **Step 1.5** instead (it sources the scope
+   and limits from the finished run). If `--continue` is absent, leave `CONT` unset and parse the
+   rest of Step 1 (round limits, `--debate-low`, scope) normally.
 1. **Round limits.** Defaults `issue-rounds=2`, `max-rounds=4`. Apply `--issue-rounds N` /
    `--max-rounds N` if present, then validate the **resolved** values: each a positive integer and
    `issue-rounds ≤ max-rounds`. Otherwise stop with a one-line error.
 1b. **`--debate-low`** (boolean, default off). If present, set `DEBATE_LOW=true` and remove it from
    the string; else `DEBATE_LOW=false`. It tells the agent to debate even when Round 0 finds only
    low-severity items (skip the Round-0 severity gate).
-1c. **`--continue [unresolved|contested]`** (optional). If present, set `CONT` to `both` (bare
-   `--continue`), or to `unresolved` / `contested` if that word follows, and remove it (and its
-   value) from the string. `--continue` continues a *finished* run and sources its scope and limits
-   from the run itself, so it **must not** be combined with a scope flag/free-text,
-   `--issue-rounds`, or `--max-rounds`: if anything remains after removing it, stop with exactly
-   `--continue takes the scope and limits from the finished run; don't combine it with a scope or limit flag.`
-   When `CONT` is unset, parse scope/limits as in steps 1, 1b, 2 below.
 2. **Scope** from what remains after removing the round/boolean flags, as a **canonical token**:
 
    | In `$ARGUMENTS` | Canonical `scope` token |
@@ -67,14 +69,14 @@ Now run **Step 2** (resolve + hash the CURRENT diff for that `scope`) and the **
 
 - `moved <ID>` → the code moved since the finished run. Stop: "The code under review changed since finished run `<ID>`; run a fresh review instead." (this is the scope/diff gate)
 - `resume <ID>` → the run still has open issues (interrupted, not finished). Stop: "Run `<ID>` isn't finished — resume it without `--continue`."
-- `stale`/`ambiguous`/`fresh`/other → stop with the matching message.
+- `stale <ID>` → the run's `/tmp` state is gone; stop with "Run `<ID>`'s state was cleaned up; nothing to continue." (`fresh`/`ambiguous` cannot occur here — Step 1.5 already required exactly one run dir.)
 
 On `continuable <ID>`, confirm the requested category exists, re-open, and dispatch:
 
 ```bash
 have="$(jq --arg c "$CONT" '[.issues[] | select(($c=="both" and (.state=="unresolved" or .state=="contested")) or (.state==$c))] | length' "/tmp/$ID/index.json")"
 [ "$have" -gt 0 ] || { echo "Run $ID has no $CONT issue to continue."; exit 1; }
-"$SC/reopen" --id "$ID" --workdir "$PWD" --category "$CONT"
+"$SC/reopen" --id "$ID" --workdir "$PWD" --category "$CONT" || { echo "Could not re-open run $ID."; exit 1; }
 ```
 
 Dispatch the `panel-review-referee` agent (Step 4 form) with `mode=resume`, `id=$ID`, the adopted
