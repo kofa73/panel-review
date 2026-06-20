@@ -9,19 +9,33 @@
 #         (caller degrades). codex missing -> exit 127.
 #
 # Pins the two non-negotiables structurally so they can't be fat-fingered:
-#  - --profile peer-review   (NEVER hardcode -m / a raw model; the profile owns
-#                             model selection. Override only the profile name via
-#                             CODEX_PROFILE, e.g. peer-review-summarizer.)
+#  - --profile panel-review  (NEVER hardcode -m / a raw model; the profile owns
+#                             model selection. Panel Review's profile is separate
+#                             from upstream peer-review and is auto-created from
+#                             assets/default-panel-review.config.toml on first use.
+#                             Override only the profile name via CODEX_PROFILE.)
 #  - --sandbox read-only     (Codex may read the working tree to investigate
 #                             cross-file context, but never write.)
 # Set CODEX_JSONL=/path to also capture the raw --json event stream (default
 # discarded); --json is required because -o writes only the final message.
 set -euo pipefail
 
-PROFILE="${CODEX_PROFILE:-peer-review}"
+PROFILE="${CODEX_PROFILE:-panel-review}"
 JSONL="${CODEX_JSONL:-/dev/null}"
 
 command -v codex >/dev/null 2>&1 || { echo "run_codex: codex CLI not found" >&2; exit 127; }
+
+# Ensure our own Codex profile exists (decoupled from upstream peer-review).
+# Copy the shipped default on first use; never clobber an existing/tuned file.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROFILE_FILE="$HOME/.codex/${PROFILE}.config.toml"
+if [ ! -f "$PROFILE_FILE" ]; then
+  template="$SCRIPT_DIR/../assets/default-${PROFILE}.config.toml"
+  if [ -f "$template" ]; then
+    mkdir -p "$HOME/.codex"
+    cp "$template" "$PROFILE_FILE"
+  fi
+fi
 
 promptfile="$(mktemp /tmp/codex_prompt.XXXXXX)"
 outfile="$(mktemp /tmp/codex_out.XXXXXX)"

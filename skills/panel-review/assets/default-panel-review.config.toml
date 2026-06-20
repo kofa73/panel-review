@@ -1,0 +1,6 @@
+# Default Codex profile for the Panel Review Codex seat. Layered via
+# `codex exec --profile panel-review`. Copied to ~/.codex/panel-review.config.toml
+# by run_codex on first use; edit that copy to tune the model/effort for reviews.
+# Separate from upstream agent-peer-review's peer-review profile on purpose.
+model = "gpt-5.5"
+model_reasoning_effort = "xhigh"
