@@ -2,8 +2,8 @@
 
 Three-way **blind** code/design review. Claude, OpenAI Codex (GPT), and Google Gemini each
 review the same scope independently, then re-argue every issue until they either agree or hand it
-to you. A third, architecturally different model catches what two similar models miss. The tool
-**hunts for issues and presents them to a human — it is not an autonomous authority.**
+to you. The tool **hunts for issues and presents them to a human — it is not an autonomous
+authority.**
 
 ---
 
