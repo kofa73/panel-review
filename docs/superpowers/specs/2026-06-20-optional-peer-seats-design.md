@@ -141,10 +141,9 @@ symmetric rule everywhere it appears:
 
 ## Consequences / accepted trade-offs
 
-- **Profile migration.** Existing users who tuned `peer-review.config.toml` will
-  get a fresh default `panel-review.config.toml` and won't inherit that tuning.
-  This is the intended decoupling; the auto-create makes it seamless (no manual
-  step), and they can re-tune the new file. Accepted.
+- **Profile migration: not a concern.** The tool currently has a single user, so
+  there is no installed base whose `peer-review.config.toml` tuning needs to carry
+  over. The new `panel-review.config.toml` simply starts from the shipped default.
 - Default model/effort values live in a shipped template file
   (`assets/default-panel-review.config.toml`), copied on first use. Editable on
   its own, no setup step.
