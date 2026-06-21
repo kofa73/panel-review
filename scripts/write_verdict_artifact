@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# write_verdict_artifact — write the durable verdict report to /tmp/<ID>.md, a
+# SIBLING of /tmp/<ID>/ (not inside it), so cleanup/discard never touch it —
+# they only `rm -rf /tmp/<ID>` (the directory), never the sibling file. Called
+# by the referee whenever a verdict is produced (Round-0 gate, continuable
+# finish, or final finish), so every verdict the user sees has a matching file
+# on disk. Overwrites any previous snapshot for the same id (panel_atomic_write
+# rotates the old bytes to a .bak first, so one prior snapshot survives a
+# refresh).
+#
+# Usage: write_verdict_artifact --id ID < verdict.md
+#
+# Header fields scope/instructions/limits/diff_hash/created come from
+# /tmp/<ID>/manifest.json. seats/rounds are pulled from the verdict body's own
+# "**Seats:**"/"**Rounds:**" lines rather than passed again as separate args —
+# a second copy of the same fact would drift from the verdict text it
+# describes. Missing manifest is a hard error (exit 1): the caller should
+# treat this script as best-effort and not let its failure block returning the
+# verdict to the user.
+#
+# Prints the artifact path on stdout.
+set -euo pipefail
+here="$(cd "$(dirname "$0")" && pwd)"; . "$here/_panel_common.sh"
+
+id=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --id) id="$2"; shift 2;;
+    *) echo "write_verdict_artifact: unknown arg: $1" >&2; exit 2;;
+  esac
+done
+panel_require_id "$id"
+command -v jq >/dev/null 2>&1 || { echo "write_verdict_artifact: jq not found" >&2; exit 127; }
+
+# Emit a YAML scalar safely. Free-text fields (scope/instructions) and the
+# body-derived seats/rounds can contain a colon, a newline, or a literal `---`
+# line. As an unquoted plain scalar those would forge extra `key: value` lines,
+# re-shape the scalar, or prematurely terminate the `---` frontmatter block,
+# breaking the spec's greppable-header guarantee. jq encodes the value as a JSON
+# string, which is also a valid YAML double-quoted scalar (newlines -> \n, and
+# `:`/`---` stay inside the quotes) and stays on one line, so `^key:` greps
+# still work. jq is already required above.
+yaml_scalar() { jq -cn --arg v "$1" '$v'; }
+
+man="/tmp/$id/manifest.json"
+[ -s "$man" ] || { echo "write_verdict_artifact: no manifest for $id" >&2; exit 1; }
+
+scope=$(jq -r '.scope' "$man")
+instr=$(jq -r '.instructions // ""' "$man")
+iss=$(jq -r '.limits.issue_rounds' "$man")
+mx=$(jq -r '.limits.max_rounds' "$man")
+dh=$(jq -r '.diff_hash' "$man")
+created=$(jq -r '.created' "$man")
+finished="$(date '+%Y-%m-%d %H:%M:%S')"
+
+body="$(cat)"
+# `|| true`: a missing Seats/Rounds line makes grep exit 1, which pipefail
+# propagates and `set -e` would treat as fatal — aborting before the
+# `${seats:-n/a}` defaults below ever run. Swallow grep's "no match" so the
+# defaults handle a missing line, not just a present-but-empty one.
+seats="$(printf '%s\n' "$body" | grep -m1 '^\*\*Seats:\*\*' | sed 's/^\*\*Seats:\*\* *//' || true)"
+rounds="$(printf '%s\n' "$body" | grep -m1 '^\*\*Rounds:\*\*' | sed 's/^\*\*Rounds:\*\* *//' || true)"
+
+dest="/tmp/$id.md"
+{
+  printf '%s\n' "---"
+  printf 'id: %s\n' "$id"
+  printf 'scope: %s\n' "$(yaml_scalar "$scope")"
+  printf 'instructions: %s\n' "$(yaml_scalar "${instr:-(none)}")"
+  printf 'limits: issue-rounds=%s max-rounds=%s\n' "$iss" "$mx"
+  printf 'seats: %s\n' "$(yaml_scalar "${seats:-n/a}")"
+  printf 'rounds: %s\n' "$(yaml_scalar "${rounds:-n/a}")"
+  printf 'created: %s\n' "$created"
+  printf 'finished: %s\n' "$finished"
+  printf 'diff_hash: %s\n' "$dh"
+  printf '%s\n' "---"
+  printf '\n'
+  printf '%s\n' "$body"
+} | panel_atomic_write "$dest"
+
+printf '%s\n' "$dest"

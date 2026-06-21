@@ -1,9 +1,29 @@
 # Durable verdict artifact (`/tmp/<ID>.md`) — design
 
-**Status:** proposed, **deferred** (split out of the subcommands redesign on 2026-06-21 — to be done
-later, independently)
+**Status:** implemented (2026-06-21) — `scripts/write_verdict_artifact`, wired into the referee
+protocol's two verdict-producing points and into `start`'s Step 5 (inherited by `resume`/`continue`).
 **Relation:** independent of `2026-06-21-subcommands-design.md`. It applies equally to the current
 single-command tool, so it can land on its own, before or after the plugin split.
+
+### Implementation notes (resolving open questions from the original design)
+
+- **Atomicity:** the write goes through `panel_atomic_write` (temp file in `/tmp`, fsync, rename),
+  same helper used for `manifest.json`/`index.json`. A refresh rotates the previous snapshot to
+  `/tmp/<ID>.md.bak` first, so one prior verdict survives an overwrite.
+- **Header format:** YAML frontmatter (`---` delimited) rather than free-form prose, so the file is
+  greppable. Fields: `id`, `scope`, `instructions`, `limits`, `seats`, `rounds`, `created`,
+  `finished`, `diff_hash`.
+- **No drift between header and body:** `seats`/`rounds` are parsed out of the verdict body's own
+  `**Seats:**`/`**Rounds:**` lines rather than passed a second time as separate arguments — avoids two
+  copies of the same fact going out of sync.
+- **Failure mode:** the referee treats the write as best-effort; if it fails (e.g. `/tmp` full), the
+  verdict is still returned to the user without the pointer line. The script itself fails loudly
+  (`set -e`) so the caller can detect and skip the pointer.
+- **Mutability is surfaced to the user:** the Step 5 pointer line is repeated at gate time and at
+  final-finish time, since a `continue`/debate-the-gate path overwrites the same path — the doc's
+  "refreshes it" behavior is now stated explicitly in the command text, not left implicit.
+- **`cleanup`/`discard` unchanged:** both already only `rm -rf` the `/tmp/<ID>/` directory, which
+  never touches the sibling file; `cleanup` got a one-line comment to keep it that way on purpose.
 
 ## Goal
 

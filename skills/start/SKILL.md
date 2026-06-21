@@ -151,6 +151,12 @@ verdict. Run from cwd = repo root.
 
 ## Step 5 — present the verdict (and the low-severity gate)
 
+**The pointer line is conditional.** The referee writes `/tmp/<ID>.md` best-effort and returns *only*
+the verdict — it reports no write success/failure. So before appending any *"Saved to `/tmp/<ID>.md`
+…"* pointer line below, confirm the artifact actually exists: `test -f "/tmp/<ID>.md"`. If it is
+absent (the write failed, e.g. `/tmp` full), present the verdict **without** the pointer line — never
+advertise a file that is not there. This applies to every branch that mentions the pointer line.
+
 First check whether the agent's return ends with a control line of the form:
 
 ```
@@ -159,26 +165,32 @@ First check whether the agent's return ends with a control line of the form:
 
 - **No control line** (the normal case) → present the verdict **verbatim** — do not re-summarize,
   re-classify, or add commentary. If it reports a degrade (any peer seat — Codex or Gemini — down), pass
-  that note through as-is. Done.
+  that note through as-is. Then, **if the artifact exists** (see above), append one line: *"Saved to
+  `/tmp/<ID>.md` — move it somewhere permanent to keep it (`/tmp` is cleared on reboot)."* Done.
 
 - **Gate line present** → Round 0 found only low-severity items and the agent skipped the debate to
   save tokens (the run is preserved, not cleaned up). Then:
   1. Present the verdict verbatim **with the `<<<PANEL-GATE …>>>` line removed** (it's a control
      signal, not for the human).
-  2. **Ask the user** (`AskUserQuestion`): *Round 0 surfaced only low-severity findings. Debate them
+  2. **Append the `/tmp/<ID>.md` pointer line now** (only if the file exists) — at gate time, *before*
+     the decision prompt — because choosing "Debate them" below overwrites this same path, so the user
+     must be told the gate-time snapshot exists while it still does.
+  3. **Ask the user** (`AskUserQuestion`): *Round 0 surfaced only low-severity findings. Debate them
      anyway (another pass across all three seats), or finish here?*
      - **Debate them** → re-dispatch the **same** `panel-review:panel-review-referee` agent (Step 4
        form) with `mode=resume`, `id=<ID>`, the same `workdir`/`scope`/limits, and `debate-low=true`.
        It reuses Round 0 (no seat re-run) and runs the debate loop. Present its returned verdict
-       verbatim.
-     - **Finish here** → the verdict is already shown; tear the run down:
-       `"$SC/cleanup" --id "<ID>" --workdir "$PWD"`. Done.
+       verbatim, then the `/tmp/<ID>.md` pointer line **again** (only if the file exists) — it has been
+       refreshed with the debated result, overwriting the gate-time snapshot.
+     - **Finish here** → the verdict and its pointer are already shown and the file is unchanged, so
+       don't repeat the pointer; just tear the run down: `"$SC/cleanup" --id "<ID>" --workdir "$PWD"`.
+       Done.
 
 - **`<<<PANEL-CONTINUABLE id=<ID> unresolved=<n> contested=<m>>>>` present** → the run finished with
   leftovers and was preserved (not cleaned up). Present the verdict verbatim **with that line
-  removed**, then append one line: *"`<n>` unresolved, `<m>` contested remain — run
-  `panel-review:continue [unresolved|contested]` to debate them further, or `panel-review:discard` to
-  remove the saved review."* Do **not** clean up.
+  removed**, then append the `/tmp/<ID>.md` pointer line (only if the file exists) and one more: *"`<n>` unresolved, `<m>`
+  contested remain — run `panel-review:continue [unresolved|contested]` to debate them further, or
+  `panel-review:discard` to remove the saved review."* Do **not** clean up.
 
 ## Notes
 

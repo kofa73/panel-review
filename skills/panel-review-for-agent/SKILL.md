@@ -71,6 +71,7 @@ PR="${CLAUDE_PLUGIN_ROOT}/prompts"
 "$SC/index"   commit-sweep <id> <round> <epoch>  # apply a WHOLE debate round atomically (payload JSON on stdin)
 "$SC/sweep"   {begin|record|has|done|commit} <id> <round> ...               # checkpointed seat/batch debate sweeps
 "$SC/cleanup" --id <id> --workdir <dir>      # remove cards + /tmp state (ONLY after the verdict is produced)
+"$SC/write_verdict_artifact" --id <id> < verdict.md   # durable /tmp/<id>.md copy; survives cleanup/discard
 ```
 
 Seat wrappers take the prompt on stdin and print the **final response only**; nonzero exit (incl.
@@ -251,7 +252,9 @@ set rarely changes the outcome and burns tokens on confirmations. Instead:
    list the low items under **Minor** and add a Process note: *"Debate skipped — Round 0 surfaced
    only low-severity findings; re-run / continue to debate them."* Show every finding as usual.
 2. **Persist** it (`write_card … verdict-$id.md`) **but do NOT clean up.** Leave `/tmp/<id>` and the
-   cards intact so the human can opt into the debate via a `mode=resume` dispatch.
+   cards intact so the human can opt into the debate via a `mode=resume` dispatch. Also write the
+   durable copy (`write_verdict_artifact --id $id < verdict.new.md`) — best-effort: if it fails, proceed
+   anyway, it must never block returning the verdict.
 3. End your return with this control line, **exactly, as the very last line**:
 
    ```
@@ -456,6 +459,13 @@ does not lose the result:
 
 ```bash
 "$SC/write_card" "$workdir/.panel-review/verdict-$id.md" < /tmp/$id/verdict.new.md
+```
+
+Also write the durable copy that outlives cleanup/discard (best-effort — if this fails, proceed
+anyway; it must never block returning the verdict):
+
+```bash
+"$SC/write_verdict_artifact" --id "$id" < /tmp/$id/verdict.new.md
 ```
 
 After the verdict is persisted and ready to return, **clean up**:

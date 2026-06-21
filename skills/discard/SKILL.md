@@ -31,8 +31,9 @@ fine — it only happens after out-of-band interference (`.panel-review:status` 
 
 - This is the escape hatch `panel-review:start`'s strict precondition needs: a user blocked by an
   unwanted saved session runs `panel-review:discard`, then `panel-review:start`.
-- Only `/tmp/<id>/` state and the in-tree `.panel-review/` go. (If the deferred verdict-artifact plan
-  ever lands, a sibling `/tmp/<id>.md` would be left untouched — not this command's concern today.)
+- Only `/tmp/<id>/` state and the in-tree `.panel-review/` go. The durable verdict copy at the
+  sibling path `/tmp/<id>.md` (if one was ever written) is deliberately left untouched — discard
+  abandons the *session*, not a verdict the human may already have seen and want to keep.
 - Manual alternative, if you'd rather not clear everything: remove a specific `.panel-review/<ID>/`
   marker dir **and** its matching `/tmp/<ID>/` state dir yourself — `panel-review:status` lists the
   paths.

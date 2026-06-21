@@ -21,11 +21,26 @@ panel_require_id() {
 # dest.bak first (best-effort fallback), writes a temp in the SAME dir (so the
 # final mv is a same-filesystem rename = atomic), fsyncs, then renames over dest.
 # No missing-file window: dest holds the old bytes until the rename flips it.
+#
+# The .bak rotation copies dest's bytes into a fresh same-dir temp and then
+# renames it over dest.bak, rather than `cp -p "$dest" "$dest.bak"`. Reason: one
+# caller (write_verdict_artifact) writes dest straight into world-writable /tmp,
+# where a local attacker can pre-plant /tmp/<ID>.md.bak as a symlink. `cp` opens
+# the destination THROUGH that symlink and writes the prior verdict to wherever
+# it points — a disclosure of the previous report. A rename never writes through
+# a symlink at the target: it either atomically replaces it (non-sticky dir) or
+# fails with EPERM (sticky /tmp, can't unlink another user's file) — and a failed
+# rotation is a swallowed best-effort skip, never a disclosure. We also require a
+# real regular-file dest (not a symlink) before reading it, so a symlinked dest
+# can't redirect the source read either.
 panel_atomic_write() {
-  local dest="$1" dir tmp
+  local dest="$1" dir tmp bak
   dir="$(dirname "$dest")"
   [ -d "$dir" ] || mkdir -p "$dir"
-  if [ -e "$dest" ]; then cp -p "$dest" "$dest.bak" 2>/dev/null || true; fi
+  if [ -f "$dest" ] && [ ! -L "$dest" ]; then
+    bak="$(mktemp "$dir/.panel.XXXXXX")"
+    if cat "$dest" > "$bak" 2>/dev/null; then mv -f "$bak" "$dest.bak" 2>/dev/null || rm -f "$bak"; else rm -f "$bak"; fi
+  fi
   tmp="$(mktemp "$dir/.panel.XXXXXX")"
   cat > "$tmp"
   dd if=/dev/null of="$tmp" conv=notrunc,fsync 2>/dev/null # durability before the rename

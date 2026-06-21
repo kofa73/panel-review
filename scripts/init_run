@@ -21,6 +21,14 @@
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"; . "$here/_panel_common.sh"
 
+# Create all of this run's dirs private to the user. /tmp/<ID>/ holds the
+# manifest (scope/instructions/diff_hash) and index; in a shared /tmp a default
+# 0755 leaves them world-readable to other local accounts. umask here (not a
+# post-hoc `mkdir -m 700` + chmod) makes every mkdir below land at 0700
+# atomically, with no world-readable window. Files are unaffected — they go
+# through panel_atomic_write's mktemp (already 0600).
+umask 077
+
 workdir="" scope="" iss="" mx="" dh="" instr=""
 while [ "$#" -gt 0 ]; do
   case "$1" in

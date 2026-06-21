@@ -71,7 +71,8 @@ Only `panel-review:start` takes a scope or instructions — the session remember
 you to retype them.
 
 It returns one synthesized verdict. The review runs in a separate context, so it doesn't clutter
-your conversation.
+your conversation. The verdict is also saved to a durable file at **`/tmp/<ID>.md`** (see
+[Persistence & resume](#persistence--resume)).
 
 ### Steering the review with instructions
 
@@ -288,6 +289,21 @@ Writes are atomic (temp + `sync` + `rename`, prior version rotated to `.bak`). I
 state first and the marker **last**, so a marker always implies valid state. A clean finish removes
 both the cards and `/tmp/<ID>/`; an interruption leaves them for `panel-review:resume`. Use
 `panel-review:status` to inspect a saved session and `panel-review:discard` to remove it.
+
+### The durable verdict file (`/tmp/<ID>.md`)
+
+The session state above is torn down on a clean finish, so the verdict would otherwise live **only**
+in your conversation transcript. To give you a movable copy, the referee writes every verdict to
+**`/tmp/<ID>.md`** — a **sibling** of `/tmp/<ID>/`, deliberately *not* inside it, so the
+`rm -rf /tmp/<ID>` in `cleanup`/`discard` never touches it. It is written **whenever a verdict is
+produced** (the low-severity gate, a finished-with-leftovers run, or a final finish), so every
+verdict you see has a matching file; a `continue` or a debated gate **overwrites** the same path
+(the prior copy rotates to `/tmp/<ID>.md.bak`). The file is self-contained: a YAML frontmatter header
+(`id`, `scope`, `instructions`, `limits`, `seats`, `rounds`, `created`/`finished`, `diff_hash`)
+followed by the verdict markdown verbatim — the full diff is not embedded (it is large and
+reproducible from the scope; `diff_hash` is the reference). Writing it is **best-effort**: if it
+fails (e.g. `/tmp` full), the verdict is still returned, just without the pointer line. **`/tmp` is
+cleared on reboot — move the file somewhere permanent to keep it.**
 
 ### Continuing a finished review
 
