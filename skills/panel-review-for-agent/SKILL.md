@@ -29,8 +29,9 @@ you cannot adjudicate, goes to the human. **Every issue is presented** — accep
 
 ## How you are invoked
 
-The `/panel-review` dispatcher (main context) did the resume/stop decision (only it has
-`AskUserQuestion`) and spawned you with, in your prompt:
+The `panel-review:start`/`panel-review:resume`/`panel-review:continue` command (main context) decided
+to dispatch you (intent is explicit in the verb the user typed — there's no resume/stop guess to make)
+and spawned you with, in your prompt:
 
 - `mode=fresh` or `mode=resume`
 - `id=<RUN_ID>` — the run id; `/tmp/<id>/` is your state, `.panel-review/<id>/` your cards
@@ -53,8 +54,11 @@ retype a template.** The scripts own flag pinning, atomic writes, the index math
 byte-exact parsing.
 
 ```bash
-SC="$HOME/.claude/skills/panel-review/scripts"
-PR="$HOME/.claude/skills/panel-review/prompts"
+# CLAUDE_PLUGIN_ROOT is substituted into this text at skill-load — it is NOT a
+# shell env var (it's empty in the shell). Keep the literals verbatim; don't
+# build them dynamically or read $CLAUDE_PLUGIN_ROOT at runtime.
+SC="${CLAUDE_PLUGIN_ROOT}/scripts"
+PR="${CLAUDE_PLUGIN_ROOT}/prompts"
 
 "$SC/preflight"                              # env check; tail "CODEX: yes|no"/"GEMINI: yes|no"; exit 1 = core unusable (needs jq, git, work-tree, ≥1 peer)
 "$SC/assemble" TMPL KEY=file ...             # splice files into a template's {{KEY}} sentinels -> stdout
@@ -81,9 +85,9 @@ working-tree reads and the Codex read-only sandbox resolve.
 |------|----------------|-----------|
 | Codex | `"$SC/run_codex" < prompt > raw` | fresh process each call |
 | Gemini | `"$SC/run_agy" < prompt > raw` | fresh process each call |
-| Claude | **fresh named subagent** `panel-review-claude-seat` via the Agent tool, each pass | cold context |
+| Claude | **fresh named subagent** `panel-review:panel-review-claude-seat` via the Agent tool, each pass | cold context |
 
-For the Claude seat: spawn `subagent_type: panel-review-claude-seat` with the assembled prompt
+For the Claude seat: spawn `subagent_type: panel-review:panel-review-claude-seat` with the assembled prompt
 as its prompt. **Never fork** (a fork inherits your context and destroys blindness). Capture the
 subagent's returned message to a raw file and parse it exactly like a CLI seat:
 
@@ -136,9 +140,9 @@ reviewer-facing fields, so the origins never leak even if adjacent.
 
 ## Round 0 — blind pass
 
-1. **Resolve the diff** from `scope` via the shared `resolve_diff` script (the dispatcher used the
-   exact same script to hash the scope for the resume check — never re-implement the git commands
-   here, or the two will drift). Run from cwd = repo root. The `scope` token is already canonical
+1. **Resolve the diff** from `scope` via the shared `resolve_diff` script (the launching command —
+   `panel-review:start`/`resume`/`continue` — used the exact same script to hash the scope for the
+   resume check — never re-implement the git commands here, or the two will drift). Run from cwd = repo root. The `scope` token is already canonical
    (`base=X` | `uncommitted` | `commit=SHA` | `question=<text>`):
 
    ```bash
@@ -254,8 +258,8 @@ set rarely changes the outcome and burns tokens on confirmations. Instead:
    <<<PANEL-GATE id=<id> reason=low-only open=<n>>>>
    ```
 
-   The dispatcher detects it, presents the verdict, and asks the human whether to debate anyway; on
-   "yes" it re-dispatches you in `mode=resume` (which always proceeds to the debate loop, reusing
+   The launching command detects it, presents the verdict, and asks the human whether to debate
+   anyway; on "yes" it re-dispatches you in `mode=resume` (which always proceeds to the debate loop, reusing
    this Round 0 — no seat is re-run).
 
 If `debate-low=true`, skip this gate and debate normally.
@@ -285,7 +289,7 @@ For `round = 1, 2, … max-rounds`, while any issue is `open`:
    "$SC/assemble" "$PR/debate.tmpl" CARDS=/tmp/$id/cards.$round.txt INSTRUCTIONS=/tmp/$id/instructions.txt > /tmp/$id/debate.$round.prompt
    # run each seat/batch -> /tmp/$id/raw/round$round.<seat>.<batch>.txt
    ```
-   Spawn a **fresh** `panel-review-claude-seat` subagent for the Claude seat each round. **Parse
+   Spawn a **fresh** `panel-review:panel-review-claude-seat` subagent for the Claude seat each round. **Parse
    BEFORE you record** — only `sweep record` a seat whose output actually parses:
 
    ```bash
@@ -377,9 +381,9 @@ stance). `support_with_revision` counts as **support for existence**.
 
 You keep nothing in conversation; reconstruct everything from `/tmp/<id>/`.
 
-1. Read `/tmp/$id/manifest.json` (scope, limits, `instructions` — the dispatcher already confirmed
-   they match this invocation and the diff hash is unchanged; if `/tmp/$id` were stale the dispatcher
-   would have started fresh instead). If `/tmp/$id/instructions.txt` is absent (resume before Round 0
+1. Read `/tmp/$id/manifest.json` (scope, limits, `instructions` — the launching command adopted
+   these from the manifest and confirmed via `resume_check` that the diff hash is unchanged; a
+   diverged or stale run would not have dispatched you). If `/tmp/$id/instructions.txt` is absent (resume before Round 0
    finished resolving it), regenerate it via Round 0 step 2 before any seat prompt is assembled.
 2. **Re-run `"$SC/preflight"`** — the environment may have changed since the interrupted run (e.g.
    a peer seat is now down, or back). The CURRENT `CODEX: yes|no` / `GEMINI: yes|no` define the configured panel for the
@@ -461,7 +465,7 @@ persist the verdict but deliberately **skip cleanup** so the run survives:
 - **Round-0 severity gate** (only-low): append the `<<<PANEL-GATE …>>>` line for the optional debate.
 - **Leftovers to continue:** if the final index has any `unresolved` or `contested` issue, append a
   line `<<<PANEL-CONTINUABLE id=$id unresolved=<n> contested=<m>>>>` (counts from the final index),
-  so the user can `/panel-review --continue` to debate them further.
+  so the user can `panel-review:continue [unresolved|contested]` to debate them further.
 
 If you are returning without a final verdict (error/abort), also do **not** clean up — leave the
 state for resume.
@@ -474,7 +478,7 @@ Never return raw seat output, card text, or per-round transcripts.
 ## Non-negotiables
 
 - ✅ Seats only via `scripts/` — `run_agy` for Gemini, `run_codex` for Codex; the Claude seat only
-  as a fresh `panel-review-claude-seat` subagent (**never fork**). Never raw `agy`/`codex`.
+  as a fresh `panel-review:panel-review-claude-seat` subagent (**never fork**). Never raw `agy`/`codex`.
 - ✅ `run_codex` pins `--sandbox read-only` + `--profile panel-review` (never `-m`); it auto-creates
   `~/.codex/panel-review.config.toml` from the shipped default. **Never** hand-create, edit, or delete
   `~/.codex/config.toml` or other `~/.codex/*.config.toml` profiles yourself.

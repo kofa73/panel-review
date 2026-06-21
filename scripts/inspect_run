@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# inspect_run — pure, READ-ONLY per-run inspector for `panel-review:status`.
+#
+# Unlike resume_check, this script:
+#   - never repairs anything (no index.json.bak recovery write);
+#   - inspects ONE already-known marker id, not the whole .panel-review/ dir
+#     (status enumerates markers itself and calls this once per id);
+#   - compares against the manifest's OWN stored scope/limits, not caller-
+#     supplied ones — there is nothing to match against, status just reports
+#     what is on disk;
+#   - re-resolves THAT manifest's scope to detect divergence (the code under
+#     review changed since the snapshot).
+#
+# Usage: inspect_run --id ID --workdir DIR
+#
+# Prints one JSON object to stdout, e.g.:
+#   {"id":"panel-...","state":"interrupted","scope":"base=main","instructions":"",
+#    "issue_rounds":2,"max_rounds":4,"created":"2026-06-21 10:00:00","round":1,
+#    "open":2,"accepted":3,"rejected":1,"contested":0,"unresolved":0,"merged":0}
+#
+# "state" is one of: interrupted (>=1 open issue) | continuable (0 open, >=1
+# unresolved/contested) | diverged (diff hash no longer matches) | stale
+# (marker present but /tmp/<ID> state missing/unreadable).
+#
+# Never writes anything — not even a .bak rotation. Exit 0 always once --id/
+# --workdir are valid; the JSON's "state" field carries the result.
+set -euo pipefail
+here="$(cd "$(dirname "$0")" && pwd)"; . "$here/_panel_common.sh"
+
+id="" workdir=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --id) id="$2"; shift 2;;
+    --workdir) workdir="$2"; shift 2;;
+    *) echo "inspect_run: unknown arg: $1" >&2; exit 2;;
+  esac
+done
+panel_require_id "$id"; [ -n "$workdir" ] || { echo "inspect_run: need --workdir" >&2; exit 2; }
+command -v jq >/dev/null 2>&1 || { echo "inspect_run: jq not found" >&2; exit 127; }
+
+man="/tmp/$id/manifest.json"
+idx="/tmp/$id/index.json"
+
+stale() { jq -n --arg id "$id" '{id:$id, state:"stale"}'; exit 0; }
+
+[ -s "$man" ] && [ -s "$idx" ] || stale
+jq -e . "$idx" >/dev/null 2>&1 || stale   # read-only: NOT repaired from .bak here
+
+m_scope=$(jq -r '.scope' "$man" 2>/dev/null) || stale
+m_instr=$(jq -r '.instructions // ""' "$man" 2>/dev/null) || stale
+m_iss=$(jq -r '.limits.issue_rounds' "$man" 2>/dev/null) || stale
+m_mx=$(jq -r '.limits.max_rounds' "$man" 2>/dev/null) || stale
+m_dh=$(jq -r '.diff_hash' "$man" 2>/dev/null) || stale
+m_created=$(jq -r '.created // ""' "$man" 2>/dev/null) || stale
+
+# Re-resolve THIS manifest's own scope and compare hashes — divergence check.
+diff_file="$(mktemp /tmp/inspect_run_diff.XXXXXX)"
+trap 'rm -f "$diff_file"' EXIT
+state=""
+if "$here/resolve_diff" "$m_scope" > "$diff_file" 2>/dev/null; then
+  cur_dh="$("$here/diff_hash" < "$diff_file")"
+  [ "$cur_dh" = "$m_dh" ] || state="diverged"
+else
+  # Scope no longer resolves (e.g. base branch deleted) — treat as diverged,
+  # not stale: the run's own state is intact, only the snapshot's premise broke.
+  state="diverged"
+fi
+
+counts="$(jq -c '{
+  open:        ([.issues[]|select(.state=="open")]|length),
+  accepted:    ([.issues[]|select(.state=="accepted")]|length),
+  rejected:    ([.issues[]|select(.state=="rejected")]|length),
+  contested:   ([.issues[]|select(.state=="contested")]|length),
+  unresolved:  ([.issues[]|select(.state=="unresolved")]|length),
+  merged:      ([.issues[]|select(.state=="merged")]|length),
+  round:       (.round // 0)
+}' "$idx" 2>/dev/null)" || stale
+
+if [ -z "$state" ]; then
+  open_n="$(jq -r '.open' <<<"$counts")"
+  left_n="$(( $(jq -r '.unresolved' <<<"$counts") + $(jq -r '.contested' <<<"$counts") ))"
+  if [ "$open_n" != "0" ]; then
+    state="interrupted"
+  elif [ "$left_n" != "0" ]; then
+    state="continuable"
+  else
+    state="interrupted"   # 0 open, 0 leftovers: shouldn't normally persist (clean finish cleans up), but never misreport as continuable
+  fi
+fi
+
+jq -n --arg id "$id" --arg state "$state" --arg scope "$m_scope" --arg instr "$m_instr" \
+      --argjson iss "$m_iss" --argjson mx "$m_mx" --arg created "$m_created" \
+      --argjson counts "$counts" \
+  '{id:$id, state:$state, scope:$scope, instructions:$instr,
+    issue_rounds:$iss, max_rounds:$mx, created:$created} + $counts'

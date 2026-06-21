@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# discard — the automatic cleanup/reset behind `panel-review:discard`. Removes
+# EVERY session for this workdir, then drops .panel-review/ (and its
+# git-exclude line). In the normal one-session case "every" is just the one;
+# the all-sessions sweep exists so the abnormal multi-marker ("ambiguous")
+# state is always recoverable without the user picking which marker is real.
+#
+# Deliberately NOT a loop calling `cleanup` per id: cleanup's panel_require_id
+# hard-fails (under set -e) on a garbage marker name, which would abort the
+# whole loop after the first bad one and leave valid sessions uncleaned. This
+# script does its own fault-tolerant pass instead:
+#   1. enumerate marker dirs under .panel-review/, partition by panel_valid_id
+#   2. for each VALID id: rm -rf /tmp/<id> (validation gate BEFORE the rm —
+#      never let a garbage name reach an rm -rf), record it as removed
+#   3. for each INVALID name: record it as skipped, leave its /tmp state alone
+#      (it can't be safely mapped to a /tmp path)
+#   4. rm -rf the whole .panel-review/ dir wholesale (clears valid + garbage
+#      markers + strays like .init.lock) and drop the git-exclude line —
+#      NOT recreated, so a reset leaves no dir and no exclude entry behind
+#   5. report every removed pair and every skipped path
+#
+# Usage: discard --workdir DIR
+# No-op (clean exit) if there is nothing under .panel-review/.
+set -euo pipefail
+here="$(cd "$(dirname "$0")" && pwd)"; . "$here/_panel_common.sh"
+
+workdir=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --workdir) workdir="$2"; shift 2;;
+    *) echo "discard: unknown arg: $1" >&2; exit 2;;
+  esac
+done
+[ -n "$workdir" ] || { echo "discard: need --workdir" >&2; exit 2; }
+
+base="$workdir/.panel-review"
+if [ ! -d "$base" ]; then
+  echo "Nothing to discard — no .panel-review/ here."
+  exit 0
+fi
+
+removed=() skipped=()
+for d in "$base"/*/; do
+  [ -d "$d" ] || continue
+  name="$(basename "$d")"
+  if panel_valid_id "$name"; then
+    [ -d "/tmp/$name" ] && rm -rf -- "/tmp/$name"
+    removed+=("$name")
+  else
+    skipped+=("$name")
+  fi
+done
+
+rm -rf -- "$base"
+panel_git_exclude_del "$workdir" ".panel-review/"
+
+if [ "${#removed[@]}" -eq 0 ] && [ "${#skipped[@]}" -eq 0 ]; then
+  echo "Nothing to discard — .panel-review/ was empty."
+  exit 0
+fi
+
+for id in "${removed[@]}"; do
+  echo "removed: .panel-review/$id/ + /tmp/$id/"
+done
+for name in "${skipped[@]}"; do
+  # The marker dir itself IS removed (by the wholesale rm -rf above); what is
+  # left is its /tmp state, which can't be named because an invalid id can't be
+  # mapped to a /tmp path. Report that, not a path we already deleted.
+  echo "removed marker .panel-review/$name/ (invalid name — its /tmp state, if any, could not be mapped and was left untouched)"
+done

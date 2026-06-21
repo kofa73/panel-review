@@ -9,8 +9,8 @@
 #
 # --instructions is optional author guidance for the seats (free text, or the
 # sentinel "auto" for referee-generated context). Stored verbatim in the manifest
-# so it survives resume/--continue and is part of the run's resume identity
-# (changing it makes resume_check report "moved").
+# so it survives resume/continue; it is NOT part of the run's resume identity
+# (resume_check never compares it).
 #
 # Creates:
 #   /tmp/<ID>/manifest.json           (canonical; persistent volume)
@@ -52,7 +52,7 @@ mkdir -p "/tmp/$id/sweeps" "/tmp/$id/raw" "/tmp/$id/audit"
 
 jq -n --arg id "$id" --arg wd "$workdir" --arg scope "$scope" \
       --argjson iss "$iss" --argjson mx "$mx" --arg dh "$dh" \
-      --arg instr "$instr" --arg created "$(date -Is)" '{
+      --arg instr "$instr" --arg created "$(date '+%Y-%m-%d %H:%M:%S')" '{
   id:$id, workdir:$wd, scope:$scope,
   limits:{issue_rounds:$iss, max_rounds:$mx},
   diff_hash:$dh, instructions:$instr, phase:"round0", state_version:1, created:$created

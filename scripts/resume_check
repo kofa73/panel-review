@@ -1,34 +1,42 @@
 #!/usr/bin/env bash
-# resume_check — decide whether a prior run can be resumed. Prints ONE verdict
-# line for the dispatcher to act on (the dispatcher, not this script, asks the
-# user, because only the main context has AskUserQuestion).
+# resume_check — decide whether a prior run can be resumed/continued. Prints
+# ONE verdict line. `panel-review:resume`/`panel-review:continue` adopt the
+# run's scope from its OWN manifest (they take no scope argument), so the
+# --scope this script is given is always that adopted value — comparing it is
+# a cheap self-consistency check, not discrimination between requests. The
+# real test is --diff-hash: a FRESHLY resolved hash of that same scope vs the
+# manifest's stored one, which is what catches "the code under review changed
+# since this snapshot."
 #
 # Usage:
-#   resume_check --workdir DIR --scope STR --issue-rounds N --max-rounds N --diff-hash HEX
-#                [--instructions STR]
+#   resume_check --workdir DIR --scope STR --diff-hash HEX
 #
 # Output (stdout), exactly one of:
-#   fresh                  no marker dir -> start a new run
-#   resume <ID>            marker + valid matching /tmp state -> can resume
-#   continuable <ID>       finished run (no open issues) with unresolved/contested left -> --continue
+#   fresh                  no marker dir -> nothing to resume/continue
+#   resume <ID>            run still has open issues -> can resume
+#   continuable <ID>       finished run (no open issues) with unresolved/contested left -> continue
 #   stale <ID>             marker but /tmp/<ID> missing/empty -> drop & start fresh
-#   moved <ID>             /tmp state exists but scope/limits/diff-hash/instructions differ -> ask/stop
-#   ambiguous             more than one marker dir -> needs manual cleanup
+#   diverged <ID>          the diff hash no longer matches — the code under review
+#                          changed since the snapshot; can't resume or continue
+#   ambiguous              more than one marker dir -> needs manual cleanup
 #
-# Instructions are part of the resume identity: changing the author guidance for
-# the same scope/diff yields a different review, so a mismatch reports "moved".
+# Unlike `inspect_run` (status's pure/read-only inspector), this script MAY
+# repair a corrupt index.json from its .bak sibling — the action commands are
+# already mutating the run, so a same-session repair is safe here but would be
+# a hidden write status (a read-only report) must never perform.
+#
+# Limits and instructions are NOT part of the resume identity: limits are
+# explicitly overridable (set_limits), and instructions are shown/adopted, not
+# matched — so neither is compared here.
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"; . "$here/_panel_common.sh"
 
-workdir="" scope="" iss="" mx="" dh="" instr=""
+workdir="" scope="" dh=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --workdir) workdir="$2"; shift 2;;
     --scope) scope="$2"; shift 2;;
-    --issue-rounds) iss="$2"; shift 2;;
-    --max-rounds) mx="$2"; shift 2;;
     --diff-hash) dh="$2"; shift 2;;
-    --instructions) instr="$2"; shift 2;;
     *) echo "resume_check: unknown arg: $1" >&2; exit 2;;
   esac
 done
@@ -58,16 +66,13 @@ if ! jq -e . "/tmp/$id/index.json" >/dev/null 2>&1; then
 fi
 
 # A corrupt/partially-written manifest must NOT crash the check (set -e) — that
-# would block the dispatcher. Degrade to "stale" so it can cleanly start fresh.
+# would block the caller. Degrade to "stale" so it can cleanly start fresh.
 if ! m_scope=$(jq -r '.scope' "$man" 2>/dev/null) \
-   || ! m_iss=$(jq -r '.limits.issue_rounds' "$man" 2>/dev/null) \
-   || ! m_mx=$(jq -r '.limits.max_rounds' "$man" 2>/dev/null) \
-   || ! m_dh=$(jq -r '.diff_hash' "$man" 2>/dev/null) \
-   || ! m_instr=$(jq -r '.instructions // ""' "$man" 2>/dev/null); then   # // "" : pre-instructions manifests
+   || ! m_dh=$(jq -r '.diff_hash' "$man" 2>/dev/null); then
   echo "stale $id"; exit 0
 fi
 
-if [ "$m_scope" = "$scope" ] && [ "$m_iss" = "$iss" ] && [ "$m_mx" = "$mx" ] && [ "$m_dh" = "$dh" ] && [ "$m_instr" = "$instr" ]; then
+if [ "$m_scope" = "$scope" ] && [ "$m_dh" = "$dh" ]; then
   # A FINISHED run has no open issues; if it also handed back unresolved/contested
   # issues it is continuable. An interrupted run still has open issues -> plain resume.
   # On any jq error, default to resume (open_n=1) — never mislabel as continuable.
@@ -79,5 +84,5 @@ if [ "$m_scope" = "$scope" ] && [ "$m_iss" = "$iss" ] && [ "$m_mx" = "$mx" ] && 
     echo "resume $id"
   fi
 else
-  echo "moved $id"
+  echo "diverged $id"
 fi

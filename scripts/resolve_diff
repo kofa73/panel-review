@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # resolve_diff — turn a canonical scope token into the diff text under review,
-# printed to stdout. ONE place owns scope->diff so the dispatcher (which hashes
-# the diff for the resume check) and the agent (which reviews it) can't drift.
+# printed to stdout. ONE place owns scope->diff so the launching command (which
+# hashes the diff for the resume check) and the agent (which reviews it) can't drift.
 #
 # Usage: resolve_diff <scope-token>     (run from cwd = repo root)
 #   base=BRANCH    git diff BRANCH...HEAD

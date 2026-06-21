@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # reopen — revive a FINISHED run's leftover issues for another debate cycle (the
-# engine behind the dispatcher's `--continue`). Counterpart to init_run: init_run
+# engine behind `panel-review:continue`). Counterpart to init_run: init_run
 # starts a run; reopen revives a finished one in place.
 #
 # Usage: reopen --id ID --category both|unresolved|contested

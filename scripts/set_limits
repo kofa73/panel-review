@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# set_limits — write a limit override back into an existing run's manifest.
+# Used by `panel-review:resume`/`panel-review:continue` when the user passes
+# --issue-rounds/--max-rounds: limits only bound the debate loop, they don't
+# invalidate any cached Round-0/debate output, so overriding them mid-run is
+# safe (unlike scope/instructions, which are not overridable here).
+#
+# Usage: set_limits --id ID --issue-rounds N --max-rounds N
+# Both values are required (the caller resolves "keep the stored value" by
+# reading the manifest first and passing it back unchanged if not overridden).
+set -euo pipefail
+here="$(cd "$(dirname "$0")" && pwd)"; . "$here/_panel_common.sh"
+
+id="" iss="" mx=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --id) id="$2"; shift 2;;
+    --issue-rounds) iss="$2"; shift 2;;
+    --max-rounds) mx="$2"; shift 2;;
+    *) echo "set_limits: unknown arg: $1" >&2; exit 2;;
+  esac
+done
+panel_require_id "$id"
+case "$iss" in ''|*[!0-9]*) echo "set_limits: --issue-rounds must be a positive integer" >&2; exit 2;; esac
+case "$mx" in ''|*[!0-9]*) echo "set_limits: --max-rounds must be a positive integer" >&2; exit 2;; esac
+[ "$iss" -ge 1 ] && [ "$mx" -ge 1 ] && [ "$iss" -le "$mx" ] \
+  || { echo "set_limits: need issue-rounds >=1, max-rounds >=1, issue-rounds <= max-rounds" >&2; exit 2; }
+
+man="/tmp/$id/manifest.json"
+[ -s "$man" ] || { echo "set_limits: no manifest for $id" >&2; exit 1; }
+
+jq --argjson iss "$iss" --argjson mx "$mx" '.limits.issue_rounds=$iss | .limits.max_rounds=$mx' "$man" \
+  | panel_atomic_write "$man"

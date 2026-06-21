@@ -44,13 +44,18 @@ an argument depending on hidden state, the exact mode-dependent behavior this re
 shared **status precheck** (below) means a wrong guess is corrected with a pointer, not a failure — so
 splitting costs the user nothing in discoverability.
 
-> **Multiple sessions are not a supported mode.** A workdir holds **exactly one** session under normal
-> use — `init_run` enforces this (it adopts an existing marker rather than minting a second), and
-> `start` refuses when one already exists. More than one can appear **only when the user interferes** with
-> `.panel-review/`/`/tmp/` out of band — e.g. restoring a manifest from a backup *on top of* a live
-> session, or copying a marker dir. `status` lists "all" and `discard` clears "all" purely so that this
-> abnormal state is **inspectable and recoverable**; it is not an invitation to run several reviews at
-> once. The docs and command output say so explicitly, so the wording is never mistaken for a feature.
+> **Single-user, single-session mode — concurrent sessions on one workdir are not supported.** The
+> tool assumes **one user running one Claude Code session** against a given workdir at a time. A
+> workdir holds **exactly one** review session under normal use — `init_run` adopts an existing marker
+> rather than minting a second, and `start` refuses when one already exists. **Running two `start`s
+> concurrently against the same workdir is out of scope**: `init_run`'s adopt-on-lock means the loser
+> silently receives the winner's ID, which is harmless for one user but undefined under true
+> concurrency — don't do it (see Out of scope). More than one *session* can appear **only when the user
+> interferes** with `.panel-review/`/`/tmp/` out of band — e.g. restoring a manifest from a backup *on
+> top of* a live session, or copying a marker dir. `status` lists "all" and `discard` clears "all"
+> purely so that this abnormal state is **inspectable and recoverable**; it is not an invitation to run
+> several reviews at once. The docs and command output say so explicitly, so the wording is never
+> mistaken for a feature.
 
 ### `panel-review:start`
 
@@ -148,15 +153,26 @@ Both exit with the same message.
 
 ### `panel-review:discard`
 
-- **The automatic cleanup / reset.** Removes **every** session for this workdir: for each marker under
-  `.panel-review/<ID>/` it `cleanup`s both the marker **and** its `/tmp/<ID>/` state, then drops the
-  `.panel-review/` dir (and its git-exclude line). Reports each `<.panel-review/<ID>/`, `/tmp/<ID>/>`
-  pair it removed. In the normal one-session case "all" is just the one; in the `ambiguous` case it
-  clears the lot, so the user never has to guess which marker is real.
-- IDs are validated before any `rm` (the existing `cleanup`/`panel_require_id` guard), so it only ever
-  touches this workdir's `.panel-review/` and the `/tmp/<ID>/` dirs those valid markers name. Leftover
-  `/tmp/<ID>/` state whose marker has a **non-ID (garbage) name** can't be safely mapped → it is left
-  for **manual** cleanup, with the path named (see below).
+- **The automatic cleanup / reset.** Removes **every** session for this workdir, then drops the
+  `.panel-review/` dir (and its git-exclude line). In the normal one-session case "all" is just the
+  one; in the `ambiguous` case it clears the lot, so the user never has to guess which marker is real.
+- **Traversal (does not call `cleanup` per id).** The existing `cleanup` script runs
+  `panel_require_id` and **hard-fails on an invalid id** (`cleanup:19`); a naïve loop calling it per
+  marker would abort at the first garbage-named marker under `set -e` and leave the valid sessions
+  uncleaned. `discard` instead does its own fault-tolerant pass:
+  1. **Enumerate** the marker dirs under `.panel-review/` and **partition** by `panel_valid_id`.
+  2. For each **valid** id → `rm -rf /tmp/<id>` and record the `<.panel-review/<id>/`, `/tmp/<id>/>`
+     pair as removed. **The id-validation gate is mandatory before the `rm`** — a garbage marker name
+     like `foo bar` would otherwise word-split into `rm -rf /tmp/foo /tmp/bar`. So an **invalid** name
+     is *recorded as skipped* and its `/tmp` state is **left untouched** (it can't be safely mapped) —
+     matching the "non-ID garbage left for manual cleanup, path named" promise.
+  3. **`rm -rf .panel-review/`** wholesale (clears every marker — valid and garbage — plus strays like
+     `.init.lock`) and remove its git-exclude line (`panel_git_exclude_del`). **Not** recreated — a
+     reset leaves no dir and no exclude entry behind.
+  4. **Report** every removed pair and every skipped path.
+  Only `/tmp/<id>/` state and the in-tree `.panel-review/` go, consistent with `cleanup`. (If the
+  deferred verdict-artifact plan lands, the sibling `/tmp/<id>.md` is **not** removed — `rm -rf
+  /tmp/<id>` doesn't touch it.)
 - The escape hatch the strict-`start`-precondition needs: a user blocked by an unwanted session runs
   `discard`, then `start`. Exits cleanly (no-op) if there is nothing to remove.
 - It says "all," but normally clears exactly **one** — see the one-session note above. When it removes
@@ -185,34 +201,17 @@ locations** so the user can fix it by hand:
   > `.panel-review/<ID>/` + `/tmp/<ID>/` pairs by hand — `panel-review:status` lists them with creation
   > times.
 - **stale** — a marker whose `/tmp/<ID>/` state is gone. `start` cleans the dead marker and proceeds;
-  `resume`/`continue`/`status` treat it as "no usable session" and tell the user it was cleared
-  (naming `.panel-review/<ID>/`). No state to remove under `/tmp/`.
+  `resume`/`continue` (which mutate anyway) clean it and tell the user it was cleared (naming
+  `.panel-review/<ID>/`). **`status`, being read-only, must NOT claim it cleared anything** — it
+  reports the marker *remains* stale and names `.panel-review/<ID>/` for the user (or `discard`) to
+  remove. No state to remove under `/tmp/`.
 
-## Verdict artifact (survives cleanup)
+## Verdict artifact — split out (deferred)
 
-A clean finish tears down the session (`.panel-review/<ID>/` + `/tmp/<ID>/`), so today the verdict
-lives **only** in the conversation transcript. To give the user a durable, movable copy without
-polluting the working tree, the referee **writes the verdict to a markdown file under `/tmp/` that
-cleanup does not touch**.
-
-- **Path:** `/tmp/<ID>.md` — a **sibling** of `/tmp/<ID>/`, not inside it, so the `rm -rf /tmp/<ID>`
-  in cleanup leaves it intact. The ID already begins with `panel-<timestamp>-…`, so the filename is
-  self-identifying and unique.
-- **When:** whenever a verdict is **produced**, not only at cleanup — so preserved runs (gated /
-  finished-with-leftovers) also get a file, and a `continue` that produces a new verdict refreshes it.
-  Decoupling from cleanup means every verdict the user sees has a matching file.
-- **Contents:** a self-contained report — a metadata header (scope; instructions/"prompt"; limits;
-  seats that engaged + any down; rounds; `created` + finished local times; `diff_hash` for
-  correlation; the ID) followed by the verdict markdown verbatim. The **full diff is not embedded** —
-  it is large and reproducible from the scope; the `diff_hash` is the reference.
-- **Surfacing:** the command (`start`/`resume`/`continue`) appends one line after the verdict — e.g.
-  *"Saved to `/tmp/<ID>.md` — move it somewhere permanent to keep it (`/tmp` is cleared on reboot)."*
-  The referee writes the file; the command knows the ID, so it prints the path.
-- **`discard` writes nothing** — it abandons a session without producing a verdict; any prior verdict
-  already has its `/tmp/<ID>.md` from when it was shown.
-
-This is **independent of the subcommand split** — it applies equally to the current single-command
-tool — so it can land separately if desired.
+The durable `/tmp/<ID>.md` verdict artifact, once part of this design, is **moved to its own plan**:
+`docs/superpowers/specs/2026-06-21-verdict-artifact.md`. It is **independent of the subcommand split**
+(it applies equally to the current single-command tool) and will be done **later, separately**. This
+spec therefore assumes nothing about it — a clean finish still tears the session down as today.
 
 ## What gets simpler
 
@@ -226,27 +225,85 @@ tool — so it can land separately if desired.
 
 ## Architecture / change set
 
-The deterministic scripts already do the work; this is mostly **re-packaging the dispatcher prose**
-into per-command skills and deleting the intent-inference.
+This is mostly **re-packaging the dispatcher prose** into per-command skills and deleting the
+intent-inference — but **not purely** repackaging: two scripts need real behavioral edits, because
+the new commands lean on them in ways the current single-command flow never did. Specifically,
+`status` needs a **pure (write-free) per-session inspector** that the current `resume_check` cannot
+provide (item 3), and `discard` needs an explicit **fault-tolerant traversal** the current per-id
+`cleanup` loop cannot give under `set -e` (item 6). The rest is genuine repackaging.
 
-1. **Plugin layout.** Convert the `panel-review` skill into a plugin exposing `start`, `status`,
-   `resume`, `continue`, `discard` (addressed as `panel-review:<cmd>`). The internal skill
-   (`panel-review-for-agent`) and the seat agents and `scripts/` are unchanged in role.
+1. **Plugin packaging.** Convert the `panel-review` skill into a **skills-directory plugin** — a
+   single tree under `~/.claude/skills/panel-review/` carrying its own
+   `.claude-plugin/plugin.json` (`"name": "panel-review"`). It loads as `panel-review@skills-dir`
+   with **no marketplace and no install step beyond the copy**; commands are namespaced
+   `panel-review:<cmd>`. Layout:
+
+   ```
+   ~/.claude/skills/panel-review/
+     .claude-plugin/plugin.json              name "panel-review" → the namespace
+     skills/start/SKILL.md                   → panel-review:start
+     skills/status/SKILL.md                  → panel-review:status
+     skills/resume/SKILL.md                  → panel-review:resume
+     skills/continue/SKILL.md                → panel-review:continue
+     skills/discard/SKILL.md                 → panel-review:discard
+     skills/panel-review-for-agent/SKILL.md  internal (see frontmatter below)
+     agents/panel-review-referee.md          moved inside the plugin tree
+     agents/panel-review-claude-seat.md      moved inside the plugin tree
+     scripts/…                               the existing deterministic scripts
+   ```
+
+   The seat agents and `scripts/` are unchanged in **role** — they only **move** into the plugin
+   tree. Because the directory is a plugin (its `.claude-plugin/plugin.json` makes the whole
+   `panel-review/` folder a plugin, not a loose skill), the generic command-folder names
+   (`start`, `status`, …) are **always namespaced** (`panel-review:start`) and **cannot clash**
+   with anything in `~/.claude/skills/`. A skills-dir plugin is **discovered in place** (not copied
+   into the plugin cache), so the bundled scripts keep a stable path — but they still switch to
+   `${CLAUDE_PLUGIN_ROOT}` (item 11) for correctness if distribution ever widens.
+
+   **Per-command frontmatter:**
+
+   | Skill | `disable-model-invocation` | `user-invocable` | rationale |
+   |---|---|---|---|
+   | `start`, `resume`, `continue`, `discard` | `true` | default | side effects — only the user triggers them (carries the current skill's flag). Critical for `discard` so the model never autonomously wipes a session. |
+   | `status` | **omitted** | default | read-only; left model-invocable so a question like "what's the state of my review?" can auto-run it. |
+   | `panel-review-for-agent` | **omitted** | `false` | hidden from the `/` menu via `user-invocable: false`, **not** `disable-model-invocation` — that flag *also* blocks preloading the skill into the referee subagent, which this skill depends on. |
+
+   Each subcommand also carries its **own** `argument-hint` — the current single overloaded hint
+   splits per verb (`start` keeps scope+instructions+limits; `resume`/`continue` show only limit
+   overrides + `continue`'s category; `status`/`discard` take none).
 2. **`start`** = current Step 1 (parse) + Step 2 (resolve+hash) + the `fresh` branch of Step 3 +
    Step 4 dispatch, plus the **refuse-if-session-exists** precondition (any non-`fresh`/`stale`
    verdict → stop and point at `resume`/`continue`/`discard`; `stale` → clean the dead marker and
    proceed).
-3. **`status`** = `preflight` + **enumerate every marker** under `.panel-review/` (classify each via
-   `resume_check`/the index) + per-manifest read of creation time/scope/instructions/limits, formatted
-   as a list (one entry in the normal case). New, read-only; a small formatter, inline in the skill.
+3. **`status`** = `preflight` + **enumerate every marker** under `.panel-review/` + per-manifest read
+   of creation time/scope/instructions/limits, formatted as a list (one entry in the normal case). New,
+   read-only; a small formatter, inline in the skill.
+   - **`status` cannot reuse `resume_check`.** That script (a) **writes** — it repairs a corrupt
+     `index.json` from `index.json.bak` via `panel_atomic_write` (`resume_check:52-55`); (b) returns
+     only `ambiguous` when more than one marker exists (`:44`), never classifying each entry; and (c)
+     compares **command-arg** inputs, not manifest-derived values (`:70`). All three conflict with a
+     read-only, per-entry `status`.
+   - **New, separate script `inspect_run --id ID --workdir DIR`** (a clean pure/read-only script, **not**
+     a mode of `resume_check` — `resume_check` keeps its repair + command-arg contract for the action
+     commands; a read-only flag bolted onto it would be easy to regress into writing). It
+     validates/parses **one** manifest + index **without any recovery write**,
+     resolves **that manifest's own** diff to compare against its stored `diff_hash`, and returns a
+     structured state/progress result (`interrupted|continuable|diverged|stale` + counts). `status`
+     iterates the markers, calling `inspect_run` per ID, and **lists even if `preflight` fails** —
+     reporting unavailable prerequisites *beside* the saved state, not instead of it. Repair and
+     stale-marker cleanup stay in the **action** commands only.
 4. **`resume`** = adopt scope/limits/instructions from the manifest + Step 2 diff-hash gate + the
    interrupted branch, minus every `AskUserQuestion`; adds the limit-override write-back, the
    no-scope/no-instructions guard, and the redirect for non-interrupted states.
 5. **`continue`** = same as `resume` for the finished-with-leftovers branch, plus the category +
    `reopen` (the existing continue-leftovers logic), and its own redirect.
-6. **`discard`** = iterate **every** marker under `.panel-review/`, `cleanup` each (marker +
-   `/tmp/<ID>/`), drop the now-empty `.panel-review/` dir and its git-exclude line, and report each
-   removed `<.panel-review/<ID>/`, `/tmp/<ID>/>` pair.
+6. **`discard`** = the fault-tolerant traversal in the `discard` section above — enumerate markers,
+   partition by `panel_valid_id`, `rm -rf /tmp/<id>` for valid ids (validation gate **before** the
+   `rm`), record garbage-named markers as *skipped* without touching their `/tmp`, then `rm -rf` the
+   whole `.panel-review/` dir + drop its git-exclude line, and report removed pairs + skipped paths.
+   It **does not** call the per-id `cleanup` script (whose `panel_require_id` would abort the loop on a
+   garbage marker under `set -e`). Leaves any future `/tmp/<id>.md` verdict artifact intact (deferred
+   plan).
 7. **`resume_check`**: remove `--instructions` from the gate (revert that part of the 2026-06-21
    change); keep `--scope`/`--diff-hash`; **rename the `moved` verdict to `diverged`** (one pass across
    `resume_check`, the dispatcher, and the continue-leftovers spec). Resulting verdict set:
@@ -255,20 +312,69 @@ into per-command skills and deleting the intent-inference.
    `date -Is`) so `status` can display it and the user can spot, e.g., a backup-restored session. (If
    machine-sortability is ever needed, keep the ISO value in a separate field; for now the human form
    is the only consumer.) Set once at creation, so it travels with a restored manifest unchanged.
-9. **Referee**: at verdict time, **write the verdict report to `/tmp/<ID>.md`** (the survives-cleanup
-   artifact above) before any teardown. Otherwise unchanged.
-10. **Commands (`start`/`resume`/`continue`)**: after presenting the verdict, append the one-line
-    *"Saved to `/tmp/<ID>.md` …"* pointer (they know the ID).
-11. **Templates / `index` / `reopen` / `sweep`**: unchanged. Instructions are still stored in the
-    manifest and injected into the seat prompts as today; only the *resume-identity* use of
-    instructions is dropped.
-12. **Retire `panel-review-init`** — `status` covers prereqs.
+9. **Templates / `index` / `reopen` / `sweep`**: unchanged. Instructions are still stored in the
+   manifest and injected into the seat prompts as today; only the *resume-identity* use of
+   instructions is dropped.
+10. **Retire `panel-review-init`** — `status` covers prereqs.
+11. **Script paths → `${CLAUDE_PLUGIN_ROOT}`.** Replace the hardcoded
+    `SC="$HOME/.claude/skills/panel-review/scripts"` (and any sibling path) in every command skill
+    and `panel-review-for-agent` with `${CLAUDE_PLUGIN_ROOT}/scripts`. Under the chosen skills-dir
+    install this resolves to the same location, so it is **not** load-breaking today; it matters only
+    if the plugin is ever served from a marketplace (where the plugin is copied into a cache and
+    out-of-tree paths break). Low risk, mechanical, done for portability.
+    - **Verified (CC 2.1.185).** `${CLAUDE_PLUGIN_ROOT}` is resolved by **skill-content
+      substitution** — Claude Code expands the literal in the `SKILL.md` text *before* the model
+      runs the bash block — **not** as a shell env var (it is `<UNSET>` in the Bash-tool shell;
+      only `CLAUDECODE`, `CLAUDE_CODE_*`, `CLAUDE_EFFORT` are exported). Two consequences for
+      maintainers: (a) the literal `${CLAUDE_PLUGIN_ROOT}` must appear **verbatim** in the skill
+      text — don't build it dynamically, and don't read `$CLAUDE_PLUGIN_ROOT` from the environment
+      at runtime (it's empty there; the bundled scripts correctly avoid this, deriving their own dir
+      via `dirname "$0"` and taking paths as args). (b) It's content-substitution, so it works in
+      the command skills **and** in `panel-review-for-agent` once that skill's text is rendered into
+      the referee. The documented per-skill fallback `${CLAUDE_SKILL_DIR}/../../scripts` also
+      resolves (each command skill sits two levels below the plugin root) if this ever regresses.
+      A one-line comment guards the `SC=`/`PR=` lines in each skill so the literal isn't refactored
+      away.
+12. **`install.sh` cutover.** install.sh copies the **single plugin tree** into
+    `~/.claude/skills/panel-review/` (instead of three skills + two agents into separate dirs) and
+    keeps the exec-bit fix-up on `scripts/`. It must **remove the pre-plugin layout** on install —
+    the old `~/.claude/skills/{panel-review,panel-review-for-agent,panel-review-init}` plain skills
+    and `~/.claude/agents/panel-review-{referee,claude-seat}.md` — because **both project- and
+    user-level** `agents/` definitions **outrank a plugin agent** (plugin agents are lowest priority,
+    Claude Code `sub-agents.md:175`), so a stale same-named copy at *either* scope silently shadows the
+    plugin's. Removing the user-level copies is necessary but **not sufficient** — also warn on any
+    project-level `.claude/agents/panel-review-*.md`. Removal/uninstall for the user: delete the folder
+    or `claude plugin disable panel-review@skills-dir`.
+13. **Qualify every internal component reference.** Once the skills and agents live in the plugin they
+    are **namespaced**, and bare-name references can silently fail to resolve (Claude Code `changelog.md`
+    fix #25834: *"plugin agent skills silently failing to load when referenced by bare name instead of
+    fully-qualified plugin name"*). Rewrite:
+    - the referee's preload `skills:\n  - panel-review-for-agent` →
+      `skills:\n  - panel-review:panel-review-for-agent` (`agents/panel-review-referee.md`);
+    - every seat spawn `subagent_type: panel-review-claude-seat` →
+      `panel-review:panel-review-claude-seat` (`skills/panel-review-for-agent/SKILL.md:86,288,477`);
+    - the dispatcher's referee invocation → `subagent_type: panel-review:panel-review-referee`.
+    Newer Claude Code resolves bare names when unambiguous, but the qualified form is robust and
+    self-documenting. Put the **exact** five command names *and* these qualified internal names in the
+    load smoke test (item 14).
+14. **Plugin-integration smoke test** (detailed in Testing). Load checks script fixtures can't cover:
+    `claude plugin validate`, plugin discovery/namespace resolution, the internal skill being hidden,
+    preload into the referee, and the seat spawn. **No programmatic version floor** — the referee
+    spawning each seat is a *nested* subagent that needs a recent Claude Code, but a pinned version
+    number would rot (both this repo and Claude Code move fast) and the failure mode is a **visible**
+    spawn error, not silent corruption. So the requirement is **documented** ("use the latest Claude
+    Code") in the README rather than checked in `preflight`/`install.sh`. `claude --version` exists
+    (`2.1.x`) if a check is ever wanted, but it is deliberately not added now.
 
 ## Migration / compatibility notes
 
 - This **changes the entry UX**: the old `/panel-review <scope>` becomes `panel-review:start <scope>`,
   and "re-run the same command to resume" goes away — resume is now `panel-review:resume`, continue
   `panel-review:continue`. The README and argument hints are rewritten around the verbs.
+- **Distribution stays local.** install.sh installs the plugin into `~/.claude/skills/panel-review/`
+  (a skills-dir plugin, `panel-review@skills-dir`); no marketplace. The cutover removes the old
+  non-plugin skills/agents (change-set item 14) so the new plugin's components aren't shadowed by
+  stale user-level copies.
 - Pre-existing manifests carry an `instructions` field (or not — `// ""`); since instructions leave
   the gate, old sessions resume regardless. No state migration needed.
 - `agents/` references to `/panel-review …` flags are updated to the verbs (e.g.
@@ -280,6 +386,14 @@ into per-command skills and deleting the intent-inference.
 
 - Multi-session / cross-workdir management and a `--resume <ID>` selector — unnecessary under the
   one-session-per-workdir invariant; revisit only if that invariant is relaxed.
+- **Concurrent `start` on the same workdir (single-user, single-session mode).** Two `start`s racing
+  against one workdir is unsupported by design. `init_run` mints/`mkdir`s `/tmp/<ID>` *before* taking
+  `.init.lock` and, after the lock, **silently adopts** any existing marker and returns the winner's
+  ID — indistinguishable from a freshly created one (`init_run:43-48,69-77`). Under one user this never
+  triggers; under true concurrency the loser could dispatch `mode=fresh` against the winner's manifest.
+  A clean fix exists (have `init_run` return `created <id>` vs `exists <id>` and make `start` refuse on
+  `exists`) and is **welcome if cheap**, but it is **not a blocker** — the single-session assumption
+  (see the "Single-user, single-session mode" note above) makes the race unreachable in practice.
 - Partial-issue continuation (still whole categories only).
 - Any change to the blind-debate engine, the seats, or the index math.
 
@@ -287,19 +401,47 @@ into per-command skills and deleting the intent-inference.
 
 1. **`discard` is act-and-report — no typed confirm.** Typing the command is itself the intent, and a
    rare mistaken invocation (e.g. tab-completion) is low-harm: it only removes local, regenerable
-   state, and the just-shown verdict survives as the saved artifact (below). It reports each pair it
-   removed.
+   state, and the just-shown verdict is still in the conversation transcript (and, once the deferred
+   verdict-artifact plan lands, in `/tmp/<ID>.md`). It reports each pair it removed.
 2. **`status` shows machine state only**, not the last verdict. The session is still on disk, so the
-   user can read the files directly; and a cleanly finished run's verdict was already shown (and saved,
-   below). No need to re-render it.
+   user can read the files directly; and a cleanly finished run's verdict was already shown in the
+   transcript. No need to re-render it.
 3. ~~Rename the `moved` verdict.~~ **`diverged`** ("moved" read like files were relocated; the state
    means the reviewed code/diff changed since the snapshot). Prose stays "the code changed since this
    review." The token rename spans `resume_check`, the dispatcher, and the continue-leftovers spec —
    one pass (change-set item 7).
+4. **Skills-dir plugin via `install.sh`, not a marketplace.** One user plus a few others, no real
+   test suite (testing is install-and-use), so a marketplace's discovery/versioning/auto-update buys
+   nothing and adds a cache-copy step; the plugin installs straight to `~/.claude/skills/panel-review/`.
+   Generic command-folder names (`start`, …) are safe because plugin namespacing always prefixes them
+   (`panel-review:start`) — the clash concern only applies to *loose* skills in `~/.claude/skills/`,
+   which these are not. Switch to a marketplace only if distribution widens (then item 11's
+   `${CLAUDE_PLUGIN_ROOT}` becomes load-critical).
+5. **`status` stays model-invocable; the internal skill uses `user-invocable: false`.** The four
+   action verbs get `disable-model-invocation: true` (side effects — the model must not trigger them,
+   especially `discard`). `status` is read-only, so it's left model-invocable to answer status
+   questions. `panel-review-for-agent` is hidden with `user-invocable: false` rather than
+   `disable-model-invocation`, because the latter would also stop it being preloaded into the referee
+   subagent — which it requires. (Frontmatter table in change-set item 1.)
 
 ## Testing
 
-No bash test harness in the repo; verify each command path with ad-hoc fixtures: build a small
-`.panel-review/<ID>/` marker + `/tmp/<ID>/{manifest,index}.json` in a temp git repo, run the command's
-script steps, and assert the verdict/output and the manifest mutation with `jq` — mirroring how the
-continue-leftovers and epoch work were checked.
+**Script-level (as today).** No bash test harness in the repo; verify each command path with ad-hoc
+fixtures: build a small `.panel-review/<ID>/` marker + `/tmp/<ID>/{manifest,index}.json` in a temp git
+repo, run the command's script steps, and assert the verdict/output and the manifest mutation with
+`jq` — mirroring how the continue-leftovers and epoch work were checked. Add cases for the two new
+behaviors: `inspect_run` makes **no writes** (diff the `/tmp/<ID>/` tree before/after; assert a corrupt
+`index.json` is *not* repaired), and `discard` clears valid sessions **while** a garbage-named marker
+is present (assert valid `/tmp/<id>` gone, garbage `/tmp` untouched and its path reported, `.panel-review/`
+removed).
+
+**Plugin-integration (script fixtures can't cover these).** Discovery, namespace resolution, hidden
+internal skill, and plugin-agent loading need a real host:
+
+- `claude plugin validate <plugin-root>` (consider `--strict`);
+- load from `~/.claude/skills/panel-review/` (or `claude --plugin-dir <root>` for dev) and assert the
+  **five exact** `panel-review:<verb>` commands appear and **no** user-invocable internal protocol does;
+- preload of `panel-review:panel-review-for-agent` into the referee and a successful spawn of
+  `panel-review:panel-review-claude-seat`;
+- a **shadow check** — warn if a project- *or* user-level `.claude/agents/panel-review-*.md` exists,
+  since either outranks the plugin agent.
