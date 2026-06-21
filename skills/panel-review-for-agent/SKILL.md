@@ -59,7 +59,7 @@ PR="$HOME/.claude/skills/panel-review/prompts"
 "$SC/run_codex" < prompt > raw 2> err        # Codex seat (pins --profile panel-review, --sandbox read-only; auto-creates the profile)
 "$SC/run_agy"   < prompt > raw 2> err        # Gemini seat (pins model/timeout/stdin)
 "$SC/parse_block" <tag> <raw> [label]        # ```<tag> block -> validated JSONL; exit 4 = NO block (down), 5 = malformed (retry once)
-"$SC/index"   {get|put|issue|bump|state|flag|commit-round} <id> ...   # ONLY writer of index.json
+"$SC/index"   {get|put|issue|bump|state|flag|commit-sweep} <id> ...   # ONLY writer of index.json
 "$SC/project_card" --id <id> --workdir <dir> [--index-rev N] < issue.json   # one issue record -> its card
 "$SC/regen_cards"  --id <id> --workdir <dir>                                # rebuild ALL cards from the index
 "$SC/index"   commit-sweep <id> <round> <epoch>  # apply a WHOLE debate round atomically (payload JSON on stdin)

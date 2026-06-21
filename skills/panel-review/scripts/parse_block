@@ -33,9 +33,43 @@ fi
 # truncated/garbled line ("just an object") is dropped rather than mistaken for a
 # real finding/stance. (Per-card stance cardinality is the referee's job, not ours.)
 case "$tag" in
-  findings|new_findings) valid='type=="object" and (.claim|type=="string") and (.location!=null) and ((has("points")|not) or (.points|type=="array"))';;
-  stances)               valid='type=="object" and (.id|type=="string") and ((.stance|type=="string") and (.stance|test("^(support|support_with_revision|reject)$")))';;
-  *)                     valid='type=="object"';;
+  findings|new_findings) valid='
+    def valid_location:
+      (type == "string" and length > 0) or (type == "array" and length > 0 and (map(type == "string" and length > 0) | all));
+    def valid_point:
+      type == "object" and
+      (.assertion | type == "string") and
+      (has("location") and (.location | valid_location)) and
+      ((has("precondition") | not) or (.precondition | type == "string")) and
+      ((has("impact") | not) or (.impact | type == "string"));
+    select(type == "object" and (.claim|type=="string") and (has("location") and (.location|valid_location))) |
+    select(.category | type == "string" and IN("security", "correctness", "performance", "maintainability", "style")) |
+    select(.severity | type == "string" and IN("critical", "high", "medium", "low", "style")) |
+    .points = (if has("points") then .points else [] end) |
+    .points |= (if type=="array" then map(select(valid_point)) elif valid_point then [.] else [] end) |
+    select(.points | length > 0)';;
+  stances) valid='
+    def valid_location:
+      (type == "string" and length > 0) or (type == "array" and length > 0 and (map(type == "string" and length > 0) | all));
+    def valid_point:
+      type == "object" and
+      (.assertion | type == "string") and
+      (has("location") and (.location | valid_location)) and
+      ((has("precondition") | not) or (.precondition | type == "string")) and
+      ((has("impact") | not) or (.impact | type == "string"));
+    select(type=="object" and (.id|type=="string") and ((.stance|type=="string") and (.stance|test("^(support|support_with_revision|reject)$")))) |
+    (if has("revision") and (.revision | type == "object") then
+      .revision |= (
+        (if has("category") and (.category | type == "string" and IN("security", "correctness", "performance", "maintainability", "style") | not) then del(.category) else . end) |
+        (if has("severity") and (.severity | type == "string" and IN("critical", "high", "medium", "low", "style") | not) then del(.severity) else . end) |
+        (if has("claim") and (.claim | type == "string" | not) then del(.claim) else . end) |
+        (if has("location") and (.location | valid_location | not) then del(.location) else . end) |
+        with_entries(select(.key | IN("category", "severity", "claim", "location")))
+      ) | (if .revision == {} then del(.revision) else . end)
+    else del(.revision) end) |
+    (if has("new_evidence") then (if (.new_evidence | type == "object") then .new_evidence |= select(valid_point) else del(.new_evidence) end) | (if .new_evidence == null then del(.new_evidence) else . end) else . end) |
+    (if has("evidence") then (if (.evidence | type == "object") then .evidence |= select(valid_point) else del(.evidence) end) | (if .evidence == null then del(.evidence) else . end) else . end)';;
+  *)                     valid='select(type=="object")';;
 esac
 
 emit() { # validated object on stdin -> stdout, optionally tagged for the referee
@@ -55,24 +89,24 @@ if [ -z "${raw//[[:space:]]/}" ]; then
 fi
 
 parsed_whole=0
-if salv="$(printf '%s' "$raw" | jq -c 'if type=="array" then .[] else . end' 2>/dev/null)"; then
+if parsed="$(printf '%s' "$raw" | jq -c 'if type=="array" then .[] else . end' 2>/dev/null)"; then
   parsed_whole=1
   while IFS= read -r line; do
     [ -n "${line//[[:space:]]/}" ] || continue
-    if printf '%s' "$line" | jq -e "$valid" >/dev/null 2>&1; then
-      n=$((n+1)); printf '%s' "$line" | emit "$n"
+    if t="$(printf '%s' "$line" | jq -c -e "$valid" 2>/dev/null)"; then
+      n=$((n+1)); printf '%s' "$t" | emit "$n"
     else
       bad=$((bad+1))
     fi
-  done <<< "$salv"
+  done <<< "$parsed"
 fi
 
 if [ "$parsed_whole" -eq 0 ]; then
   # Fall back to line-by-line heuristic if whole-block parsing fails.
   while IFS= read -r line; do
     [ -n "${line//[[:space:]]/}" ] || continue
-    if printf '%s' "$line" | jq -e "$valid" >/dev/null 2>&1; then
-      n=$((n+1)); printf '%s' "$line" | emit "$n"
+    if t="$(printf '%s' "$line" | jq -c -e "$valid" 2>/dev/null)"; then
+      n=$((n+1)); printf '%s' "$t" | emit "$n"
     else
       bad=$((bad+1))
     fi

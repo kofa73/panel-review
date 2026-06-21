@@ -14,7 +14,7 @@
 #
 # Idempotency: the durable record of "this round was counted" lives in the index
 # (.committed_rounds), not in the marker file. `commit` delegates the bump to
-# `index commit-round`, which is a no-op if the round is already committed — so a
+# `index commit-sweep`, which is a no-op if the round is already committed — so a
 # crash mid-commit, then a resume + re-commit, never double-counts. `done`
 # queries that same committed_rounds, so it is the single source of truth.
 set -euo pipefail
