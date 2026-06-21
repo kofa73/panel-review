@@ -27,16 +27,10 @@ sd="/tmp/$id/sweeps/round-$round"
 
 idx="/tmp/$id/index.json"
 
-exec 8>"/tmp/$id/.run.lock"
-flock -s 8
-
 case "$cmd" in
-  begin)  
+  begin)
           epoch="${4-}"
           case "$epoch" in ''|*[!0-9]*) echo "sweep begin: requires numeric epoch" >&2; exit 2;; esac
-          touch "/tmp/$id/.sweep.lock"
-          exec 9>"/tmp/$id/.sweep.lock"
-          flock -x 9
           curr_epoch="$(jq -r '.run_epoch // 0' "$idx")"
           if [ "$curr_epoch" != "$epoch" ]; then echo "sweep begin: stale run epoch $epoch != $curr_epoch" >&2; exit 1; fi
           if [ -d "$sd" ]; then
