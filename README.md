@@ -52,12 +52,53 @@ Run it from the repo you want reviewed.
 /panel-review "<question>"         # validate an answer to a broad technical question
 /panel-review --uncommitted --issue-rounds 3 --max-rounds 5   # override the loop limits
 /panel-review --uncommitted --debate-low                      # debate even an all-low set
+/panel-review --uncommitted focus on the new locking          # steer the seats (trailing text)
+/panel-review --base main --instructions auto                 # let the referee derive context
 ```
 
 It returns one synthesized verdict. The review runs in a separate context, so it doesn't clutter
 your conversation.
 
-Three behaviors worth knowing before you run it:
+### Steering the review with instructions
+
+By default the seats get the diff, a one-line scope label, and read access to the tree — no
+statement of *intent*. You can supply that focus, which is shown to all three seats (blindness is
+preserved — same text to everyone) and to the debate rounds. It is **emphasis, not a limit**: it
+directs attention but never overrides the review's own rules or suppresses a defect found outside
+its scope.
+
+Two ways to pass it, and **positionality matters**:
+
+- **Trailing text (keyword-less).** With a diff scope (`--base`/`--uncommitted`/`--commit`), any
+  free text left after the flags is the instruction. Put it **last**, after the scope and any
+  `--issue-rounds`/`--max-rounds`:
+  ```
+  /panel-review --uncommitted --max-rounds 3 focus on error handling in the parser
+  ```
+  Limitation: this text **must not contain `--`-looking tokens** — they get parsed as flags. For
+  that, use the explicit form.
+- **`--instructions <text>` (explicit, escape hatch).** Must be the **last** flag; *everything*
+  after it is taken verbatim — newlines and `--`-looking tokens included — and nothing past it is
+  parsed as a flag:
+  ```
+  /panel-review --base main --instructions check the --max-rounds handling and the retry path
+  ```
+  Use it for multi-line guidance or text containing flag-like tokens. Give instructions **either**
+  as trailing text **or** via `--instructions`, not both.
+- **`--instructions auto`.** The referee writes a few neutral sentences of context from *outside*
+  the diff — branch name, the branch's commit subjects, `git status` — and feeds that to the seats.
+  It deliberately does **not** paraphrase the diff (that would push one interpretation onto all
+  three independent seats). Note `auto` has little to draw on for `--uncommitted` (no commits yet);
+  it's most useful with `--base`/`--commit`.
+
+Notes:
+- A bare **`<question>`** scope (no diff) has no separate instructions channel — the question text
+  *is* the scope.
+- Instructions are part of a run's **resume identity**: changing them for the same scope/diff is a
+  different review, so a resume offer becomes a fresh-or-stop prompt instead. `--continue` keeps the
+  finished run's instructions; don't pass them again.
+
+Three more behaviors worth knowing before you run it:
 
 - **No scope, no guess.** With no scope argument it prints the usage line and stops — it never
   guesses a base branch.
@@ -220,8 +261,9 @@ the Round-0 low-severity gate). Push those issues further with:
 - `/panel-review --continue unresolved` — only unresolved
 - `/panel-review --continue contested` — only contested
 
-`--continue` reuses the finished run's scope and round limits (don't pass them again) and re-resolves
-the diff: if the code under review changed, it refuses and asks for a fresh review. The selected
+`--continue` reuses the finished run's scope, round limits, **and instructions** (don't pass any of
+them again — combining `--continue` with another flag is rejected) and re-resolves the diff: if the
+code under review changed, it refuses and asks for a fresh review. The selected
 issues return to **open** with their per-issue and the global round counters reset to zero, so they
 get a full budget again; their accumulated evidence is kept, and already-settled issues are carried
 into the new verdict unchanged.

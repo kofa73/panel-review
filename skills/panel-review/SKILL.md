@@ -2,7 +2,7 @@
 name: panel-review
 description: Three-way symmetric BLIND debate across Claude + OpenAI Codex (GPT) + Google Gemini (agy CLI). Dispatches the review to the panel-review-referee agent. Resumable across crashes.
 disable-model-invocation: true
-argument-hint: "--base <branch> | --uncommitted | --commit <SHA> | <question>  [--issue-rounds N] [--max-rounds N] [--debate-low]  | --continue [unresolved|contested]"
+argument-hint: "--base <branch> | --uncommitted | --commit <SHA> | <question>  [--issue-rounds N] [--max-rounds N] [--debate-low]  [<focus text> | --instructions <text|auto>]  | --continue [unresolved|contested]"
 ---
 
 # Panel Review — dispatcher
@@ -16,7 +16,7 @@ the run, dispatch the `panel-review-referee` agent, and present its verdict **ve
 SC="$HOME/.claude/skills/panel-review/scripts"
 ```
 
-## Step 1 — parse `$ARGUMENTS` (round limits FIRST, then scope)
+## Step 1 — parse `$ARGUMENTS` (`--continue`, then `--instructions`, then round limits, then scope)
 
 The harness does **not** parse flags; you get the raw `$ARGUMENTS` string. Parse it yourself:
 
@@ -24,29 +24,52 @@ The harness does **not** parse flags; you get the raw `$ARGUMENTS` string. Parse
    `$ARGUMENTS` contains `--continue`, set `CONT` to `both` (bare `--continue`), or to `unresolved`
    / `contested` if that word follows; remove `--continue` and its optional value from the string.
    Then require the remainder to be **empty**: if any other token remains — a scope flag, free text,
-   `--issue-rounds`, `--max-rounds`, or `--debate-low` — stop with exactly
-   `--continue takes the scope and limits from the finished run; don't combine it with another flag.`
+   `--issue-rounds`, `--max-rounds`, `--debate-low`, or `--instructions` — stop with exactly
+   `--continue takes the scope, limits, and instructions from the finished run; don't combine it with another flag.`
    Then **skip the rest of Step 1** and follow **Step 1.5** instead (which runs Step 2's resolve+hash
    inline before Step 3, sourcing the scope and limits from the finished run). If `--continue` is
-   absent, leave `CONT` unset and parse the rest of Step 1 (round limits, `--debate-low`, scope) normally.
+   absent, leave `CONT` unset and parse the rest of Step 1 (instructions, round limits, `--debate-low`,
+   scope) normally.
+0b. **`--instructions` (explicit form) — extract this BEFORE round limits, `--debate-low`, and
+   scope.** It must be processed first because everything after it is literal: if the token
+   `--instructions` appears, it must be **last** in `$ARGUMENTS`, and you take **everything after it** —
+   verbatim, including newlines and any `--`-looking tokens — as the instruction text, then remove
+   `--instructions` + that text from the string. This is the escape hatch: after `--instructions`,
+   nothing is parsed as a flag, so the text may contain `--max-rounds`, file paths, etc. Set `INSTR` to
+   that text. The special value `--instructions auto` sets `INSTR=auto` (referee generates context from
+   branch / commit messages / `git status`). If `--instructions` is present but the text is empty, stop
+   with `--instructions needs text (or 'auto').` If `--instructions` is absent, leave `INSTR` unset for now.
 1. **Round limits.** Defaults `issue-rounds=2`, `max-rounds=4`. Apply `--issue-rounds N` /
    `--max-rounds N` if present, then validate the **resolved** values: each a positive integer and
    `issue-rounds ≤ max-rounds`. Otherwise stop with a one-line error.
 1b. **`--debate-low`** (boolean, default off). If present, set `DEBATE_LOW=true` and remove it from
    the string; else `DEBATE_LOW=false`. It tells the agent to debate even when Round 0 finds only
    low-severity items (skip the Round-0 severity gate).
-2. **Scope** from what remains after removing the round/boolean flags, as a **canonical token**:
+2. **Scope** from what remains after removing the instructions/round/boolean flags, as a **canonical
+   token**, then **any leftover free text alongside a diff scope becomes the instructions** (the
+   keyword-less form):
 
-   | In `$ARGUMENTS` | Canonical `scope` token |
-   |-----------------|-------------------------|
-   | `--base X` | `base=X` |
-   | `--uncommitted` | `uncommitted` |
-   | `--commit SHA` | `commit=SHA` |
-   | leftover non-empty free text | `question=<that text>` |
+   | In `$ARGUMENTS` | Canonical `scope` token | Leftover free text |
+   |-----------------|-------------------------|--------------------|
+   | `--base X` | `base=X` | → `INSTR` (if `INSTR` not already set) |
+   | `--uncommitted` | `uncommitted` | → `INSTR` (if `INSTR` not already set) |
+   | `--commit SHA` | `commit=SHA` | → `INSTR` (if `INSTR` not already set) |
+   | leftover non-empty free text, **no** scope flag | `question=<that text>` | (the text *is* the scope) |
+
+   Positionality / precedence:
+   - A **diff scope** (`--base`/`--uncommitted`/`--commit`) + trailing free text → that text is the
+     instructions. Put it **after** the scope and any `--issue-rounds`/`--max-rounds` flags. It must
+     **not** contain `--`-looking tokens (they'd be parsed as flags) — if it needs to, use the
+     explicit `--instructions … ` form instead.
+   - If `INSTR` was already set by `--instructions` (0b) **and** non-flag free text also remains, stop
+     with `Give instructions either as trailing text or via --instructions, not both.`
+   - With **no** scope flag, leftover text is the `question=` scope itself (a diffless review); there
+     is no separate instructions channel in that mode.
+   - Default `INSTR` to empty if nothing set it.
 
 3. If **no scope flag was given AND** nothing remains after removing the flags → print exactly:
    ```
-   Specify a scope: --base <branch> | --uncommitted | --commit <SHA> | <question>  [--issue-rounds N] [--max-rounds N]
+   Specify a scope: --base <branch> | --uncommitted | --commit <SHA> | <question>  [--issue-rounds N] [--max-rounds N]  [<focus text> | --instructions <text|auto>]
    ```
    and stop. (`--uncommitted` legitimately leaves no positional text — that is a valid scope, not
    an error. Never guess a base branch.)
@@ -62,10 +85,12 @@ ids=(); for d in "$base"/*/; do [ -f "$d/.panel-run" ] && ids+=("$(basename "$d"
 ID="${ids[0]}"; man="/tmp/$ID/manifest.json"
 [ -s "$man" ] || { echo "The finished run's state was cleaned up; nothing to continue."; exit 1; }
 scope="$(jq -r '.scope' "$man")"; ISS="$(jq -r '.limits.issue_rounds' "$man")"; MAX="$(jq -r '.limits.max_rounds' "$man")"
+INSTR="$(jq -r '.instructions // ""' "$man")"   # adopt the finished run's instructions too
 ```
 
 Now run **Step 2** (resolve + hash the CURRENT diff for that `scope`) and the **Step 3
-`resume_check`** call, then require its verdict to be `continuable <ID>`:
+`resume_check`** call (pass `--instructions "$INSTR"` so the identity matches the finished run),
+then require its verdict to be `continuable <ID>`:
 
 - `moved <ID>` → the code moved since the finished run. Stop: "The code under review changed since finished run `<ID>`; run a fresh review instead." (this is the scope/diff gate)
 - `resume <ID>` → the run still has open issues (interrupted, not finished). Stop: "Run `<ID>` isn't finished — resume it without `--continue`."
@@ -107,13 +132,14 @@ empty, you may stop early with
 
 ```bash
 "$SC/resume_check" --workdir "$PWD" --scope "$scope" \
-   --issue-rounds "$ISS" --max-rounds "$MAX" --diff-hash "$DH"
+   --issue-rounds "$ISS" --max-rounds "$MAX" --diff-hash "$DH" --instructions "$INSTR"
 ```
-Act on the single verdict line:
+Act on the single verdict line. **Every `init_run` below carries `--instructions "$INSTR"`** (the
+parsed instructions, or the empty string) so the manifest records them and resume identity matches:
 
 - **`fresh`** → mint a run and go fresh:
   ```bash
-  ID="$("$SC/init_run" --workdir "$PWD" --scope "$scope" --issue-rounds "$ISS" --max-rounds "$MAX" --diff-hash "$DH")"
+  ID="$("$SC/init_run" --workdir "$PWD" --scope "$scope" --issue-rounds "$ISS" --max-rounds "$MAX" --diff-hash "$DH" --instructions "$INSTR")"
   ```
   Dispatch with `mode=fresh`, `id=$ID`.
 
@@ -136,14 +162,14 @@ Act on the single verdict line:
   and start fresh — no need to ask:
   ```bash
   "$SC/cleanup" --id "<ID>" --workdir "$PWD"      # removes the orphan marker (tmp already gone)
-  ID="$("$SC/init_run" --workdir "$PWD" --scope "$scope" --issue-rounds "$ISS" --max-rounds "$MAX" --diff-hash "$DH")"
+  ID="$("$SC/init_run" --workdir "$PWD" --scope "$scope" --issue-rounds "$ISS" --max-rounds "$MAX" --diff-hash "$DH" --instructions "$INSTR")"
   ```
   Dispatch `mode=fresh`, `id=$ID`.
 
-- **`moved <ID>`** → state exists but the scope/limits or **diff hash changed** (the code under
-  review moved). Do **not** silently continue on stale cards. **Ask the user** (`AskUserQuestion`):
-  *The code/scope changed since interrupted run `<ID>`. Start a fresh review (discard the old run),
-  or stop?*
+- **`moved <ID>`** → state exists but the scope/limits, **diff hash**, or **instructions** changed
+  (the code under review moved, or you asked for different guidance). Do **not** silently continue on
+  stale cards. **Ask the user** (`AskUserQuestion`): *The code, scope, or instructions changed since
+  interrupted run `<ID>`. Start a fresh review (discard the old run), or stop?*
   - Fresh → `"$SC/cleanup" --id "<ID>" --workdir "$PWD"` then `init_run` a new ID; dispatch `mode=fresh`.
   - Stop → halt; leave the old run for the user.
 

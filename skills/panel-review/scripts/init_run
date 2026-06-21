@@ -5,6 +5,12 @@
 #
 # Usage:
 #   init_run --workdir DIR --scope STR --issue-rounds N --max-rounds N --diff-hash HEX
+#           [--instructions STR]
+#
+# --instructions is optional author guidance for the seats (free text, or the
+# sentinel "auto" for referee-generated context). Stored verbatim in the manifest
+# so it survives resume/--continue and is part of the run's resume identity
+# (changing it makes resume_check report "moved").
 #
 # Creates:
 #   /tmp/<ID>/manifest.json           (canonical; persistent volume)
@@ -15,7 +21,7 @@
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"; . "$here/_panel_common.sh"
 
-workdir="" scope="" iss="" mx="" dh=""
+workdir="" scope="" iss="" mx="" dh="" instr=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --workdir) workdir="$2"; shift 2;;
@@ -23,6 +29,7 @@ while [ "$#" -gt 0 ]; do
     --issue-rounds) iss="$2"; shift 2;;
     --max-rounds) mx="$2"; shift 2;;
     --diff-hash) dh="$2"; shift 2;;
+    --instructions) instr="$2"; shift 2;;
     *) echo "init_run: unknown arg: $1" >&2; exit 2;;
   esac
 done
@@ -45,10 +52,10 @@ mkdir -p "/tmp/$id/sweeps" "/tmp/$id/raw" "/tmp/$id/audit"
 
 jq -n --arg id "$id" --arg wd "$workdir" --arg scope "$scope" \
       --argjson iss "$iss" --argjson mx "$mx" --arg dh "$dh" \
-      --arg created "$(date -Is)" '{
+      --arg instr "$instr" --arg created "$(date -Is)" '{
   id:$id, workdir:$wd, scope:$scope,
   limits:{issue_rounds:$iss, max_rounds:$mx},
-  diff_hash:$dh, phase:"round0", state_version:1, created:$created
+  diff_hash:$dh, instructions:$instr, phase:"round0", state_version:1, created:$created
 }' | panel_atomic_write "/tmp/$id/manifest.json"
 
 printf '{"issues":[],"round":0,"phase":"round0","committed_rounds":[]}\n' | panel_atomic_write "/tmp/$id/index.json"

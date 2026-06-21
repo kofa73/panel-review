@@ -5,18 +5,22 @@
 #
 # Usage:
 #   resume_check --workdir DIR --scope STR --issue-rounds N --max-rounds N --diff-hash HEX
+#                [--instructions STR]
 #
 # Output (stdout), exactly one of:
 #   fresh                  no marker dir -> start a new run
 #   resume <ID>            marker + valid matching /tmp state -> can resume
 #   continuable <ID>       finished run (no open issues) with unresolved/contested left -> --continue
 #   stale <ID>             marker but /tmp/<ID> missing/empty -> drop & start fresh
-#   moved <ID>             /tmp state exists but scope/limits/diff-hash differ -> ask/stop
+#   moved <ID>             /tmp state exists but scope/limits/diff-hash/instructions differ -> ask/stop
 #   ambiguous             more than one marker dir -> needs manual cleanup
+#
+# Instructions are part of the resume identity: changing the author guidance for
+# the same scope/diff yields a different review, so a mismatch reports "moved".
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"; . "$here/_panel_common.sh"
 
-workdir="" scope="" iss="" mx="" dh=""
+workdir="" scope="" iss="" mx="" dh="" instr=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --workdir) workdir="$2"; shift 2;;
@@ -24,6 +28,7 @@ while [ "$#" -gt 0 ]; do
     --issue-rounds) iss="$2"; shift 2;;
     --max-rounds) mx="$2"; shift 2;;
     --diff-hash) dh="$2"; shift 2;;
+    --instructions) instr="$2"; shift 2;;
     *) echo "resume_check: unknown arg: $1" >&2; exit 2;;
   esac
 done
@@ -57,11 +62,12 @@ fi
 if ! m_scope=$(jq -r '.scope' "$man" 2>/dev/null) \
    || ! m_iss=$(jq -r '.limits.issue_rounds' "$man" 2>/dev/null) \
    || ! m_mx=$(jq -r '.limits.max_rounds' "$man" 2>/dev/null) \
-   || ! m_dh=$(jq -r '.diff_hash' "$man" 2>/dev/null); then
+   || ! m_dh=$(jq -r '.diff_hash' "$man" 2>/dev/null) \
+   || ! m_instr=$(jq -r '.instructions // ""' "$man" 2>/dev/null); then   # // "" : pre-instructions manifests
   echo "stale $id"; exit 0
 fi
 
-if [ "$m_scope" = "$scope" ] && [ "$m_iss" = "$iss" ] && [ "$m_mx" = "$mx" ] && [ "$m_dh" = "$dh" ]; then
+if [ "$m_scope" = "$scope" ] && [ "$m_iss" = "$iss" ] && [ "$m_mx" = "$mx" ] && [ "$m_dh" = "$dh" ] && [ "$m_instr" = "$instr" ]; then
   # A FINISHED run has no open issues; if it also handed back unresolved/contested
   # issues it is continuable. An interrupted run still has open issues -> plain resume.
   # On any jq error, default to resume (open_n=1) — never mislabel as continuable.

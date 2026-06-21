@@ -37,6 +37,8 @@ The `/panel-review` dispatcher (main context) did the resume/stop decision (only
 - `workdir=<DIR>` — the repo root (run everything from here)
 - `scope=<base=X | uncommitted | commit=SHA | the question text>`
 - the resolved round limits (also in the manifest)
+- author **instructions** are NOT in your prompt — read them from `manifest.instructions` (free text,
+  the sentinel `auto`, or empty) and resolve them in Round 0 step 2
 - `debate-low=<true|false>` — when `true`, skip the Round-0 severity gate and debate even an
   all-low finding set (default `false`). On a `mode=resume` dispatch the human already opted in, so
   you always proceed to the debate loop regardless of this value.
@@ -145,14 +147,36 @@ reviewer-facing fields, so the origins never leak even if adjacent.
    A `question=` scope produces an empty diff (the question itself is the scope). For a diff scope,
    if `/tmp/$id/diff.txt` is empty, stop and say so before running seats (never guess a base branch).
 
-2. **Assemble the prompt** (same prompt for all three seats):
+2. **Resolve author instructions once** into `/tmp/$id/instructions.txt` (reused by every
+   seat, every round, and across resume — generate only if the file is absent):
+
+   ```bash
+   if [ ! -f /tmp/$id/instructions.txt ]; then
+     instr="$(jq -r '.instructions // ""' /tmp/$id/manifest.json)"
+     if [ "$instr" = "auto" ]; then
+       # Compose a few NEUTRAL sentences of context the diff does NOT already contain —
+       # branch name, commit subjects on the branch (git log <base>..HEAD --format='%s'),
+       # `git status` summary. NEVER paraphrase the diff itself: that injects one
+       # interpretation into all three blind seats and defeats their independence. For an
+       # `uncommitted` scope there are no commits — fall back to branch + status only, and
+       # if nothing useful exists, write the "(none …)" line below.
+       printf '%s\n' "<your neutral, externally-sourced context here>" > /tmp/$id/instructions.txt
+     elif [ -n "$instr" ]; then
+       printf '%s\n' "$instr" > /tmp/$id/instructions.txt          # verbatim author text
+     else
+       printf '(none — review the diff on its own terms)\n' > /tmp/$id/instructions.txt
+     fi
+   fi
+   ```
+
+3. **Assemble the prompt** (same prompt for all three seats):
 
    ```bash
    echo "<one-line scope description>" > /tmp/$id/scope.txt   # or the question text for a question scope
-   "$SC/assemble" "$PR/blind_pass.tmpl" SCOPE=/tmp/$id/scope.txt DIFF=/tmp/$id/diff.txt > /tmp/$id/round0.prompt
+   "$SC/assemble" "$PR/blind_pass.tmpl" SCOPE=/tmp/$id/scope.txt INSTRUCTIONS=/tmp/$id/instructions.txt DIFF=/tmp/$id/diff.txt > /tmp/$id/round0.prompt
    ```
 
-3. **Dispatch all three in parallel** (start Codex + Gemini in the background, spawn the Claude
+4. **Dispatch all three in parallel** (start Codex + Gemini in the background, spawn the Claude
    seat subagent), each writing to `/tmp/$id/raw/round0.<seat>.txt`. Then parse **and capture each
    exit code** — never append `|| true`, which would hide a down seat:
 
@@ -256,7 +280,9 @@ For `round = 1, 2, … max-rounds`, while any issue is `open`:
 
    ```bash
    printf '%s\n' "$OPEN_CARD_PATHS" > /tmp/$id/cards.$round.txt
-   "$SC/assemble" "$PR/debate.tmpl" CARDS=/tmp/$id/cards.$round.txt > /tmp/$id/debate.$round.prompt
+   # /tmp/$id/instructions.txt was resolved in Round 0 step 2; on a resume that began at the
+   # debate loop, regenerate it the same way if absent before assembling.
+   "$SC/assemble" "$PR/debate.tmpl" CARDS=/tmp/$id/cards.$round.txt INSTRUCTIONS=/tmp/$id/instructions.txt > /tmp/$id/debate.$round.prompt
    # run each seat/batch -> /tmp/$id/raw/round$round.<seat>.<batch>.txt
    ```
    Spawn a **fresh** `panel-review-claude-seat` subagent for the Claude seat each round. **Parse
@@ -351,9 +377,10 @@ stance). `support_with_revision` counts as **support for existence**.
 
 You keep nothing in conversation; reconstruct everything from `/tmp/<id>/`.
 
-1. Read `/tmp/$id/manifest.json` (scope, limits — the dispatcher already confirmed they match this
-   invocation and the diff hash is unchanged; if `/tmp/$id` were stale the dispatcher would have
-   started fresh instead).
+1. Read `/tmp/$id/manifest.json` (scope, limits, `instructions` — the dispatcher already confirmed
+   they match this invocation and the diff hash is unchanged; if `/tmp/$id` were stale the dispatcher
+   would have started fresh instead). If `/tmp/$id/instructions.txt` is absent (resume before Round 0
+   finished resolving it), regenerate it via Round 0 step 2 before any seat prompt is assembled.
 2. **Re-run `"$SC/preflight"`** — the environment may have changed since the interrupted run (e.g.
    a peer seat is now down, or back). The CURRENT `CODEX: yes|no` / `GEMINI: yes|no` define the configured panel for the
    rest of this run; note any change in Process notes. (A seat absent now simply can't engage; a
