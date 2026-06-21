@@ -251,7 +251,7 @@ Static prompt templates live in `${CLAUDE_PLUGIN_ROOT}/prompts/`.
 | `diff_hash` | Stable hash of the resolved diff, for the manifest and the resume/diverged check |
 | `assemble` | Splice scope + diff (or card paths) into a prompt template without an LLM retyping them |
 | `run_codex` | The **only** way to call the Codex seat — pins `--sandbox read-only`, defaults `--profile panel-review` (auto-creates the profile from a shipped default) |
-| `run_agy` | The **only** way to call the Gemini seat — pins the Gemini model and the timeout/stdin fixes |
+| `run_agy` | The **only** way to call the Gemini seat — pins the model and the timeout/stdin fixes, and falls back from the primary Gemini model to a faster one if the primary fails or trips agy's internal "waiting for response" timeout |
 | `extract_block` / `parse_block` | Pull a `findings` / `stances` / `new_findings` block → validated JSONL; `parse_block` exit 4 = no block (down seat) vs empty-but-present |
 | `init_run` / `resume_check` / `cleanup` | Mint a run (marker-last); decide resume/continuable/diverged/stale/ambiguous; tear down after the verdict |
 | `inspect_run` | Pure, read-only per-run inspector for `panel-review:status` — never repairs, never writes |

@@ -1,0 +1,108 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this repo is
+
+`panel-review` is a **Claude Code plugin** (not an app) that runs a three-way **blind** code/design
+review: Claude, OpenAI Codex (GPT, via the `codex` CLI), and Google Gemini (via the `agy` CLI) each
+review the same scope independently, then re-argue each issue until they agree or hand it to the
+human. There is no compiled artifact — the deliverable is the plugin tree itself (bash wrappers,
+Markdown skills/agents, prompt templates), installed into the user's Claude config dir.
+
+`README.md` is the authoritative spec. When changing behavior, keep README.md in sync — it documents
+contracts that future readers and the referee protocol depend on.
+
+## Install / "build" / run
+
+There is no build, lint, or test framework. The scripts are bash; the skills/agents are Markdown.
+
+- **Install (the only "build" step):** `./install.sh` copies the whole tree into `~/.claude/skills/panel-review`
+  (override target with `CLAUDE_DIR=/path ./install.sh`). It removes the old pre-plugin layout, sets
+  exec bits on `scripts/*`, and warns about project/user-level agent files that would *shadow* the
+  plugin's agents. Run `/reload-plugins` (or restart Claude Code) afterward.
+- **Run a review** (from inside the repo you want reviewed, after install):
+  `panel-review:start --base main` | `--uncommitted` | `--commit <SHA>` | `"<question>"`.
+  Other verbs: `panel-review:status` (read-only), `:resume`, `:continue [unresolved|contested]`,
+  `:discard`. See README "Using it" for flags (`--issue-rounds`, `--max-rounds`, `--debate-low`,
+  `--instructions`).
+- **Smoke-testing a script change:** run the wrapper directly, e.g.
+  `scripts/preflight`, `scripts/resolve_diff <scope>`, `scripts/diff_hash < file`,
+  `scripts/inspect_run --id <ID> --workdir "$PWD"`. They are standalone and require `jq` + `git`.
+
+There is no single-test command because there are no automated tests; verify by exercising the
+scripts and by running an actual review.
+
+## Architecture
+
+Four participants, strict role separation:
+
+- **Command skills** (`skills/{start,status,resume,continue,discard}/SKILL.md`) — run in the **main
+  conversation**. They parse args, check preconditions, and dispatch the referee. `start`/`resume`/
+  `continue`/`discard` are `disable-model-invocation: true` (human-triggered only — critical so the
+  model never auto-wipes a session); `status` stays model-invocable.
+- **Referee** (`agents/panel-review-referee.md`) — a **separate context** that orchestrates but
+  **never reviews code**. Its full procedure lives in the preloaded skill
+  `skills/panel-review-for-agent/SKILL.md` (`user-invocable: false`), which is the single source of
+  truth for the debate protocol.
+- **Claude seat** (`agents/panel-review-claude-seat.md`) — a cold, no-memory reviewer subagent,
+  **spawned fresh each pass, never forked** (a fork would inherit the referee's context and destroy
+  blindness). Codex and Gemini seats are external CLIs.
+- **Wrapper scripts** (`scripts/`) — the referee never hand-rolls flags, writes, index math, or
+  parsing; it calls these so operations are byte-exact. Prompt templates are in `prompts/`
+  (`blind_pass.tmpl`, `debate.tmpl`); the Codex profile default is `assets/default-panel-review.config.toml`.
+
+**Issue lifecycle** (see README "How an issue moves"): each seat takes a `support` /
+`support_with_revision` / `reject` **stance**; an issue is `open` → `accepted` / `rejected` when all
+engaged seats agree, else `contested` (got a ≥2-seat review pass) or `unresolved` (never did) at the
+round limit. Unanimity-or-human: no majority vote, no referee fact-checking inside the loop.
+
+### Scripts that own a concern (don't bypass these)
+
+- `index` — the **only** writer of `/tmp/<ID>/index.json`. State/flag/counter math lives here;
+  `commit-sweep` applies a whole debate round atomically and idempotently (guarded by
+  `committed_rounds`). Never hand-write `index.json`.
+- `project_card` / `regen_cards` — the **only** way to render issue records → blind cards.
+- `run_codex` / `run_agy` — the **only** way to call the Codex / Gemini seats (they pin the
+  sandbox/model/profile). Never call `codex` or `agy` raw.
+- `resolve_diff` — the single place that turns a scope token into diff text; `diff_hash` hashes it.
+- `init_run` / `resume_check` / `cleanup` / `discard` / `inspect_run` / `set_limits` — run lifecycle
+  and the resume/diverged/stale classification.
+- `_panel_common.sh` — sourced (not executable) shared helpers: `panel_valid_id` (ID validation
+  guarding `rm -rf` paths), `panel_atomic_write` (temp + fsync + rename, `.bak` rotation), git-exclude
+  helpers.
+
+### Persistence model
+
+`/tmp/<ID>/` is the **single source of truth** (manifest, index, sweeps, raw seat output, origins,
+audit); cards under `<workdir>/.panel-review/<ID>/` are a regenerable cache (kept in the repo so
+Codex's read-only sandbox can read them; git-excluded). The per-workdir **marker** is the
+`.panel-review/<ID>/` dir itself. `init_run` writes `/tmp` state first and the marker **last**, so a
+marker always implies valid state. The verdict is also saved to `/tmp/<ID>.md` — a **sibling** of
+`/tmp/<ID>/`, deliberately outside it so cleanup/discard never delete it.
+
+**Single-user, single-session:** one workdir holds exactly one review; concurrent runs against the
+same workdir are unsupported by design.
+
+## Hard constraints (from README — don't break)
+
+- Seats called only via `run_codex` / `run_agy`, never raw.
+- Never hand-create/edit/delete `~/.codex/config.toml`; `run_codex` owns
+  `~/.codex/panel-review.config.toml`.
+- `index.json` written only via `index`/`sweep`; cards only via `project_card`/`regen_cards`.
+- Claude seat is spawned fresh (`panel-review:panel-review-claude-seat`), never forked.
+- The referee returns **only** the synthesized verdict — never raw seat output, card text, or
+  per-round transcripts. No seat ever sees who raised a point or the stance tally (blindness).
+
+## Conventions
+
+- `${CLAUDE_PLUGIN_ROOT}` in SKILL.md files is substituted at skill-load time; it is **not** a
+  runtime shell env var (it is empty in the shell). Keep the literal verbatim — don't read it at
+  runtime. Scripts find their own dir via `here="$(cd "$(dirname "$0")" && pwd)"`.
+- All scripts use `set -euo pipefail` and validate run IDs through `panel_require_id` before touching
+  any filesystem path. Never pipe a command that can fail into one that succeeds on empty input (the
+  README/skills call this out repeatedly, e.g. `resolve_diff | diff_hash` — resolve to a file and
+  check the exit code separately).
+- Per user instructions (`~/.claude/CLAUDE.md`): do not commit or push unless explicitly asked.
+</content>
+</invoke>
