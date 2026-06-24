@@ -1,186 +1,259 @@
-#!/usr/bin/env bash
-# parse_block — extract a fenced ```<tag> JSONL block and emit only the VALID
-# JSON objects, one per line. Malformed lines are dropped with a stderr note
-# (a seat that emits junk for one item must not crash the run — that item just
-# doesn't count). Replaces extract_findings; used for findings / new_findings /
-# stances.
-#
-# Usage:
-#   parse_block <tag> <rawfile> [source-label]     # normal: emit valid objects
-#   parse_block --diagnose <tag> <rawfile>         # explain WHY each item is invalid
-#
-#   With a source-label, each object is tagged for the referee's PRIVATE record:
-#     _source = label,  fid = "<label>-<N>"  (stable handle; never shown on a card)
-#
-#   --diagnose does NOT emit objects. For every item that the normal mode would
-#   drop it prints one stdout line naming the first failed constraint plus the
-#   offending source, so a repair prompt can tell the seat exactly what to fix.
-#   The validator (`valid`) and the diagnoser (`diag`) are built from the SAME
-#   predicate `def`s per tag, so the explanation can never disagree with the gate.
-#
-# Exit codes:
-#   0  block PRESENT (normal: empty/whitespace-only OR >=1 valid objects emitted;
-#                     diagnose: every item valid / nothing to repair).
-#   4  block ABSENT (the seat emitted no ```<tag> fence at all) — a malfunctioned
-#      /refusing seat, NOT "found nothing". Lets the loop tell the two apart.
-#   5  block PRESENT with non-whitespace content but ZERO valid objects parsed
-#      (normal), or >=1 invalid item (diagnose).
-#   1  missing input file.  127  jq not found.  2  usage.
-set -euo pipefail
-here="$(cd "$(dirname "$0")" && pwd)"
-command -v jq >/dev/null 2>&1 || { echo "parse_block: jq not found" >&2; exit 127; }
+#!/usr/bin/env python3
+import sys
+import os
+import json
+import subprocess
+import re
 
-diagnose=0
-if [ "${1-}" = "--diagnose" ]; then diagnose=1; shift; fi
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from panel_common import CATEGORIES, SEVERITIES, valid_location, valid_point
 
-[ "$#" -ge 2 ] || { echo "usage: parse_block [--diagnose] <tag> <rawfile> [label]" >&2; exit 2; }
-tag="$1"; file="$2"; label="${3-}"
-[ -f "$file" ] || { echo "parse_block: no such file: $file" >&2; exit 1; }
-[ "$diagnose" -eq 0 ] || label=""   # --diagnose never emits objects, so no labelling
+def compact_json(obj):
+    return json.dumps(obj, separators=(',', ':'), ensure_ascii=False)
 
-# Distinguish "no block" from "empty block" up front.
-if ! "$here/extract_block" --present "$tag" "$file"; then
-  echo "parse_block: no '$tag' block in output (seat produced none)" >&2
-  exit 4
-fi
+def ok_object(obj): return isinstance(obj, dict)
+def ok_claim(obj): return isinstance(obj.get("claim"), str)
+def ok_location(obj): return "location" in obj and valid_location(obj["location"])
+def ok_category(obj): return isinstance(obj.get("category"), str) and obj.get("category") in CATEGORIES
+def ok_severity(obj): return isinstance(obj.get("severity"), str) and obj.get("severity") in SEVERITIES
 
-# Per-tag schema. `defs` holds the shared predicates; `valid` is the gate (emits
-# the cleaned object), `diag` returns "valid" or the first failure reason. Both
-# derive from `defs` so the diagnostic stays byte-faithful to what the gate drops.
-case "$tag" in
-  findings|new_findings)
-    defs='
-    def valid_location:
-      (type == "string" and length > 0) or (type == "array" and length > 0 and (map(type == "string" and length > 0) | all));
-    def valid_point:
-      type == "object" and
-      (.assertion | type == "string") and
-      (has("location") and (.location | valid_location)) and
-      ((has("precondition") | not) or (.precondition | type == "string")) and
-      ((has("impact") | not) or (.impact | type == "string"));
-    def normalized_points:
-      (if has("points") then .points else [] end)
-      | (if type=="array" then map(select(valid_point)) elif valid_point then [.] else [] end);
-    def ok_object:   type == "object";
-    def ok_claim:    (.claim | type == "string");
-    def ok_location: has("location") and (.location | valid_location);
-    def ok_category: (.category | type == "string") and (.category | IN("security", "correctness", "performance", "maintainability", "style"));
-    def ok_severity: (.severity | type == "string") and (.severity | IN("critical", "high", "medium", "low", "style"));
-    def ok_points:   (normalized_points | length > 0);'
-    valid="$defs"'
-    select(ok_object and ok_claim and ok_location and ok_category and ok_severity)
-    | .points = normalized_points
-    | select(.points | length > 0)'
-    diag="$defs"'
-    if   (ok_object   | not) then "not a JSON object"
-    elif (ok_claim    | not) then "missing or non-string field `claim`"
-    elif (ok_location | not) then "missing/invalid `location` (a non-empty \"file:line\" string, or an array of such)"
-    elif (ok_category | not) then "missing/invalid `category` (one of: security, correctness, performance, maintainability, style)"
-    elif (ok_severity | not) then "missing/invalid `severity` (one of: critical, high, medium, low, style)"
-    elif (ok_points   | not) then "no valid `points[]`: every finding needs a non-empty points array; each point needs a string `assertion` and a valid `location` (do not put precondition/impact at the top level)"
-    else "valid" end';;
-  stances)
-    defs='
-    def valid_location:
-      (type == "string" and length > 0) or (type == "array" and length > 0 and (map(type == "string" and length > 0) | all));
-    def valid_point:
-      type == "object" and
-      (.assertion | type == "string") and
-      (has("location") and (.location | valid_location)) and
-      ((has("precondition") | not) or (.precondition | type == "string")) and
-      ((has("impact") | not) or (.impact | type == "string"));
-    def ok_object: type == "object";
-    def ok_id:     (.id | type == "string");
-    def ok_stance: (.stance | type == "string") and (.stance | test("^(support|support_with_revision|reject)$"));'
-    valid="$defs"'
-    select(ok_object and ok_id and ok_stance) |
-    (if has("revision") and (.revision | type == "object") then
-      .revision |= (
-        (if has("category") and (.category | type == "string" and IN("security", "correctness", "performance", "maintainability", "style") | not) then del(.category) else . end) |
-        (if has("severity") and (.severity | type == "string" and IN("critical", "high", "medium", "low", "style") | not) then del(.severity) else . end) |
-        (if has("claim") and (.claim | type == "string" | not) then del(.claim) else . end) |
-        (if has("location") and (.location | valid_location | not) then del(.location) else . end) |
-        with_entries(select(.key | IN("category", "severity", "claim", "location")))
-      ) | (if .revision == {} then del(.revision) else . end)
-    else del(.revision) end) |
-    (if has("new_evidence") then (if (.new_evidence | type == "object") then .new_evidence |= select(valid_point) else del(.new_evidence) end) | (if .new_evidence == null then del(.new_evidence) else . end) else . end) |
-    (if has("evidence") then (if (.evidence | type == "object") then .evidence |= select(valid_point) else del(.evidence) end) | (if .evidence == null then del(.evidence) else . end) else . end)'
-    diag="$defs"'
-    if   (ok_object | not) then "not a JSON object"
-    elif (ok_id     | not) then "missing or non-string field `id`"
-    elif (ok_stance | not) then "missing/invalid `stance` (one of: support, support_with_revision, reject)"
-    else "valid" end';;
-  *)
-    valid='select(type=="object")'
-    diag='if (type=="object") then "valid" else "not a JSON object" end';;
-esac
+def normalize_points(obj):
+    points = obj.get("points", [])
+    if isinstance(points, list):
+        return [p for p in points if valid_point(p)]
+    elif valid_point(points):
+        return [points]
+    return []
 
-emit() { # validated object on stdin -> stdout, optionally tagged for the referee
-  if [ -n "$label" ]; then
-    jq -c --arg s "$label" --argjson n "$1" '. + {_source:$s, fid:($s+"-"+($n|tostring))}'
-  else
-    jq -c .
-  fi
-}
+def ok_points(obj):
+    return len(normalize_points(obj)) > 0
 
-# One item (already JSON-parsed in the whole-block path, raw text in the fallback).
-# Normal mode: emit valid, count drops. Diagnose mode: report each invalid item.
-process_line() {
-  local line="$1" t reason
-  if [ "$diagnose" -eq 1 ]; then
-    item=$((item+1))
-    if ! printf '%s' "$line" | jq -e . >/dev/null 2>&1; then
-      bad=$((bad+1)); printf 'item %d: not valid JSON (syntax error)\n    >>> %s\n' "$item" "$line"
-      return
-    fi
-    reason="$(printf '%s' "$line" | jq -r "$diag" 2>/dev/null || echo 'could not evaluate (unexpected shape)')"
-    if [ "$reason" != "valid" ]; then
-      bad=$((bad+1)); printf 'item %d: %s\n    >>> %s\n' "$item" "$reason" "$line"
-    fi
-    return
-  fi
-  if t="$(printf '%s' "$line" | jq -c -e "$valid" 2>/dev/null)"; then
-    n=$((n+1)); printf '%s' "$t" | emit "$n"
-  else
-    bad=$((bad+1))
-  fi
-}
+def ok_id(obj): return isinstance(obj.get("id"), str)
+def ok_stance(obj): 
+    return isinstance(obj.get("stance"), str) and bool(re.match(r"^(support|support_with_revision|reject)$", obj.get("stance", "")))
 
-n=0; bad=0; item=0
-raw="$("$here/extract_block" "$tag" "$file")"
+def diag_findings(obj):
+    if not ok_object(obj): return "not a JSON object"
+    if not ok_claim(obj): return "missing or non-string field `claim`"
+    if not ok_location(obj): return "missing/invalid `location` (a non-empty \"file:line\" string, or an array of such)"
+    if not ok_category(obj): return "missing/invalid `category` (one of: security, correctness, performance, maintainability, style)"
+    if not ok_severity(obj): return "missing/invalid `severity` (one of: critical, high, medium, low, style)"
+    if not ok_points(obj): return "no valid `points[]`: every finding needs a non-empty points array; each point needs a string `assertion` and a valid `location` (do not put precondition/impact at the top level)"
+    return "valid"
 
-# Empty-but-present is valid and exits 0 (nothing to emit or diagnose).
-if [ -z "${raw//[[:space:]]/}" ]; then
-  exit 0
-fi
+def valid_findings(obj):
+    if ok_object(obj) and ok_claim(obj) and ok_location(obj) and ok_category(obj) and ok_severity(obj):
+        points = normalize_points(obj)
+        if len(points) > 0:
+            obj["points"] = points
+            return True, obj
+    return False, None
 
-parsed_whole=0
-if parsed="$(printf '%s' "$raw" | jq -c 'if type=="array" then .[] else . end' 2>/dev/null)"; then
-  parsed_whole=1
-  while IFS= read -r line; do
-    [ -n "${line//[[:space:]]/}" ] || continue
-    process_line "$line"
-  done <<< "$parsed"
-fi
+def diag_stances(obj):
+    if not ok_object(obj): return "not a JSON object"
+    if not ok_id(obj): return "missing or non-string field `id`"
+    if not ok_stance(obj): return "missing/invalid `stance` (one of: support, support_with_revision, reject)"
+    return "valid"
 
-if [ "$parsed_whole" -eq 0 ]; then
-  # Fall back to line-by-line heuristic if whole-block parsing fails.
-  while IFS= read -r line; do
-    [ -n "${line//[[:space:]]/}" ] || continue
-    process_line "$line"
-  done <<< "$raw"
-fi
+def valid_stances(obj):
+    if not (ok_object(obj) and ok_id(obj) and ok_stance(obj)):
+        return False, None
+    
+    if "revision" in obj:
+        if isinstance(obj["revision"], dict):
+            rev = obj["revision"]
+            new_rev = {}
+            for k in list(rev.keys()):
+                if k not in {"category", "severity", "claim", "location"}:
+                    continue
+                val = rev[k]
+                if k == "category" and not (isinstance(val, str) and val in CATEGORIES):
+                    continue
+                if k == "severity" and not (isinstance(val, str) and val in SEVERITIES):
+                    continue
+                if k == "claim" and not isinstance(val, str):
+                    continue
+                if k == "location" and not valid_location(val):
+                    continue
+                new_rev[k] = val
+            if len(new_rev) == 0:
+                del obj["revision"]
+            else:
+                obj["revision"] = new_rev
+        else:
+            del obj["revision"]
 
-if [ "$diagnose" -eq 1 ]; then
-  echo "parse_block --diagnose '$tag': $item item(s), $bad invalid" >&2
-  [ "$bad" -eq 0 ] && exit 0 || exit 5
-fi
+    if "new_evidence" in obj:
+        if isinstance(obj["new_evidence"], dict) and valid_point(obj["new_evidence"]):
+            pass
+        else:
+            del obj["new_evidence"]
+            
+    if "evidence" in obj:
+        if isinstance(obj["evidence"], dict) and valid_point(obj["evidence"]):
+            pass
+        else:
+            del obj["evidence"]
+            
+    return True, obj
 
-[ "$bad" -eq 0 ] || echo "parse_block: skipped $bad malformed line(s) in '$tag'" >&2
+def diag_default(obj):
+    if ok_object(obj): return "valid"
+    return "not a JSON object"
 
-if [ "$n" -eq 0 ]; then
-  echo "parse_block: block present with non-whitespace content but zero valid objects parsed" >&2
-  exit 5
-fi
+def valid_default(obj):
+    if ok_object(obj):
+        return True, obj
+    return False, None
 
-exit 0
+def get_rules(tag):
+    if tag in ("findings", "new_findings"):
+        return valid_findings, diag_findings
+    elif tag == "stances":
+        return valid_stances, diag_stances
+    else:
+        return valid_default, diag_default
+
+def main():
+    if len(sys.argv) < 2:
+        print("usage: parse_block [--diagnose] <tag> <rawfile> [label]", file=sys.stderr)
+        sys.exit(2)
+
+    args = sys.argv[1:]
+    diagnose = False
+    if args and args[0] == "--diagnose":
+        diagnose = True
+        args = args[1:]
+
+    if len(args) < 2:
+        print("usage: parse_block [--diagnose] <tag> <rawfile> [label]", file=sys.stderr)
+        sys.exit(2)
+
+    tag = args[0]
+    file_path = args[1]
+    label = args[2] if len(args) > 2 else ""
+
+    if not diagnose and label:
+        pass
+    else:
+        label = ""
+
+    if not os.path.isfile(file_path):
+        print(f"parse_block: no such file: {file_path}", file=sys.stderr)
+        sys.exit(1)
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    extract_bin = os.path.join(here, "extract_block")
+
+    # 1. extract_block --present
+    res = subprocess.run([extract_bin, "--present", tag, file_path])
+    if res.returncode != 0:
+        print(f"parse_block: no '{tag}' block in output (seat produced none)", file=sys.stderr)
+        sys.exit(4)
+
+    # 2. Extract inner content
+    res = subprocess.run([extract_bin, tag, file_path], stdout=subprocess.PIPE, text=True, check=True)
+    raw = res.stdout
+
+    # 3. If empty or whitespace-only -> exit 0
+    if not raw.strip():
+        sys.exit(0)
+
+    # 4. Try whole-block JSON decode
+    parsed_whole = False
+    lines_to_process = []
+    
+    decoder = json.JSONDecoder()
+    pos = 0
+    items = []
+    stream_success = True
+    
+    while pos < len(raw):
+        match = re.match(r'\s*', raw[pos:])
+        if match:
+            pos += match.end()
+        if pos == len(raw):
+            break
+        try:
+            obj, idx = decoder.raw_decode(raw[pos:])
+            items.append(obj)
+            pos += idx
+        except json.JSONDecodeError:
+            stream_success = False
+            break
+
+    if stream_success:
+        parsed_whole = True
+        flattened = []
+        for item in items:
+            if isinstance(item, list):
+                flattened.extend(item)
+            else:
+                flattened.append(item)
+        for item in flattened:
+            lines_to_process.append(compact_json(item))
+    else:
+        for line in raw.split('\n'):
+            if line.strip():
+                lines_to_process.append(line)
+
+    valid_func, diag_func = get_rules(tag)
+    n = 0
+    bad = 0
+    item_count = 0
+
+    for line in lines_to_process:
+        if diagnose:
+            item_count += 1
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                bad += 1
+                print(f"item {item_count}: not valid JSON (syntax error)")
+                print(f"    >>> {line}")
+                continue
+                
+            try:
+                reason = diag_func(obj)
+            except Exception:
+                reason = "could not evaluate (unexpected shape)"
+                
+            if reason != "valid":
+                bad += 1
+                print(f"item {item_count}: {reason}")
+                print(f"    >>> {line}")
+            continue
+            
+        # Normal mode
+        try:
+            obj = json.loads(line)
+            is_valid, norm_obj = valid_func(obj)
+            if is_valid:
+                n += 1
+                if label:
+                    norm_obj["_source"] = label
+                    norm_obj["fid"] = f"{label}-{n}"
+                print(compact_json(norm_obj))
+            else:
+                bad += 1
+        except json.JSONDecodeError:
+            bad += 1
+            
+    if diagnose:
+        print(f"parse_block --diagnose '{tag}': {item_count} item(s), {bad} invalid", file=sys.stderr)
+        if bad == 0:
+            sys.exit(0)
+        else:
+            sys.exit(5)
+            
+    if bad > 0:
+        print(f"parse_block: skipped {bad} malformed line(s) in '{tag}'", file=sys.stderr)
+        
+    if n == 0:
+        print("parse_block: block present with non-whitespace content but zero valid objects parsed", file=sys.stderr)
+        sys.exit(5)
+        
+    sys.exit(0)
+
+if __name__ == "__main__":
+    main()
