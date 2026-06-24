@@ -242,7 +242,9 @@ Beyond its state, each issue record also carries three boolean **flags**, two **
 
 The referee never hand-rolls flags, writes, index math, or parsing. It calls wrappers in
 `${CLAUDE_PLUGIN_ROOT}/scripts/`, so those operations are byte-exact and can't be fat-fingered.
-Static prompt templates live in `${CLAUDE_PLUGIN_ROOT}/prompts/`.
+Static prompt templates live in `${CLAUDE_PLUGIN_ROOT}/prompts/` (`blind_pass.tmpl`,
+`debate.tmpl`, and `repair.tmpl` — the last re-asks a seat to fix only the JSON shape of a
+malformed block, using its own prior output plus `parse_block --diagnose` output).
 
 | Script | Job |
 |--------|-----|
@@ -252,14 +254,16 @@ Static prompt templates live in `${CLAUDE_PLUGIN_ROOT}/prompts/`.
 | `assemble` | Splice scope + diff (or card paths) into a prompt template without an LLM retyping them |
 | `run_codex` | The **only** way to call the Codex seat — pins `--sandbox read-only`, defaults `--profile panel-review` (auto-creates the profile from a shipped default) |
 | `run_agy` | The **only** way to call the Gemini seat — pins the model and the timeout/stdin fixes, and falls back from the primary Gemini model to a faster one if the primary fails or trips agy's internal "waiting for response" timeout |
-| `extract_block` / `parse_block` | Pull a `findings` / `stances` / `new_findings` block → validated JSONL; `parse_block` exit 4 = no block (down seat) vs empty-but-present |
+| `extract_block` / `parse_block` | Pull a `findings` / `stances` / `new_findings` block → validated JSONL; `parse_block` exit 4 = no block (down seat) vs empty-but-present, exit 5 = malformed (block present, zero valid). `parse_block --diagnose` reports *why* each item was rejected (reason + offending line) to drive a one-shot repair |
+| `decide_round` / `decide_degraded_round` | Build normal (≥2 seats) and degraded (0–1 seat) debate payloads. Both update private `evaluated_by` coverage in the same atomic commit; the degraded path only emits terminal unresolved/contested states and eligible `fully_vetted` flags |
+| `merge_payload` | Fold the referee's addendum (synthesized claims, `add_issues`, fold-reopen) into the `decide_round` payload with `commit-sweep`'s per-key semantics (`set_state` replace, `revise` field-merge) — so additions never become a duplicate `set_state`/`revise` that rejects the round |
 | `init_run` / `resume_check` / `cleanup` | Mint a run (marker-last); decide resume/continuable/diverged/stale/ambiguous; tear down after the verdict |
 | `inspect_run` | Pure, read-only per-run inspector for `panel-review:status` — never repairs, never writes |
 | `discard` | The fault-tolerant traversal behind `panel-review:discard` — removes every session for the workdir |
 | `set_limits` | Writes a `--issue-rounds`/`--max-rounds` override back into a run's manifest, for `resume`/`continue` |
-| `index` | The **only** writer of the canonical issue index (`/tmp/<id>/index.json`) — state, flags, counters, and the idempotent `commit-sweep` that applies a whole debate round atomically |
+| `index` | The **only** writer of the canonical issue index (`/tmp/<id>/index.json`) — state, flags, private coverage, counters, `gate-status`, and the idempotent `commit-sweep` that applies a whole debate round atomically |
 | `project_card` / `regen_cards` | Render issue records → blind cards (no origins, no tally); rebuild all cards from the index on resume |
-| `sweep` | Checkpointed debate sweeps — counters advance **only** on a committed sweep, so a crash never double-counts |
+| `sweep` | Checkpointed debate sweeps — owns batch plans, parse/ID validation, checkpoint retention, dropped-seat cleanup, and resume plans; counters advance **only** on a committed sweep |
 
 ---
 
@@ -276,7 +280,7 @@ derived, regenerable cache; state is never inferred from them.
 
 | Path | Holds |
 |------|-------|
-| `.panel-review/<ID>/issue-<id>.md` | the blind cards (kept in the repo so Codex's read-only sandbox can read them; git-excluded and kept out of every scope so they never contaminate an `--uncommitted` review) |
+| `.panel-review/<ID>/issue-<id>.md` | the blind cards (kept in the repo so any seat running in a constrained/sandboxed workspace — e.g. Codex's read-only sandbox — can still read them; git-excluded and kept out of every scope so they never contaminate an `--uncommitted` review) |
 | `.panel-review/<ID>/` (the dir) | the per-worktree marker / lock — its name carries `<ID>` |
 | `/tmp/<ID>/manifest.json` | scope, limits, diff hash, phase |
 | `/tmp/<ID>/index.json` | the **issue index** — the authoritative record of every issue: its state (e.g. `accepted`), flags, counters, and evidence (all defined under [How an issue moves](#how-an-issue-moves-transitions)); cards are rendered from it and the verdict is read off it (referee only) |

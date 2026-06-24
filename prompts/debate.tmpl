@@ -21,15 +21,23 @@ rules above. "(none …)" means none was given.
 Emit ONE fenced block tagged `stances`, JSONL, exactly one stance per card:
 
 ```stances
-{"id":"<issue id from the card>","stance":"support|support_with_revision|reject","rationale":"<one sentence>","revision":{"severity":"<opt>","location":"<opt>","claim":"<opt>"},"new_evidence":{"location":"file:line | analysis","assertion":"<opt one fact>","precondition":"<opt>","impact":"<opt>"}}
+{"id":"<issue id from the card>","stance":"support|support_with_revision|reject","rationale":"<one sentence>","revision":{"severity":"<opt>","location":"<opt>","category":"<opt>","claim":"<opt>"},"new_evidence":{"location":"file:line | analysis","assertion":"<opt one fact>","precondition":"<opt>","impact":"<opt>"}}
 ```
 
 - support — the evidence establishes the bug as stated.
-- support_with_revision — the bug is real, but severity/location/claim needs adjustment; put
-  the corrected value(s) in `revision` (omit fields you don't change).
+- support_with_revision — the bug is real, but severity/location/category/claim needs adjustment;
+  put the corrected value(s) in `revision` (omit fields you don't change).
 - reject — the evidence does not establish the bug; your `rationale` is the counter-evidence.
 
 `new_evidence` is optional (a single new located fact for THIS issue); omit it if none.
+
+**Blindness — write only technical facts.** Every `new_evidence`, plus the `rationale` from a `reject`
+or `support_with_revision` stance, is carried VERBATIM onto the cards the other reviewers read next
+round. State only what the code does and why. NEVER
+mention the other reviewers, how many reviewers there are, or whether anyone agrees or disagrees —
+no "all three", "both", "the other reviewer", "we agree", "consensus", "unanimous", "majority", no
+model/tool names (Codex, GPT, Gemini, Claude). A stance whose text references the panel or its tally
+is rejected and re-requested, so keep every word about the code, not the review.
 
 If, while re-examining, you notice a genuinely NEW issue (not a variation of an existing
 card), additionally emit a `new_findings` block in the same `findings` schema as Round 0. A

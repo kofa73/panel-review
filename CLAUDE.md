@@ -15,7 +15,10 @@ contracts that future readers and the referee protocol depend on.
 
 ## Install / "build" / run
 
-There is no build, lint, or test framework. The scripts are bash; the skills/agents are Markdown.
+There is no build or lint framework. The scripts are bash; the skills/agents are Markdown. There
+**is** a regression suite: `./tests/run_tests.sh` (plain bash + `jq`, self-contained fixtures under
+`tests/fixtures/`) — run it after changing `parse_block`, `decide_round`, `merge_payload`, `index`'s
+`commit-sweep` validator, or the SKILL debate loop.
 
 - **Install (the only "build" step):** `./install.sh` copies the whole tree into `~/.claude/skills/panel-review`
   (override target with `CLAUDE_DIR=/path ./install.sh`). It removes the old pre-plugin layout, sets
@@ -29,6 +32,9 @@ There is no build, lint, or test framework. The scripts are bash; the skills/age
 - **Smoke-testing a script change:** run the wrapper directly, e.g.
   `scripts/preflight`, `scripts/resolve_diff <scope>`, `scripts/diff_hash < file`,
   `scripts/inspect_run --id <ID> --workdir "$PWD"`. They are standalone and require `jq` + `git`.
+- **Regression tests:** `./tests/run_tests.sh` (`VERBOSE=1` to list each PASS). Covers the debate
+  pipeline (`parse_block` incl. `--diagnose`, `decide_round` through real `commit-sweep`,
+  `merge_payload`, the empty-stances guard). Mints throwaway `/tmp/pr-test-*` ids and cleans up.
 
 There is no single-test command because there are no automated tests; verify by exercising the
 scripts and by running an actual review.
@@ -50,7 +56,7 @@ Four participants, strict role separation:
   blindness). Codex and Gemini seats are external CLIs.
 - **Wrapper scripts** (`scripts/`) — the referee never hand-rolls flags, writes, index math, or
   parsing; it calls these so operations are byte-exact. Prompt templates are in `prompts/`
-  (`blind_pass.tmpl`, `debate.tmpl`); the Codex profile default is `assets/default-panel-review.config.toml`.
+  (`blind_pass.tmpl`, `debate.tmpl`, `repair.tmpl`); the Codex profile default is `assets/default-panel-review.config.toml`.
 
 **Issue lifecycle** (see README "How an issue moves"): each seat takes a `support` /
 `support_with_revision` / `reject` **stance**; an issue is `open` → `accepted` / `rejected` when all
@@ -62,6 +68,22 @@ round limit. Unanimity-or-human: no majority vote, no referee fact-checking insi
 - `index` — the **only** writer of `/tmp/<ID>/index.json`. State/flag/counter math lives here;
   `commit-sweep` applies a whole debate round atomically and idempotently (guarded by
   `committed_rounds`). Never hand-write `index.json`.
+- `decide_round` / `decide_degraded_round` — the **only** builders of normal and degraded debate
+  `commit-sweep` payloads. They apply the
+  Transitions table mechanically (stance counting, `bump`, `peer_reviewed`/`fully_vetted`, enum
+  convergence, forced-terminal). The normal path carries evidence verbatim with no seat identity/tally
+  (blind); the degraded path does not promote evidence. They do **no** judgment: prose `claim`
+  revisions and new-finding clustering come back as "advice"
+  for the referee to resolve. Don't hand-build the payload; the referee only adds `add_issues` +
+  synthesized claims to it. It **validates** its input (exactly one stance per engaged-seat ×
+  open-issue; no unknown/duplicate `_source`) and a plain `support` is read as endorsing the issue
+  *as stated* (an enum change is adopted only on full effective-value agreement).
+- `sweep` — owns batch plans, parsing/expected-ID checkpoint admission, dropped-seat cleanup, and
+  recovery plans. Do not reconstruct batch eligibility from raw files.
+- `merge_payload` — folds the referee's addendum (synthesized claims, `add_issues`, fold-reopen)
+  into the `decide_round` payload with the per-key semantics `commit-sweep` needs (`set_state`
+  replace, `revise` field-merge, `set_flag` dedup). The referee must **never append** a second
+  `set_state`/`revise` for one id — that makes `commit-sweep` reject the round; merge through here.
 - `project_card` / `regen_cards` — the **only** way to render issue records → blind cards.
 - `run_codex` / `run_agy` — the **only** way to call the Codex / Gemini seats (they pin the
   sandbox/model/profile). Never call `codex` or `agy` raw.
@@ -75,8 +97,9 @@ round limit. Unanimity-or-human: no majority vote, no referee fact-checking insi
 ### Persistence model
 
 `/tmp/<ID>/` is the **single source of truth** (manifest, index, sweeps, raw seat output, origins,
-audit); cards under `<workdir>/.panel-review/<ID>/` are a regenerable cache (kept in the repo so
-Codex's read-only sandbox can read them; git-excluded). The per-workdir **marker** is the
+audit); cards under `<workdir>/.panel-review/<ID>/` are a regenerable cache (kept in the repo so any
+seat running in a constrained/sandboxed workspace — e.g. Codex's read-only sandbox — can read them;
+git-excluded). The per-workdir **marker** is the
 `.panel-review/<ID>/` dir itself. `init_run` writes `/tmp` state first and the marker **last**, so a
 marker always implies valid state. The verdict is also saved to `/tmp/<ID>.md` — a **sibling** of
 `/tmp/<ID>/`, deliberately outside it so cleanup/discard never delete it.

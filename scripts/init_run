@@ -66,7 +66,7 @@ jq -n --arg id "$id" --arg wd "$workdir" --arg scope "$scope" \
   diff_hash:$dh, instructions:$instr, phase:"round0", state_version:1, created:$created
 }' | panel_atomic_write "/tmp/$id/manifest.json"
 
-printf '{"issues":[],"round":0,"phase":"round0","committed_rounds":[]}\n' | panel_atomic_write "/tmp/$id/index.json"
+printf '{"issues":[],"round":0,"phase":"round0","committed_rounds":[],"evaluated_by":{}}\n' | panel_atomic_write "/tmp/$id/index.json"
 
 # Marker LAST: canonical /tmp state is now durably in place. Serialize marker
 # publication per worktree so concurrent fresh starts converge on one run.

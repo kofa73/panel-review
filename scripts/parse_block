@@ -5,23 +5,38 @@
 # doesn't count). Replaces extract_findings; used for findings / new_findings /
 # stances.
 #
-# Usage: parse_block <tag> <rawfile> [source-label]
+# Usage:
+#   parse_block <tag> <rawfile> [source-label]     # normal: emit valid objects
+#   parse_block --diagnose <tag> <rawfile>         # explain WHY each item is invalid
+#
 #   With a source-label, each object is tagged for the referee's PRIVATE record:
 #     _source = label,  fid = "<label>-<N>"  (stable handle; never shown on a card)
 #
+#   --diagnose does NOT emit objects. For every item that the normal mode would
+#   drop it prints one stdout line naming the first failed constraint plus the
+#   offending source, so a repair prompt can tell the seat exactly what to fix.
+#   The validator (`valid`) and the diagnoser (`diag`) are built from the SAME
+#   predicate `def`s per tag, so the explanation can never disagree with the gate.
+#
 # Exit codes:
-#   0  block PRESENT (either empty/whitespace-only OR >=1 valid objects emitted).
+#   0  block PRESENT (normal: empty/whitespace-only OR >=1 valid objects emitted;
+#                     diagnose: every item valid / nothing to repair).
 #   4  block ABSENT (the seat emitted no ```<tag> fence at all) — a malfunctioned
 #      /refusing seat, NOT "found nothing". Lets the loop tell the two apart.
-#   5  block PRESENT with non-whitespace content but ZERO valid objects parsed.
+#   5  block PRESENT with non-whitespace content but ZERO valid objects parsed
+#      (normal), or >=1 invalid item (diagnose).
 #   1  missing input file.  127  jq not found.  2  usage.
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 command -v jq >/dev/null 2>&1 || { echo "parse_block: jq not found" >&2; exit 127; }
 
-[ "$#" -ge 2 ] || { echo "usage: parse_block <tag> <rawfile> [label]" >&2; exit 2; }
+diagnose=0
+if [ "${1-}" = "--diagnose" ]; then diagnose=1; shift; fi
+
+[ "$#" -ge 2 ] || { echo "usage: parse_block [--diagnose] <tag> <rawfile> [label]" >&2; exit 2; }
 tag="$1"; file="$2"; label="${3-}"
 [ -f "$file" ] || { echo "parse_block: no such file: $file" >&2; exit 1; }
+[ "$diagnose" -eq 0 ] || label=""   # --diagnose never emits objects, so no labelling
 
 # Distinguish "no block" from "empty block" up front.
 if ! "$here/extract_block" --present "$tag" "$file"; then
@@ -29,11 +44,12 @@ if ! "$here/extract_block" --present "$tag" "$file"; then
   exit 4
 fi
 
-# Per-tag schema: an object must carry the tag's REQUIRED fields to count, so a
-# truncated/garbled line ("just an object") is dropped rather than mistaken for a
-# real finding/stance. (Per-card stance cardinality is the referee's job, not ours.)
+# Per-tag schema. `defs` holds the shared predicates; `valid` is the gate (emits
+# the cleaned object), `diag` returns "valid" or the first failure reason. Both
+# derive from `defs` so the diagnostic stays byte-faithful to what the gate drops.
 case "$tag" in
-  findings|new_findings) valid='
+  findings|new_findings)
+    defs='
     def valid_location:
       (type == "string" and length > 0) or (type == "array" and length > 0 and (map(type == "string" and length > 0) | all));
     def valid_point:
@@ -42,13 +58,29 @@ case "$tag" in
       (has("location") and (.location | valid_location)) and
       ((has("precondition") | not) or (.precondition | type == "string")) and
       ((has("impact") | not) or (.impact | type == "string"));
-    select(type == "object" and (.claim|type=="string") and (has("location") and (.location|valid_location))) |
-    select(.category | type == "string" and IN("security", "correctness", "performance", "maintainability", "style")) |
-    select(.severity | type == "string" and IN("critical", "high", "medium", "low", "style")) |
-    .points = (if has("points") then .points else [] end) |
-    .points |= (if type=="array" then map(select(valid_point)) elif valid_point then [.] else [] end) |
-    select(.points | length > 0)';;
-  stances) valid='
+    def normalized_points:
+      (if has("points") then .points else [] end)
+      | (if type=="array" then map(select(valid_point)) elif valid_point then [.] else [] end);
+    def ok_object:   type == "object";
+    def ok_claim:    (.claim | type == "string");
+    def ok_location: has("location") and (.location | valid_location);
+    def ok_category: (.category | type == "string") and (.category | IN("security", "correctness", "performance", "maintainability", "style"));
+    def ok_severity: (.severity | type == "string") and (.severity | IN("critical", "high", "medium", "low", "style"));
+    def ok_points:   (normalized_points | length > 0);'
+    valid="$defs"'
+    select(ok_object and ok_claim and ok_location and ok_category and ok_severity)
+    | .points = normalized_points
+    | select(.points | length > 0)'
+    diag="$defs"'
+    if   (ok_object   | not) then "not a JSON object"
+    elif (ok_claim    | not) then "missing or non-string field `claim`"
+    elif (ok_location | not) then "missing/invalid `location` (a non-empty \"file:line\" string, or an array of such)"
+    elif (ok_category | not) then "missing/invalid `category` (one of: security, correctness, performance, maintainability, style)"
+    elif (ok_severity | not) then "missing/invalid `severity` (one of: critical, high, medium, low, style)"
+    elif (ok_points   | not) then "no valid `points[]`: every finding needs a non-empty points array; each point needs a string `assertion` and a valid `location` (do not put precondition/impact at the top level)"
+    else "valid" end';;
+  stances)
+    defs='
     def valid_location:
       (type == "string" and length > 0) or (type == "array" and length > 0 and (map(type == "string" and length > 0) | all));
     def valid_point:
@@ -57,7 +89,11 @@ case "$tag" in
       (has("location") and (.location | valid_location)) and
       ((has("precondition") | not) or (.precondition | type == "string")) and
       ((has("impact") | not) or (.impact | type == "string"));
-    select(type=="object" and (.id|type=="string") and ((.stance|type=="string") and (.stance|test("^(support|support_with_revision|reject)$")))) |
+    def ok_object: type == "object";
+    def ok_id:     (.id | type == "string");
+    def ok_stance: (.stance | type == "string") and (.stance | test("^(support|support_with_revision|reject)$"));'
+    valid="$defs"'
+    select(ok_object and ok_id and ok_stance) |
     (if has("revision") and (.revision | type == "object") then
       .revision |= (
         (if has("category") and (.category | type == "string" and IN("security", "correctness", "performance", "maintainability", "style") | not) then del(.category) else . end) |
@@ -68,8 +104,15 @@ case "$tag" in
       ) | (if .revision == {} then del(.revision) else . end)
     else del(.revision) end) |
     (if has("new_evidence") then (if (.new_evidence | type == "object") then .new_evidence |= select(valid_point) else del(.new_evidence) end) | (if .new_evidence == null then del(.new_evidence) else . end) else . end) |
-    (if has("evidence") then (if (.evidence | type == "object") then .evidence |= select(valid_point) else del(.evidence) end) | (if .evidence == null then del(.evidence) else . end) else . end)';;
-  *)                     valid='select(type=="object")';;
+    (if has("evidence") then (if (.evidence | type == "object") then .evidence |= select(valid_point) else del(.evidence) end) | (if .evidence == null then del(.evidence) else . end) else . end)'
+    diag="$defs"'
+    if   (ok_object | not) then "not a JSON object"
+    elif (ok_id     | not) then "missing or non-string field `id`"
+    elif (ok_stance | not) then "missing/invalid `stance` (one of: support, support_with_revision, reject)"
+    else "valid" end';;
+  *)
+    valid='select(type=="object")'
+    diag='if (type=="object") then "valid" else "not a JSON object" end';;
 esac
 
 emit() { # validated object on stdin -> stdout, optionally tagged for the referee
@@ -80,10 +123,33 @@ emit() { # validated object on stdin -> stdout, optionally tagged for the refere
   fi
 }
 
-n=0; bad=0
+# One item (already JSON-parsed in the whole-block path, raw text in the fallback).
+# Normal mode: emit valid, count drops. Diagnose mode: report each invalid item.
+process_line() {
+  local line="$1" t reason
+  if [ "$diagnose" -eq 1 ]; then
+    item=$((item+1))
+    if ! printf '%s' "$line" | jq -e . >/dev/null 2>&1; then
+      bad=$((bad+1)); printf 'item %d: not valid JSON (syntax error)\n    >>> %s\n' "$item" "$line"
+      return
+    fi
+    reason="$(printf '%s' "$line" | jq -r "$diag" 2>/dev/null || echo 'could not evaluate (unexpected shape)')"
+    if [ "$reason" != "valid" ]; then
+      bad=$((bad+1)); printf 'item %d: %s\n    >>> %s\n' "$item" "$reason" "$line"
+    fi
+    return
+  fi
+  if t="$(printf '%s' "$line" | jq -c -e "$valid" 2>/dev/null)"; then
+    n=$((n+1)); printf '%s' "$t" | emit "$n"
+  else
+    bad=$((bad+1))
+  fi
+}
+
+n=0; bad=0; item=0
 raw="$("$here/extract_block" "$tag" "$file")"
 
-# Empty-but-present is valid and exits 0.
+# Empty-but-present is valid and exits 0 (nothing to emit or diagnose).
 if [ -z "${raw//[[:space:]]/}" ]; then
   exit 0
 fi
@@ -93,11 +159,7 @@ if parsed="$(printf '%s' "$raw" | jq -c 'if type=="array" then .[] else . end' 2
   parsed_whole=1
   while IFS= read -r line; do
     [ -n "${line//[[:space:]]/}" ] || continue
-    if t="$(printf '%s' "$line" | jq -c -e "$valid" 2>/dev/null)"; then
-      n=$((n+1)); printf '%s' "$t" | emit "$n"
-    else
-      bad=$((bad+1))
-    fi
+    process_line "$line"
   done <<< "$parsed"
 fi
 
@@ -105,12 +167,13 @@ if [ "$parsed_whole" -eq 0 ]; then
   # Fall back to line-by-line heuristic if whole-block parsing fails.
   while IFS= read -r line; do
     [ -n "${line//[[:space:]]/}" ] || continue
-    if t="$(printf '%s' "$line" | jq -c -e "$valid" 2>/dev/null)"; then
-      n=$((n+1)); printf '%s' "$t" | emit "$n"
-    else
-      bad=$((bad+1))
-    fi
+    process_line "$line"
   done <<< "$raw"
+fi
+
+if [ "$diagnose" -eq 1 ]; then
+  echo "parse_block --diagnose '$tag': $item item(s), $bad invalid" >&2
+  [ "$bad" -eq 0 ] && exit 0 || exit 5
 fi
 
 [ "$bad" -eq 0 ] || echo "parse_block: skipped $bad malformed line(s) in '$tag'" >&2

@@ -1,0 +1,4 @@
+```findings
+```
+
+No material defects found. The CPU and OpenCL tiling wrappers restore `processed_maximum` before every tile, so colorin’s remaining multiplier is not cumulative; temperature’s assignment is idempotent in the enforced raw pipeline order. The `opposed.c` change only omits ROI metadata from a debug call; NULL ROIs are supported.

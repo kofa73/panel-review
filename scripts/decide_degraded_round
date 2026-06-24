@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# decide_degraded_round — terminal, non-voting decision for a round with zero
+# or one complete seat. It records coverage but never bumps, revises, accepts,
+# rejects, or promotes seat text: a lone stance cannot establish existence.
+set -euo pipefail
+here="$(cd "$(dirname "$0")" && pwd)"; . "$here/_panel_common.sh"
+command -v jq >/dev/null 2>&1 || { echo "decide_degraded_round: jq not found" >&2; exit 127; }
+
+id=""; round=""; configured=""; engaged=""; stances=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --id) id="${2-}"; shift 2 ;;
+    --round) round="${2-}"; shift 2 ;;
+    --configured) configured="${2-}"; shift 2 ;;
+    --engaged) engaged="${2-}"; shift 2 ;;
+    --stances) stances="${2-}"; shift 2 ;;
+    *) echo "decide_degraded_round: unknown arg: $1" >&2; exit 2 ;;
+  esac
+done
+panel_require_id "$id"
+case "$round" in ''|*[!0-9]*) echo "decide_degraded_round: --round must be an integer" >&2; exit 2;; esac
+[ -n "$stances" ] && [ -f "$stances" ] || { echo "decide_degraded_round: --stances must name a file" >&2; exit 1; }
+idx="/tmp/$id/index.json"; [ -f "$idx" ] || { echo "decide_degraded_round: no index for $id" >&2; exit 1; }
+
+cfg_json="$(printf '%s\n' $configured | jq -R . | jq -cs 'map(select(length>0))')"
+eng_json="$(printf '%s\n' $engaged | jq -R . | jq -cs 'map(select(length>0))')"
+if [ "$(printf '%s' "$eng_json" | jq 'length')" -gt 1 ]; then
+  echo "decide_degraded_round: requires zero or one engaged seat" >&2; exit 2
+fi
+
+errs="$(jq -nr --argjson idx "$(cat "$idx")" --slurpfile st "$stances" --argjson configured "$cfg_json" --argjson engaged "$eng_json" '
+  [$idx.issues[] | select(.state=="open") | .id] as $open |
+  ([ $engaged[] | select(. as $s | ($configured | index($s)) == null) | "engaged seat not in configured panel: \(.)" ]
+   + [ $st[]._source | select(. as $s | ($engaged | index($s)) == null) | "unknown _source: \(.)" ]
+   + [ $engaged[] as $seat | $open[] as $issue
+       | ([ $st[] | select(._source==$seat and .id==$issue) ] | length) as $n
+       | select($n != 1) | "expected exactly 1 stance for seat=\($seat) issue=\($issue), got \($n)" ]
+   + (if ($engaged|length)==0 and ($st|length)>0 then ["zero-seat round has stances"] else [] end)) | .[]')"
+if [ -n "$errs" ]; then
+  { echo "decide_degraded_round: stance-integrity violation(s):"; printf '%s\n' "$errs" | sed 's/^/  - /'; } >&2
+  exit 3
+fi
+
+jq -n --argjson idx "$(cat "$idx")" --argjson configured "$cfg_json" --argjson engaged "$eng_json" '
+  ($engaged[0] // null) as $seat |
+  [ $idx.issues[] | select(.state=="open") | . as $issue
+    | (($idx.evaluated_by[$issue.id] // []) + (if $seat == null then [] else [$seat] end) | unique) as $covered_by
+    | {id:$issue.id,
+       state:(if $seat != null and $issue.peer_reviewed then "contested" else "unresolved" end),
+       fully_vetted:($seat != null and $issue.peer_reviewed and (($configured - $covered_by)|length==0)),
+       covered_by:$covered_by} ] as $D |
+  {set_state:[$D[] | {id,state}],
+   set_flag:[$D[] | select(.fully_vetted) | {id,flag:"fully_vetted",value:true}],
+   evaluated_by:($D | map({key:.id,value:.covered_by}) | from_entries)}
+  | with_entries(select(.value|length>0))'

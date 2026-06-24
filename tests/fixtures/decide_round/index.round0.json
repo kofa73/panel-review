@@ -1,0 +1,169 @@
+{
+  "issues": [
+    {
+      "id": "i1",
+      "claim": "Neither the original code nor the proposed Lua fix removes users from the set, so neither limits CONCURRENT users; both cap cumulative DISTINCT users per TTL window. The review misses this fundamental flaw.",
+      "location": "analysis (whole filter + recommended Lua)",
+      "category": "correctness",
+      "severity": "high",
+      "evidence_pro": [
+        {
+          "location": "analysis",
+          "assertion": "The original path adds an ID, checks SCARD, and calls chain.filter without any SREM or per-user reference-count decrement.",
+          "impact": "A completed request occupies a slot until the fixed TTL expires."
+        },
+        {
+          "location": "analysis",
+          "assertion": "The proposed script only reads membership/cardinality, adds IDs, and sets expiry; it has no release operation.",
+          "impact": "The replacement preserves the false 429 behavior for users that are no longer concurrent."
+        },
+        {
+          "location": "code: setOps.add only",
+          "assertion": "The filter only ever runs SADD; there is no SREM on response completion, disconnect, or session end, so members accumulate until the whole set's TTL expires.",
+          "impact": "Once MAX_USERS distinct users appear within one TTL window the gate closes for everyone for the rest of the window regardless of how many are still active; the name 'ConcurrentUserLimiter' is wrong."
+        },
+        {
+          "location": "review: recommended solution",
+          "assertion": "The Lua script reproduces the same add-only model (SISMEMBER/SCARD/SADD/EXPIRE, no SREM), so it does not fix the core semantic flaw it implicitly promises to solve.",
+          "impact": "The 'fix' is a fixed-window distinct-user cap, not a concurrency limiter."
+        }
+      ],
+      "evidence_contra": [],
+      "peer_reviewed": false,
+      "fully_vetted": false,
+      "detail_contested": false,
+      "state": "open",
+      "rounds_debated": 0,
+      "card_rev": 0
+    },
+    {
+      "id": "i2",
+      "claim": "The proposed Lua script sets EXPIRE only when current_size==0, so a pre-existing non-empty set left without a TTL (e.g. leaked by the old buggy code) is never given one; it does not self-heal the leak the review claims to fix.",
+      "location": "analysis (recommended Lua: EXPIRE only when current_size==0)",
+      "category": "correctness",
+      "severity": "medium",
+      "evidence_pro": [
+        {
+          "location": "analysis",
+          "assertion": "The original SADD and EXPIRE are separate operations, so a failure after SADD can leave a nonexpiring nonempty set."
+        },
+        {
+          "location": "analysis",
+          "assertion": "The script calls EXPIRE only when current_size == 0, so it will not expire a surviving nonempty set with no TTL.",
+          "impact": "Deploying the replacement can leave an existing leaked set permanent, retaining IDs and potentially preserving a lockout."
+        },
+        {
+          "location": "review: 'if current_size == 0 then redis.call(EXPIRE...) end'",
+          "assertion": "TTL is applied only at set creation; for any pre-existing non-empty set without a TTL, no code path ever calls EXPIRE again.",
+          "precondition": "A set already populated without an expiration (migration from the buggy version, or a historical partial failure).",
+          "impact": "Permanent memory leak persists; the script does not defensively re-apply TTL when missing."
+        },
+        {
+          "location": "Lua script line: `if current_size == 0 then redis.call('EXPIRE', set_key, ttl_seconds) end`",
+          "assertion": "The script sets an expiration only if the set size was 0 prior to adding the user.",
+          "precondition": "When encountering a set that was leaked by the previous code (size > 0 but missing a TTL).",
+          "impact": "The set will never receive a TTL, and the memory leak/lockout will persist indefinitely. Changing the condition to `if redis.call('PTTL', set_key) == -1` would safely self-heal these orphaned sets."
+        }
+      ],
+      "evidence_contra": [],
+      "peer_reviewed": true,
+      "fully_vetted": true,
+      "detail_contested": true,
+      "state": "accepted",
+      "rounds_debated": 0,
+      "card_rev": 0
+    },
+    {
+      "id": "i3",
+      "claim": "In the original code TTL_KEY can outlive SET_KEY (SET_KEY expires before the equal-TTL TTL_KEY), so a later SADD that recreates SET_KEY finds the marker present and skips expire(), leaving the recreated set without expiration.",
+      "location": "analysis (original: expire(SET_KEY) then set(TTL_KEY))",
+      "category": "correctness",
+      "severity": "medium",
+      "evidence_pro": [
+        {
+          "location": "analysis",
+          "assertion": "The code expires SET_KEY before setting TTL_KEY with the same duration, so TTL_KEY's expiration is later."
+        },
+        {
+          "location": "analysis",
+          "assertion": "If SET_KEY expires during that interval, a new SADD followed by hasKey(TTL_KEY) == true skips expire(SET_KEY).",
+          "impact": "If no later new user triggers initialization after TTL_KEY expires, the recreated set remains persistent."
+        }
+      ],
+      "evidence_contra": [],
+      "peer_reviewed": false,
+      "fully_vetted": false,
+      "detail_contested": false,
+      "state": "open",
+      "rounds_debated": 0,
+      "card_rev": 0
+    },
+    {
+      "id": "i4",
+      "claim": "The proposed Lua script returns 1 (allow) for any existing member before any size check, an undocumented behavior change versus the original (which rejected all requests when size>MAX) that the review does not flag.",
+      "location": "analysis (recommended Lua: SISMEMBER then return 1 before SCARD)",
+      "category": "correctness",
+      "severity": "medium",
+      "evidence_pro": [
+        {
+          "location": "review: 'if is_member == 1 then return 1 end'",
+          "assertion": "The Lua returns 1 (allow) for any current member before any size check, so a returning user is never rejected.",
+          "precondition": "Set size already exceeds max_users (e.g. populated by a prior buggy deployment).",
+          "impact": "Original code rejected ALL requests (including returning users) when size>MAX; the Lua admits returning users. This is arguably more correct, but it is an undocumented behavior change the review presents as a faithful fix."
+        }
+      ],
+      "evidence_contra": [],
+      "peer_reviewed": false,
+      "fully_vetted": false,
+      "detail_contested": false,
+      "state": "open",
+      "rounds_debated": 0,
+      "card_rev": 0
+    },
+    {
+      "id": "i5",
+      "claim": "The review's 'reduce from five to one' round-trip claim overstates the typical cost: five operations occur only for the first-ever user; common paths use two or three.",
+      "location": "analysis (review: Recommended Solution)",
+      "category": "performance",
+      "severity": "low",
+      "evidence_pro": [
+        {
+          "location": "code: SADD/hasKey/expire/SET/SCARD",
+          "assertion": "expire(SET_KEY) and set(TTL_KEY) run only inside the added==1 && !ttlMarkerExists branch; a returning user does SADD+SCARD (2 ops), a new user when the TTL marker already exists does SADD+hasKey+SCARD (3 ops).",
+          "impact": "Five round-trips is the worst case (first request only), not the steady-state cost the phrasing implies."
+        }
+      ],
+      "evidence_contra": [],
+      "peer_reviewed": false,
+      "fully_vetted": false,
+      "detail_contested": false,
+      "state": "open",
+      "rounds_debated": 0,
+      "card_rev": 0
+    },
+    {
+      "id": "i6",
+      "claim": "The review's #3 'Missing TTL (memory leak)' is overstated as permanent: the original code self-heals on the next NEW distinct user (hasKey(TTL_KEY) then false so expire re-runs); it persists only if all later traffic is from already-present users.",
+      "location": "analysis (review: section 3; code hasKey(TTL_KEY) branch)",
+      "category": "correctness",
+      "severity": "low",
+      "evidence_pro": [
+        {
+          "location": "code: hasKey(TTL_KEY) branch",
+          "assertion": "If a crash leaves SET_KEY without a TTL, TTL_KEY was also never written, so the next distinct user (added==1) finds ttlMarkerExists=false and re-issues expire(SET_KEY,ttl).",
+          "impact": "The leak is repaired when any new distinct user arrives; it persists only if all subsequent traffic is from already-present users. The review presents it as an unconditional, lasting leak."
+        }
+      ],
+      "evidence_contra": [],
+      "peer_reviewed": false,
+      "fully_vetted": false,
+      "detail_contested": false,
+      "state": "open",
+      "rounds_debated": 0,
+      "card_rev": 0
+    }
+  ],
+  "round": 0,
+  "phase": "debate",
+  "committed_rounds": []
+}

@@ -8,6 +8,11 @@
 # Subcommands:
 #   sweep begin  <ID> <round> <epoch>             create the sweep dir
 #   sweep record <ID> <round> <epoch> <seat> <file> [batch] cache one seat/batch's raw output
+#   sweep plan <ID> <round> <epoch> <plan.json>   register expected seat/batch inputs
+#   sweep ingest-batch <ID> <round> <epoch> <seat> <batch> <expected.ids> <raw>
+#                                                parse and checkpoint one complete batch
+#   sweep drop-seat <ID> <round> <seat>           discard a seat's cached batch outputs
+#   sweep resume-plan <ID>                         print the next round's reusable/missing batches
 #   sweep has    <ID> <round> <seat> [batch]        exit 0 if that seat/batch already recorded
 #   sweep commit <ID> <round> <epoch>             commit the sweep; bump issue ids on stdin (one per line)
 #   sweep done   <ID> <round>                 exit 0 if the sweep is committed
@@ -22,7 +27,9 @@ here="$(cd "$(dirname "$0")" && pwd)"; . "$here/_panel_common.sh"
 
 cmd="${1-}"; id="${2-}"; panel_require_id "$id"
 round="${3-}"
-case "$round" in ''|*[!0-9]*) echo "sweep: round must be a number" >&2; exit 2;; esac
+if [ "$cmd" != "resume-plan" ]; then
+  case "$round" in ''|*[!0-9]*) echo "sweep: round must be a number" >&2; exit 2;; esac
+fi
 sd="/tmp/$id/sweeps/round-$round"
 
 idx="/tmp/$id/index.json"
@@ -61,6 +68,98 @@ case "$cmd" in
 	          # Atomic temp+sync+rename (via panel_atomic_write) so an interrupted copy
 	          # never leaves a truncated $seat.$batch.out that `has` would accept.
 	          panel_atomic_write "$sd/$seat.$batch.out" < "$src" ;;
+  plan)   epoch="${4-}"; plan="${5-}"
+          case "$epoch" in ''|*[!0-9]*) echo "sweep plan: requires numeric epoch" >&2; exit 2;; esac
+          [ -f "$plan" ] || { echo "sweep plan: no such file: $plan" >&2; exit 1; }
+          [ -d "$sd" ] && [ -s "$sd/.epoch" ] || { echo "sweep plan: sweep dir not found" >&2; exit 1; }
+          [ "$(cat "$sd/.epoch")" = "$epoch" ] || { echo "sweep plan: stale worker epoch" >&2; exit 1; }
+          jq -e '
+            type=="object" and (.batches|type=="array" and length>0) and
+            ([.batches[] | select(type!="object" or (.seat|type)!="string" or (.batch|type)!="string" or (.expected_ids|type)!="array" or (.expected_ids|length)==0 or (.expected_ids|map(type=="string" and length>0)|all|not))] | length == 0) and
+            ([.batches[] | "\(.seat)\u0000\(.batch)"] | unique | length == length) and
+            all(.batches[]; .expected_ids as $ids | ($ids|unique|length) == ($ids|length))' "$plan" >/dev/null \
+            || { echo "sweep plan: invalid batch plan" >&2; exit 2; }
+          if [ -f "$sd/plan.json" ]; then
+            jq -e --slurpfile requested "$plan" --argjson epoch "$epoch" '(.epoch == $epoch)
+              and .batches == $requested[0].batches' "$sd/plan.json" >/dev/null \
+              || { echo "sweep plan: existing plan differs" >&2; exit 1; }
+          else
+            jq -c --argjson epoch "$epoch" '. + {epoch:$epoch, dropped_seats:[]}' "$plan" | panel_atomic_write "$sd/plan.json"
+          fi ;;
+  ingest-batch)
+          epoch="${4-}"; seat="${5-}"; batch="${6-}"; expected="${7-}"; raw="${8-}"
+          case "$epoch" in ''|*[!0-9]*) echo "sweep ingest-batch: requires numeric epoch" >&2; exit 2;; esac
+          case "$seat" in ''|*[!A-Za-z0-9._-]*) echo "sweep ingest-batch: bad seat name" >&2; exit 2;; esac
+          case "$batch" in ''|*[!A-Za-z0-9._-]*) echo "sweep ingest-batch: bad batch name" >&2; exit 2;; esac
+          [ -d "$sd" ] && [ -s "$sd/.epoch" ] || { echo "sweep ingest-batch: sweep dir not found" >&2; exit 1; }
+          [ "$(cat "$sd/.epoch")" = "$epoch" ] || { echo "sweep ingest-batch: stale worker epoch" >&2; exit 1; }
+          [ -f "$expected" ] || { echo "sweep ingest-batch: no expected IDs file" >&2; exit 1; }
+          [ -f "$sd/plan.json" ] || { echo "sweep ingest-batch: no batch plan" >&2; exit 1; }
+          jq -e --arg seat "$seat" '((.dropped_seats // []) | index($seat)) == null' "$sd/plan.json" >/dev/null \
+            || { echo "sweep ingest-batch: seat was dropped" >&2; exit 1; }
+          if [ ! -f "$raw" ]; then printf '%s\n' '{"status":"missing"}'; exit 0; fi
+          parsed="$(mktemp "$sd/.parsed.XXXXXX")"
+          set +e
+          "$here/parse_block" stances "$raw" "$seat" > "$parsed"
+          parse_rc=$?
+          set -e
+          if [ "$parse_rc" -eq 4 ]; then rm -f "$parsed"; printf '%s\n' '{"status":"missing"}'; exit 0; fi
+          if [ ! -s "$parsed" ]; then
+            rm -f "$parsed"
+            if [ "$parse_rc" -eq 5 ]; then printf '%s\n' '{"status":"malformed"}'; else printf '%s\n' '{"status":"empty"}'; fi
+            exit 0
+          fi
+          exp_ids="$(mktemp "$sd/.expected.XXXXXX")"; got_ids="$(mktemp "$sd/.received.XXXXXX")"
+          LC_ALL=C sort -u "$expected" > "$exp_ids"
+          if [ ! -s "$exp_ids" ] || [ "$(wc -l < "$expected")" -ne "$(wc -l < "$exp_ids")" ]; then
+            rm -f "$parsed" "$exp_ids" "$got_ids"; echo "sweep ingest-batch: expected IDs must be unique, non-empty lines" >&2; exit 2
+          fi
+          planned_ids="$(mktemp "$sd/.planned.XXXXXX")"
+          jq -r --arg seat "$seat" --arg batch "$batch" '.batches[] | select(.seat==$seat and .batch==$batch) | .expected_ids[]' "$sd/plan.json" | LC_ALL=C sort > "$planned_ids"
+          if ! cmp -s "$exp_ids" "$planned_ids"; then
+            rm -f "$parsed" "$exp_ids" "$got_ids" "$planned_ids"; echo "sweep ingest-batch: expected IDs do not match the batch plan" >&2; exit 2
+          fi
+          jq -r '.id' "$parsed" | LC_ALL=C sort > "$got_ids"
+          if cmp -s "$exp_ids" "$got_ids" && [ "$(wc -l < "$parsed")" -eq "$(wc -l < "$exp_ids")" ]; then
+            panel_atomic_write "$sd/$seat.$batch.out" < "$raw"
+            panel_atomic_write "$sd/$seat.$batch.stances.json" < "$parsed"
+            panel_atomic_write "$sd/$seat.$batch.expected.ids" < "$exp_ids"
+            rm -f "$parsed" "$exp_ids" "$got_ids" "$planned_ids"
+            printf '%s\n' '{"status":"complete"}'
+          else
+            uniq_got="$(mktemp "$sd/.received-unique.XXXXXX")"; LC_ALL=C sort -u "$got_ids" > "$uniq_got"
+            if [ "$(wc -l < "$got_ids")" -ne "$(wc -l < "$uniq_got")" ] \
+               || comm -23 "$got_ids" "$exp_ids" | grep -q . \
+               || [ "$(wc -l < "$got_ids")" -gt "$(wc -l < "$exp_ids")" ]; then status="wrong_ids"
+            else status="partial"
+            fi
+            rm -f "$parsed" "$exp_ids" "$got_ids" "$planned_ids" "$uniq_got"
+            printf '{"status":"%s"}\n' "$status"
+          fi ;;
+  drop-seat)
+          seat="${4-}"
+          case "$seat" in ''|*[!A-Za-z0-9._-]*) echo "sweep drop-seat: bad seat name" >&2; exit 2;; esac
+          [ -d "$sd" ] || { echo "sweep drop-seat: sweep dir not found" >&2; exit 1; }
+          rm -f -- "$sd/$seat."*.out "$sd/$seat."*.stances.json "$sd/$seat."*.expected.ids
+          if [ -f "$sd/plan.json" ]; then
+            jq --arg seat "$seat" '.dropped_seats = ((.dropped_seats // []) + [$seat] | unique)' "$sd/plan.json" | panel_atomic_write "$sd/plan.json"
+          fi ;;
+  resume-plan)
+          next="$(jq -r '(.round // 0) + 1' "$idx")"; sd="/tmp/$id/sweeps/round-$next"
+          [ -d "$sd" ] || { jq -cn --argjson round "$next" '{round:$round,status:"no_sweep",batches:[]}' ; exit 0; }
+          [ -s "$sd/.epoch" ] || { echo "sweep resume-plan: missing sweep epoch" >&2; exit 1; }
+          epoch="$(cat "$sd/.epoch")"; current="$(jq -r '.run_epoch // 0' "$idx")"
+          [ "$epoch" = "$current" ] || { echo "sweep resume-plan: stale sweep epoch" >&2; exit 1; }
+          [ -f "$sd/plan.json" ] || { jq -cn --argjson round "$next" --argjson epoch "$epoch" '{round:$round,epoch:$epoch,status:"no_plan",batches:[]}' ; exit 0; }
+          complete='[]'
+          while IFS=$'\t' read -r seat batch; do
+            [ -f "$sd/$seat.$batch.out" ] || continue
+            complete="$(printf '%s' "$complete" | jq -c --arg seat "$seat" --arg batch "$batch" '. + [{seat:$seat,batch:$batch}]')"
+          done < <(jq -r '.batches[] | [.seat,.batch] | @tsv' "$sd/plan.json")
+          jq -c --argjson round "$next" --argjson epoch "$epoch" --argjson complete "$complete" '
+            {round:$round,epoch:$epoch,batches:[.batches[] as $b |
+              {seat:$b.seat,batch:$b.batch,status:(if ((.dropped_seats // []) | index($b.seat)) != null then "dropped"
+                elif ($complete | any(.seat==$b.seat and .batch==$b.batch)) then "complete" else "missing" end)}]}' "$sd/plan.json" ;;
   has)    seat="$4"; batch="${5-all}"
 	          case "$batch" in ''|*[!A-Za-z0-9._-]*) echo "sweep: bad batch name" >&2; exit 2;; esac
 	          [ -f "$sd/$seat.$batch.out" ] ;;
@@ -81,5 +180,5 @@ case "$cmd" in
           if [ "$curr_epoch" != "$dir_epoch" ]; then echo "sweep commit: stale run epoch" >&2; exit 1; fi
           cat | "$here/index" commit-sweep "$id" "$round" "$epoch"
           date -Is | panel_atomic_write "$sd/sweep_complete" ;;
-  *) echo "usage: sweep {begin|record|has|done|commit} <ID> <round> ..." >&2; exit 2 ;;
+  *) echo "usage: sweep {begin|record|plan|ingest-batch|drop-seat|resume-plan|has|done|commit} <ID> <round> ..." >&2; exit 2 ;;
 esac

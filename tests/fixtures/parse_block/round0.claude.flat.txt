@@ -1,0 +1,10 @@
+No remaining `temperature.coeffs *=` accumulation anywhere. The bug class is eliminated.
+
+Let me do a final sanity check on whether colorin's `processed_maximum *= coeffs` could double-apply in the special non-tiled-but-cached re-run case, but that's pre-existing pipeline-cache behavior governed by hashing, out of scope of this diff and unchanged by it.
+
+```findings
+{"location":"src/iop/temperature.c:525","category":"maintainability","severity":"low","claim":"Comment 'As there are no modules changing processed_maximum this is safe' is inaccurate: invert (iop order 2) and rawprepare (order 1) both run before temperature (order 3) and write processed_maximum[k]=1.0f.","precondition":"always (raw pipeline with invert/rawprepare before temperature)","impact":"Misleading invariant. The overwrite is correct only because those upstream modules set exactly 1.0; if a future pre-temperature module set processed_maximum to a non-1.0 value, the new '= d->coeffs[k]' would silently discard it whereas the old multiply preserved it. No current bug."}
+{"location":"src/iop/colorin.c:665","category":"maintainability","severity":"low","claim":"The non-corrected 'coeff report' diagnostic log and the DT_DEBUG_PARAMS flag were dropped; the dt_print_pipe call was moved inside if(corrected), so colorin now logs only when late_correction applies.","precondition":"DT_DEBUG_PARAMS/DT_DEBUG_PIPE debug enabled, late_correction off","impact":"Diagnostics-only regression; no effect on output image."}
+```
+
+Summary: The fixes correctly resolve the tiled accumulation bug.

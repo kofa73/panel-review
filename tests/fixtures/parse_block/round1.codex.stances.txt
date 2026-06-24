@@ -1,0 +1,7 @@
+```stances
+{"id":"i1","stance":"support","rationale":"Both implementations only add IDs and rely on whole-set expiry, so they enforce distinct users per TTL window rather than concurrent users."}
+{"id":"i3","stance":"support","rationale":"Because SET_KEY is expired before TTL_KEY is written with the same TTL, the marker can remain after SET_KEY expires and suppress expiry on a recreated set."}
+{"id":"i4","stance":"support_with_revision","rationale":"The Lua script does allow an existing member before checking size, but this is the intended correction for the review's documented lockout and is only a compatibility consideration for pre-existing over-limit sets.","revision":{"severity":"low","claim":"Document that the Lua fix admits existing members when a pre-existing set already exceeds MAX_USERS, as part of correcting the lockout behavior."}}
+{"id":"i5","stance":"support_with_revision","rationale":"The original path uses five Redis commands only when a new ID finds no TTL marker, while existing IDs use two and normal later new IDs use three.","revision":{"claim":"Five commands occur whenever added == 1 and TTL_KEY is absent, normally the first user after both keys have expired; common existing-user and later-new-user paths use two and three commands respectively."}}
+{"id":"i6","stance":"reject","rationale":"The review correctly identifies a failure window that can leave SET_KEY without expiry; possible recovery on a later distinct user does not negate that conditional memory-leak risk."}
+```

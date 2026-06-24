@@ -5,8 +5,9 @@
 #
 # Usage: resolve_diff <scope-token>     (run from cwd = repo root)
 #   base=BRANCH    git diff BRANCH...HEAD
-#   uncommitted    staged + unstaged + untracked file CONTENTS, with the
-#                  .panel-review/ card dir excluded so cards never enter scope
+#   uncommitted    HEAD->worktree (staged + unstaged, as one patch per file) +
+#                  untracked file CONTENTS, with the .panel-review/ card dir
+#                  excluded so cards never enter scope
 #   commit=SHA     git show SHA
 #   question=TEXT  no diff (a free-text question) -> prints nothing, exit 0
 #
@@ -30,9 +31,16 @@ case "$tok" in
     git show "$sha"
     ;;
   uncommitted)
-    # tracked changes, excluding the card dir
-    git diff -- . ':(exclude).panel-review/**'
-    git diff --cached -- . ':(exclude).panel-review/**'
+    # tracked changes (staged + unstaged) vs HEAD as ONE patch per file, excluding
+    # the card dir. `git diff HEAD` folds index-to-worktree and HEAD-to-index, so a
+    # file dirty in BOTH no longer emits two separate patches. No HEAD yet (fresh
+    # repo, zero commits) -> fall back to the staged diff (everything reads as added
+    # against the empty tree), since `git diff HEAD` errors without a HEAD.
+    if git rev-parse --verify -q HEAD >/dev/null; then
+      git diff HEAD -- . ':(exclude).panel-review/**'
+    else
+      git diff --cached -- . ':(exclude).panel-review/**'
+    fi
     # untracked file contents (names alone would hide new code from reviewers).
     # -z + read -d '' so filenames with spaces/tabs/quotes/newlines survive
     # (git would otherwise C-quote them and the path wouldn't resolve).

@@ -1,0 +1,206 @@
+#!/usr/bin/env bash
+# decide_round — apply the Transitions table to one debate round MECHANICALLY,
+# producing the `index commit-sweep` payload for the currently-open issues. This
+# is the deterministic core the referee used to hand-build (state math, counters,
+# peer_reviewed/fully_vetted tracking, enum-field convergence, terminal states,
+# verbatim evidence). Moving it here removes the most error-prone in-head
+# bookkeeping. It carries reject/revision rationales and new evidence VERBATIM,
+# stripped of the structured seat tag; because the free text itself could still name a seat or state a tally, a
+# blindness-marker SCAN rejects the round (exit 5) if any promoted field matches.
+# That scan is a BACKSTOP to the debate prompt's "write only technical facts" rule,
+# not a proof — no string scan catches every paraphrase.
+#
+# It does NOT do judgment: it never clusters new_findings (referee builds
+# add_issues), never picks a winning value for a PROSE field (`claim`), and never
+# synthesises evidence. Free-text `claim` revisions are surfaced in the advice
+# channel for the referee to resolve; everything else is decided here. The
+# referee folds its own additions in with `merge_payload`, never by appending
+# (appending a 2nd set_state/revise for one id makes commit-sweep reject the round).
+#
+# Usage:
+#   decide_round --id <ID> --round <N> --configured "<seat ...>" --engaged "<seat ...>" \
+#                --stances <file> [--advice <file>]
+#
+#   --engaged    the seats that returned a parseable stance block THIS round. The
+#                input is validated against it: every line's _source must be an
+#                engaged seat, and there must be EXACTLY ONE stance per
+#                (engaged seat, open issue) — no unknown/duplicate _source, no
+#                omissions. Any violation is a hard error (exit 3); the referee
+#                must repair/redispatch before a payload exists. This is what stops
+#                a duplicate or missing stance from silently flipping an outcome.
+#   --stances    JSONL: the parsed `stances` of every engaged seat this round,
+#                concatenated (each line already tagged with _source by parse_block).
+#   --configured the full configured panel (for fully_vetted coverage); engaged ⊆ configured.
+#   --advice     where to write the referee-only advice JSON (prose claim proposals
+#                only). Optional; discarded if omitted.
+#
+# PRECONDITION (caller's job, per the protocol): only call with >=2 engaged seats.
+# The "<2 engaged after retry -> all unresolved" abort is the referee's, not here.
+#
+# stdout: the commit-sweep payload (ready for `sweep commit`). Empty arrays are
+# dropped. Exit 0 ok; 2 usage; 1 missing input; 3 stance-integrity violation;
+# 5 blindness-marker violation (seat identity / tally in promoted free text).
+set -euo pipefail
+here="$(cd "$(dirname "$0")" && pwd)"; . "$here/_panel_common.sh"
+command -v jq >/dev/null 2>&1 || { echo "decide_round: jq not found" >&2; exit 127; }
+
+id=""; round=""; configured=""; engaged=""; stances=""; advice=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --id)         id="${2-}"; shift 2 ;;
+    --round)      round="${2-}"; shift 2 ;;
+    --configured) configured="${2-}"; shift 2 ;;
+    --engaged)    engaged="${2-}"; shift 2 ;;
+    --stances)    stances="${2-}"; shift 2 ;;
+    --advice)     advice="${2-}"; shift 2 ;;
+    *) echo "decide_round: unknown arg: $1" >&2; exit 2 ;;
+  esac
+done
+panel_require_id "$id"
+case "$round" in ''|*[!0-9]*) echo "decide_round: --round must be an integer" >&2; exit 2;; esac
+[ -n "$engaged" ] || { echo "decide_round: --engaged required" >&2; exit 2; }
+[ -n "$stances" ] || { echo "decide_round: --stances required" >&2; exit 2; }
+[ -f "$stances" ] || { echo "decide_round: no such stances file: $stances" >&2; exit 1; }
+idx="/tmp/$id/index.json"; [ -f "$idx" ] || { echo "decide_round: no index for $id" >&2; exit 1; }
+man="/tmp/$id/manifest.json"
+
+issue_rounds="$(jq -r '.limits.issue_rounds // 2' "$man" 2>/dev/null || echo 2)"
+max_rounds="$(jq -r '.limits.max_rounds // 4' "$man" 2>/dev/null || echo 4)"
+case "$issue_rounds" in ''|*[!0-9]*) issue_rounds=2;; esac
+case "$max_rounds"   in ''|*[!0-9]*) max_rounds=4;; esac
+
+cfg_json="$(printf '%s\n' $configured | jq -R . | jq -cs 'map(select(length>0))')"
+eng_json="$(printf '%s\n' $engaged   | jq -R . | jq -cs 'map(select(length>0))')"
+eval_json="$(jq -c '.evaluated_by // {}' "$idx")"
+printf '%s' "$eval_json" | jq -e 'type=="object"' >/dev/null 2>&1 || { echo "decide_round: invalid index evaluated_by" >&2; exit 1; }
+
+# ---- Integrity gate: exactly one stance per (engaged seat, open issue); no
+# unknown _source. Fail loud BEFORE any decision so bad input never produces a
+# subtly-wrong payload (finding: duplicate/missing stances must not pass silently).
+errs="$(
+  jq -nr \
+    --argjson idx "$(cat "$idx")" \
+    --slurpfile st_raw "$stances" \
+    --argjson engaged "$eng_json" \
+    --argjson configured "$cfg_json" '
+    ($st_raw) as $st
+    | [ $idx.issues[] | select(.state=="open") | .id ] as $open
+    | ( [ $engaged[] | select(. as $e | ($configured | index($e)) == null) | "engaged seat not in configured panel: \(.)" ]
+      + ( [ $st[]._source ] | unique | map(select(. as $s | ($engaged | index($s)) == null) | "unknown _source (not an engaged seat): \(.)") )
+      + [ $engaged[] as $e | $open[] as $o
+          | ([ $st[] | select(._source==$e and .id==$o) ] | length) as $c
+          | select($c != 1)
+          | "expected exactly 1 stance for seat=\($e) issue=\($o), got \($c)" ]
+      ) | .[]'
+)"
+if [ -n "$errs" ]; then
+  { echo "decide_round: stance-integrity violation(s):"; printf '%s\n' "$errs" | sed 's/^/  - /'; } >&2
+  exit 3
+fi
+
+# ---- Blindness gate: the rationale / new_evidence we promote VERBATIM onto cards
+# (the $ev build below) must not name a seat or state a tally, or a later blind
+# reviewer would learn who said what / the vote. The structured _source is already
+# dropped; this scans the FREE TEXT itself. A hit rejects the whole round (exit 5)
+# so the referee re-dispatches the offending seat to restate the same fact without
+# meta-references. Backstop, not proof: a string scan cannot catch every paraphrase
+# (the debate prompt's "technical facts only" rule is the first line of defence).
+# Markers are kept high-precision (qualified by seat/reviewer or agreement words, or
+# a literal model name) so domain terms like a distributed-systems "consensus" or a
+# "2/3" ratio do not trip it; the residual false-positive cost is one re-dispatch.
+leaks="$(
+  jq -nr --slurpfile st_raw "$stances" '
+    "\\b(codex|gpt|gemini|claude)\\b|\\b(an)?other (reviewer|seat|model|ai)s?\\b|\\b(all( ?(three|3))?|both|two|the other) (seats|reviewers|models|ais)\\b|\\b(seats?|reviewers?|models?|the others?|we|every(one|body)) (all )?(agree|disagree|concur)\\b|\\b[0-9]+ ?(/|of) ?(the )?(three|3) (seats|reviewers)\\b" as $re
+    | $st_raw[] | . as $s
+    | ( [ {f:"rationale",                 v:($s.rationale//"")},
+          {f:"new_evidence.assertion",    v:($s.new_evidence.assertion//"")},
+          {f:"new_evidence.precondition", v:($s.new_evidence.precondition//"")},
+          {f:"new_evidence.impact",       v:($s.new_evidence.impact//"")} ][]
+        , ({f:"new_evidence.location", v:($s.new_evidence.location//"")}
+           | if (.v | type) == "array" then .f as $f | .v[] | {f:$f, v:.} else . end) )
+    | select((.v|type=="string") and (.v|test($re;"i")))
+    | "seat=\($s._source) issue=\($s.id) field=\(.f): blindness marker in promoted text"
+  '
+)"
+if [ -n "$leaks" ]; then
+  { echo "decide_round: blindness violation(s) (seat identity / tally in promoted evidence):"; printf '%s\n' "$leaks" | sed 's/^/  - /'; } >&2
+  exit 5
+fi
+
+result="$(
+  jq -n \
+    --argjson idx "$(cat "$idx")" \
+    --slurpfile st_raw "$stances" \
+    --argjson round "$round" \
+    --argjson issue_rounds "$issue_rounds" \
+    --argjson max_rounds "$max_rounds" \
+    --argjson configured "$cfg_json" \
+    --argjson evaluated "$eval_json" '
+  ($st_raw) as $stances
+  | [ $idx.issues[] | select(.state=="open") ] as $open
+  | ($open | map(
+      . as $iss | $iss.id as $iid
+      | [ $stances[] | select(.id==$iid) ] as $st        # validated: exactly one per engaged seat
+      | ($st | map(._source)) as $seats_now
+      | ($st | length) as $n
+      | ($st | map(.stance)) as $stns
+      | ($st | map(select(.stance=="support" or .stance=="support_with_revision"))) as $supp
+      # Enum convergence over EFFECTIVE values: a plain `support` endorses the
+      # issue AS STATED, so its effective value for a field is the EXISTING value.
+      # Build a candidate from the effective values of supporting seats. It is emitted
+      # only below when every engaged seat supports the issue, preserving the
+      # no-majority rule for detail changes.
+      | (["severity","location","category"] | map(. as $f
+          | ($supp | map(.revision[$f]? // $iss[$f]) | unique) as $eff
+          | {f:$f, conv:($eff|length==1), val:($eff[0])})) as $fld
+      | ($fld | map(select(.conv and (.val != $iss[.f]))) | map({key:.f, value:.val}) | from_entries) as $adopt
+      | ($fld | any(.conv|not)) as $enum_conflict
+      | ([ $st[] | select(.stance=="support_with_revision" and ((.revision.claim?)//null)!=null)
+            | {seat:._source, claim:.revision.claim} ]) as $claim_props
+      # evidence, verbatim (the blindness gate above already rejected the round if
+      # this free text named a seat or stated a tally): reject + revision reasoning
+      # -> contra; new_evidence by side
+      | (([ $st[] | select(.stance=="reject" or .stance=="support_with_revision")
+            | {side:"contra", point:{location:"analysis", assertion:(.rationale//"")}} ]
+          | map(select(.point.assertion|type=="string" and length>0)))
+         + [ $st[] | select((.new_evidence//null)!=null)
+            | {side:(if .stance=="reject" then "contra" else "pro" end), point:.new_evidence} ]) as $ev
+      | ($n>=2) as $peer_now
+      | ($n>=2 and ($stns|map(.=="reject")|all)) as $all_reject
+      | ($n>=2 and ($stns|map(.=="support" or .=="support_with_revision")|all)) as $all_support
+      | ($n>=2 and (($stns|map(.=="reject")|all)|not) and (($stns|map(.=="support" or .=="support_with_revision")|all)|not)) as $mixed
+      | $peer_now as $bump
+      | (($iss.rounds_debated//0) + (if $bump then 1 else 0 end)) as $post_rd
+      | (($post_rd>=$issue_rounds) or ($round>=$max_rounds)) as $at_limit
+      | (($iss.peer_reviewed==true) or $peer_now) as $peer_ever
+      | (($evaluated[$iid]//[]) + $seats_now | unique) as $eval_cum
+      | (($configured - $eval_cum)|length==0) as $covered
+      | (if $n<2 then (if $at_limit then (if $peer_ever then "contested" else "unresolved" end) else "open" end)
+         elif $all_reject then "rejected"
+         elif $all_support then (if $enum_conflict then (if $at_limit then "accepted" else "open" end) else "accepted" end)
+         elif $mixed then (if $at_limit then "contested" else "open" end)
+         else "open" end) as $state
+      | {id:$iid, bump:$bump, state:$state, peer:$peer_now, all_support:$all_support,
+         adopt:$adopt, set_detail:($all_support and $enum_conflict and $at_limit),
+         ev:$ev, claim_props:$claim_props, eval_cum:$eval_cum,
+         fully_vetted:($covered and $peer_now)}
+    )) as $D
+  | {
+      bump:       [ $D[] | select(.bump) | .id ],
+      set_state:  [ $D[] | select(.state!="open") | {id, state} ],
+      set_flag:   ( [ $D[] | select(.peer)         | {id, flag:"peer_reviewed",    value:true} ]
+                  + [ $D[] | select(.fully_vetted) | {id, flag:"fully_vetted",     value:true} ]
+                  + [ $D[] | select(.set_detail)   | {id, flag:"detail_contested", value:true} ] ),
+      revise:     [ $D[] | select(.all_support and (.adopt|length>0)) | {id, fields:.adopt} ],
+      add_evidence: [ $D[] | .id as $iid | .ev[] | {id:$iid, side, point} ]
+    } as $payload0
+  | {
+      payload: ($payload0 | with_entries(select(.value|length>0))),
+      advice: { prose_revisions: [ $D[] | select(.claim_props|length>0) | {id, proposals:.claim_props} ] },
+      evaluated_by: ($D | map({key:.id, value:.eval_cum}) | from_entries)
+    }
+  '
+)"
+
+[ -n "$advice" ] && printf '%s' "$result" | jq '.advice' > "$advice"
+printf '%s' "$result" | jq '.payload + {evaluated_by:.evaluated_by}'

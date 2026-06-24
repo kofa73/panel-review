@@ -1,0 +1,24 @@
+{
+  "i1": [
+    "codex",
+    "claude",
+    "gemini"
+  ],
+  "i2": [
+    "codex",
+    "claude",
+    "gemini"
+  ],
+  "i3": [
+    "codex"
+  ],
+  "i4": [
+    "claude"
+  ],
+  "i5": [
+    "claude"
+  ],
+  "i6": [
+    "claude"
+  ]
+}

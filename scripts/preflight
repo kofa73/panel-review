@@ -37,7 +37,12 @@ fi
 
 # Soft checks
 if [ "$have_codex" = yes ]; then
-  codex login --check >/dev/null 2>&1 || echo "WARNING: run 'codex login'"
+  # `codex login status` prints "Logged in ..." when authed; key the warning off
+  # that (the old `codex login --check` is not a valid subcommand, so it always
+  # failed and the warning fired on every run even when Codex was usable). NOTE:
+  # codex writes that line to STDERR, so merge 2>&1 before grep — discarding stderr
+  # would reintroduce the always-warns bug.
+  codex login status 2>&1 | grep -qi "logged in" || echo "WARNING: run 'codex login'"
 else
   echo "NOTE: codex CLI not found — Codex seat unavailable (running without it)."
 fi

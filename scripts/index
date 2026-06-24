@@ -11,6 +11,7 @@
 #   index bump  <ID> <issue-id>               +1 rounds_debated, +1 card_rev
 #   index state <ID> <issue-id> <state>       set .state, +1 card_rev
 #                 (flag in: peer_reviewed|fully_vetted|detail_contested)
+#   index gate-status <ID>                    print {open,low_only} without mutating
 #   index reopen <ID> both|unresolved|contested
 #                 Re-open leftover issues for another debate cycle: matching issues
 #                 -> state=open, rounds_debated=0, vetting flags false; global round=0,
@@ -28,7 +29,8 @@
 #                    "set_state":[{"id","state"}],
 #                    "set_flag":[{"id","flag","value"}],      // flag in peer_reviewed|fully_vetted|detail_contested
 #                    "add_evidence":[{"id","side":"pro|contra","point":{...}}],
-#                    "revise":[{"id","fields":{severity?,claim?,location?,category?}}]}
+#                    "revise":[{"id","fields":{severity?,claim?,location?,category?}}],
+#                    "evaluated_by":{"issue-id":["seat",...]}}
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"; . "$here/_panel_common.sh"
 command -v jq >/dev/null 2>&1 || { echo "index: jq not found" >&2; exit 127; }
@@ -64,10 +66,14 @@ mutate() { # jq-filter on the index file -> atomic rewrite, transactional.
 case "$cmd" in
   get)   cat "$f" ;;
   issue) jq -c --arg i "$3" '.issues[] | select(.id==$i)' "$f" ;;
+  gate-status)
+         jq -c '[.issues[] | select(.state=="open")] as $open
+                | {open:($open|length), low_only:(($open|length)>0 and ($open|all(.severity=="low")))}' "$f" ;;
   put)   tmp="$(cat)"; printf '%s' "$tmp" | jq -e 'if (.issues | any(((.state == "accepted" or .state == "rejected") and .peer_reviewed != true) or (.fully_vetted == true and .peer_reviewed != true))) then error("invariant violation: terminal/fully_vetted require peer_reviewed=true") else . end' >/dev/null || { echo "index put: invalid JSON or invariant violation" >&2; exit 1; }
          printf '%s' "$tmp" | panel_atomic_write "$f" ;;
   bump)  mutate '(.issues[] | select(.id==$i)) |= (.rounds_debated = ((.rounds_debated//0)+1) | .card_rev = ((.card_rev//0)+1))' --arg i "$3" ;;
-  state) mutate '(.issues[] | select(.id==$i)) |= (.state=$s | .card_rev=((.card_rev//0)+1))' --arg i "$3" --arg s "$4" ;;
+  state) case "$4" in open|accepted|rejected|contested|unresolved|merged) ;; *) echo "index state: bad state $4 (allowed: open|accepted|rejected|contested|unresolved|merged)" >&2; exit 2;; esac
+         mutate '(.issues[] | select(.id==$i)) |= (.state=$s | .card_rev=((.card_rev//0)+1))' --arg i "$3" --arg s "$4" ;;
   flag)  case "$4" in peer_reviewed|fully_vetted|detail_contested) ;; *) echo "index flag: bad flag $4" >&2; exit 2;; esac
          case "$5" in true) v=true;; false) v=false;; *) echo "index flag: bool must be true|false" >&2; exit 2;; esac
          mutate "(.issues[] | select(.id==\$i)) |= (.$4=\$v | .card_rev=((.card_rev//0)+1))" --arg i "$3" --argjson v "$v" ;;
@@ -88,7 +94,7 @@ case "$cmd" in
 	             (has("location") and (.location | valid_location)) and
 	             ((has("precondition") | not) or (.precondition | type == "string")) and
 	             ((has("impact") | not) or (.impact | type == "string"));
-	           (keys | inside(["add_issues", "bump", "set_state", "set_flag", "add_evidence", "revise"])) and
+                   (keys | inside(["add_issues", "bump", "set_state", "set_flag", "add_evidence", "revise", "evaluated_by"])) and
 	           ((has("add_issues") | not) or (.add_issues | type == "array" and (map(
 	             type == "object" and (.id | type == "string" and test("\\A[A-Za-z0-9._-]+\\z") and . != "." and . != "..") and
 	             (.claim | type == "string") and (has("location") and (.location | valid_location)) and
@@ -112,7 +118,7 @@ case "$cmd" in
 	           ((has("add_evidence") | not) or (.add_evidence | type == "array" and (map(
 	             type == "object" and (.id | type == "string") and (.side | type == "string" and IN("pro", "contra")) and (.point | valid_point)
 	           ) | all))) and
-	           ((has("revise") | not) or (.revise | type == "array" and (map(
+                   ((has("revise") | not) or (.revise | type == "array" and (map(
 	             type == "object" and (.id | type == "string") and (.fields | (
 	               type == "object" and (keys | inside(["severity", "claim", "location", "category"])) and
 	               ((has("claim") | not) or (.claim | type == "string")) and
@@ -120,7 +126,10 @@ case "$cmd" in
 	               ((has("category") | not) or (.category | type == "string" and IN("security", "correctness", "performance", "maintainability", "style"))) and
 	               ((has("severity") | not) or (.severity | type == "string" and IN("critical", "high", "medium", "low", "style")))
 	             ))
-	           ) | all)))
+                   ) | all))) and
+                   ((has("evaluated_by") | not) or (.evaluated_by | type == "object" and
+                     (to_entries | map(.key | type == "string") | all) and
+                     (to_entries | map(.value | type == "array" and (map(type == "string") | all) and (unique | length == length)) | all)))
 	         ' >/dev/null 2>&1 || { echo "index commit-sweep: invalid payload format" >&2; exit 2; }
 	         mutate 'if (((.run_epoch // 0) | tostring) != $epoch) then error("stale sweep commit: run epoch \(.run_epoch//0) != \($epoch)")
                  elif ((.committed_rounds // []) | any(. == $r)) then .
@@ -135,11 +144,13 @@ case "$cmd" in
                    ([$p.set_state[]?.id] | any(IN($valid_ids[]) | not)) or
                    ([$p.set_flag[]?.id] | any(IN($valid_ids[]) | not)) or
                    ([$p.add_evidence[]?.id] | any(IN($valid_ids[]) | not)) or
-                   ([$p.revise[]?.id] | any(IN($valid_ids[]) | not))
+                   ([$p.revise[]?.id] | any(IN($valid_ids[]) | not)) or
+                   (($p.evaluated_by // {} | keys) | any(IN($valid_ids[]) | not))
                  )) then error("mutation target IDs do not exist or target a newly added issue")
                  else .committed_rounds = ((.committed_rounds // []) + [$r])
                    | .round = $r
                    | .issues = (.issues + ($p.add_issues // []))
+                   | .evaluated_by = ((.evaluated_by // {}) + ($p.evaluated_by // {}))
                    | reduce (($p.bump // []) | unique)[] as $id (.;
                        .issues |= map(if .id == $id then .rounds_debated += 1 | .card_rev += 1 else . end))
                    | reduce ($p.set_state // [])[] as $m (.;
@@ -175,5 +186,5 @@ case "$cmd" in
                     | .peer_reviewed=false | .fully_vetted=false | .detail_contested=false
                     | .card_rev=((.card_rev//0)+1))
          ' --arg category "$category" ;;
-  *) echo "usage: index {get|put|issue|bump|state|flag|commit-sweep|reopen} <ID> ..." >&2; exit 2 ;;
+  *) echo "usage: index {get|put|issue|bump|state|flag|gate-status|commit-sweep|reopen} <ID> ..." >&2; exit 2 ;;
 esac

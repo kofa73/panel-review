@@ -2,6 +2,7 @@
 name: panel-review-claude-seat
 description: One blind reviewer seat for panel-review (the Claude participant). Spawned fresh by the referee each pass with the scope/diff (Round 0) or card files (debate). Returns only the requested fenced JSON block + a short summary. Not for direct use.
 model: opus
+effort: high
 color: cyan
 tools: Read, Grep, Glob, Bash
 ---
