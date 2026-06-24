@@ -17,6 +17,13 @@ panel_require_id() {
   panel_valid_id "${1-}" || { echo "panel: invalid run id: '${1-}'" >&2; exit 2; }
 }
 
+# Diagnostic-keep policy. When PANEL_REVIEW_KEEP_TMP=true, cleanup/discard remove
+# the workspace state (the marker, the cards, the git-exclude line) but PRESERVE
+# the /tmp/<id>/ run dir so its manifest/index/sweeps/raw/audit survive for
+# post-mortem inspection. Only the exact string "true" enables it; anything else
+# (unset, empty, "1", "yes") keeps the default full teardown.
+panel_keep_tmp() { [ "${PANEL_REVIEW_KEEP_TMP:-}" = "true" ]; }
+
 # Atomic-ish write: content on stdin -> dest. Rotates an existing dest to
 # dest.bak first (best-effort fallback), writes a temp in the SAME dir (so the
 # final mv is a same-filesystem rename = atomic), fsyncs, then renames over dest.

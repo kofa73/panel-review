@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+# birth_index — turn the referee's Round-0 finding-to-issue map into the canonical
+# index.json MECHANICALLY. The referee owns the one judgment call (clustering
+# findings into issues — SKILL Round 0 step 4); this script owns the deterministic
+# rest of step 5: assign each issue's birth state, vetting flags, and the private
+# `evaluated_by` coverage, applying the birth-unanimity rule exactly so the referee
+# never hand-computes it. Output is a complete index ready for `index put`.
+#
+# Usage:
+#   birth_index --available "<seat ...>" --configured "<seat ...>" < issues.json
+#
+#   --available    seats that produced a parseable findings block at Round 0
+#                  (engaged this pass). Birth unanimity is measured against THIS set.
+#   --configured   the full panel from preflight (for fully_vetted coverage).
+#                  available ⊆ configured.
+#   stdin          the clustered issues, as a JSON array (or {"issues":[...]}). Each:
+#                    {"id","claim","location","category","severity",
+#                     "evidence_pro":[<point>...],
+#                     "raised_by":["seat",...],          // available seats that raised it
+#                     "detail_divergence":true|false,    // optional: raisers differ on severity/location
+#                     "evidence_contra":[<point>...]}    // optional, defaults []
+#                  A point: {"location":<str|[str]>,"assertion":<str>,"precondition"?,"impact"?}.
+#
+# Birth rule (SKILL Round 0 step 5), applied per issue:
+#   - all available seats (and ≥2) raised it      -> accepted, peer_reviewed=true
+#       · fully_vetted=true ONLY if that set is the whole configured panel (no seat down)
+#       · detail_divergence  -> detail_contested=true (still accepted)
+#   - raised by only some, or a single seat       -> open, peer_reviewed=false
+#   evaluated_by[id] = the issue's raisers (the seats that evaluated it at Round 0).
+#
+# severity:style issues are NOT a debate issue (kept aside for the Style section by
+# the referee); passing one is a hard error so the rule can't be silently skipped.
+#
+# stdout: a full index.json. Exit 0 ok; 2 usage; 1 bad input;
+#         3 validation violation (bad shape / unknown seat / style severity / dup id).
+set -euo pipefail
+here="$(cd "$(dirname "$0")" && pwd)"; . "$here/_panel_common.sh"
+command -v jq >/dev/null 2>&1 || { echo "birth_index: jq not found" >&2; exit 127; }
+
+available=""; configured=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --available)  available="${2-}"; shift 2 ;;
+    --configured) configured="${2-}"; shift 2 ;;
+    *) echo "birth_index: unknown arg: $1" >&2; exit 2 ;;
+  esac
+done
+[ -n "$configured" ] || { echo "birth_index: --configured required" >&2; exit 2; }
+
+avail_json="$(printf '%s\n' $available  | jq -R . | jq -cs 'map(select(length>0))')"
+cfg_json="$(  printf '%s\n' $configured | jq -R . | jq -cs 'map(select(length>0))')"
+
+raw="$(cat)"; [ -n "${raw//[[:space:]]/}" ] || raw='[]'
+# Accept either a bare array or {"issues":[...]}.
+specs="$(printf '%s' "$raw" | jq -c 'if type=="object" and has("issues") then .issues elif type=="array" then . else error("stdin must be a JSON array or {issues:[...]}") end' 2>/dev/null)" \
+  || { echo "birth_index: stdin must be a JSON array or {\"issues\":[...]}" >&2; exit 1; }
+
+# Shared predicates — identical to parse_block / index commit-sweep so a record
+# birth_index emits always passes `index put` and later `commit-sweep` validation.
+defs='
+  def valid_location:
+    (type == "string" and length > 0) or (type == "array" and length > 0 and (map(type == "string" and length > 0) | all));
+  def valid_point:
+    type == "object" and (.assertion | type == "string") and
+    (has("location") and (.location | valid_location)) and
+    ((has("precondition") | not) or (.precondition | type == "string")) and
+    ((has("impact") | not) or (.impact | type == "string"));'
+
+# ---- Validation pass: collect every problem, fail loud BEFORE building anything.
+errs="$(
+  jq -nr --argjson specs "$specs" --argjson available "$avail_json" --argjson configured "$cfg_json" "$defs"'
+    ([ $available[] | select(. as $a | ($configured | index($a)) == null) | "available seat not in configured panel: \(.)" ])
+    + ([ $specs[] | if type=="object" then .id else null end | select(. != null) ] | (group_by(.) | map(select(length>1) | .[0]) | map("duplicate issue id: \(.)")))
+    + ( $specs | to_entries | map(.key as $i | .value | (
+          if (type != "object") then ["item \($i): not a JSON object"]
+          elif ((.id | type) != "string") or ((.id | test("\\A[A-Za-z0-9._-]+\\z") and . != "." and . != "..") | not) then ["item \($i): missing/invalid `id` (safe token)"]
+          else .id as $iid |
+            ( (if (.claim | type) != "string" then ["issue \(.id): missing/non-string `claim`"] else [] end)
+            + (if (has("location") and (.location | valid_location)) then [] else ["issue \(.id): missing/invalid `location`"] end)
+            + (if (.category | type=="string" and IN("security","correctness","performance","maintainability","style")) then [] else ["issue \(.id): missing/invalid `category`"] end)
+            + (if (.severity | type=="string" and IN("critical","high","medium","low","style")) then [] else ["issue \(.id): missing/invalid `severity`"] end)
+            + (if (.severity == "style") then ["issue \(.id): severity:style is not a debate issue — keep it aside for the Style section"] else [] end)
+            + (if (.evidence_pro | type=="array" and length>0 and (map(valid_point)|all)) then [] else ["issue \(.id): `evidence_pro` must be a non-empty array of valid points"] end)
+            + (if (has("evidence_contra") | not) or (.evidence_contra | type=="array" and (map(valid_point)|all)) then [] else ["issue \(.id): `evidence_contra` must be an array of valid points"] end)
+            + (if (.raised_by | type=="array" and length>0 and (map(type=="string")|all) and (unique|length==length)) then [] else ["issue \(.id): `raised_by` must be a non-empty array of distinct seat names"] end)
+            + ([ (.raised_by // [])[] | select(. as $s | ($available | index($s)) == null) | "issue \($iid): raiser is not an available seat: \(.)" ])
+            + (if (has("detail_divergence") | not) or (.detail_divergence | type=="boolean") then [] else ["issue \(.id): `detail_divergence` must be boolean"] end)
+            )
+          end) ) | add // [])
+    | .[]
+  ' 2>&1
+)" || { echo "birth_index: validation error: $errs" >&2; exit 3; }
+if [ -n "$errs" ]; then
+  { echo "birth_index: validation violation(s):"; printf '%s\n' "$errs" | sed 's/^/  - /'; } >&2
+  exit 3
+fi
+
+# ---- Build pass: assign birth state / flags / coverage mechanically.
+jq -n --argjson specs "$specs" --argjson available "$avail_json" --argjson configured "$cfg_json" '
+  ($available | length) as $navail
+  | [ $specs[]
+      | . as $s
+      | ($s.raised_by | unique) as $rb
+      | (($available - $rb) | length == 0) as $all_available_raised
+      | ($navail >= 2 and $all_available_raised) as $birth_unanimous
+      | (($configured - $rb) | length == 0) as $covered
+      | (if $birth_unanimous
+           then {state:"accepted", peer_reviewed:true, fully_vetted:$covered, detail_contested:(($s.detail_divergence)//false)}
+           else {state:"open",     peer_reviewed:false, fully_vetted:false,  detail_contested:false}
+         end) as $birth
+      | {id:$s.id, claim:$s.claim, location:$s.location, category:$s.category, severity:$s.severity,
+         evidence_pro:$s.evidence_pro, evidence_contra:(($s.evidence_contra)//[]),
+         peer_reviewed:$birth.peer_reviewed, fully_vetted:$birth.fully_vetted, detail_contested:$birth.detail_contested,
+         state:$birth.state, rounds_debated:0, card_rev:0, _rb:$rb}
+    ] as $D
+  | {issues: ($D | map(del(._rb))),
+     round:0, phase:"debate", committed_rounds:[], run_epoch:0,
+     evaluated_by: ($D | map({key:.id, value:._rb}) | from_entries)}
+'

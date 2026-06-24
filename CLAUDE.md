@@ -87,9 +87,18 @@ round limit. Unanimity-or-human: no majority vote, no referee fact-checking insi
 - `project_card` / `regen_cards` — the **only** way to render issue records → blind cards.
 - `run_codex` / `run_agy` — the **only** way to call the Codex / Gemini seats (they pin the
   sandbox/model/profile). Never call `codex` or `agy` raw.
+- `run_seat` — dispatch/retry wrapper for the two **CLI** seats (Codex, Gemini): dispatch →
+  `parse_block` → one-shot `repair.tmpl` retry on a malformed block; prints the final parse status.
+  The Claude seat is a subagent, not a CLI, so the referee drives it directly (never via `run_seat`).
+- `birth_index` — the **only** builder of the Round-0 `index.json` from the referee's clustered
+  finding-to-issue map; assigns birth state/flags/`evaluated_by` by the birth-unanimity rule (the
+  referee still owns the clustering judgment). Output installs via `index put`.
+- `resolve_instructions` — resolves `manifest.instructions` for the deterministic verbatim/none
+  cases; returns the compose sentinel (exit 3) for `auto` (the only case the referee composes).
 - `resolve_diff` — the single place that turns a scope token into diff text; `diff_hash` hashes it.
 - `init_run` / `resume_check` / `cleanup` / `discard` / `inspect_run` / `set_limits` — run lifecycle
-  and the resume/diverged/stale classification.
+  and the resume/diverged/stale classification. `PANEL_REVIEW_KEEP_TMP=true` makes `cleanup`/`discard`
+  keep `/tmp/<id>/` (diagnostics) while still removing the workspace marker/cards/git-exclude.
 - `_panel_common.sh` — sourced (not executable) shared helpers: `panel_valid_id` (ID validation
   guarding `rm -rf` paths), `panel_atomic_write` (temp + fsync + rename, `.bak` rotation), git-exclude
   helpers.

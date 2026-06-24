@@ -416,6 +416,153 @@ assert_file_contains "README uses general constrained-seat wording" 'any seat ru
 assert_file_contains "CLAUDE.md uses general constrained-seat wording" 'constrained/sandboxed workspace' "$root/CLAUDE.md"
 
 # ---------------------------------------------------------------------------
+section "birth_index — mechanical Round-0 state / flags / coverage"
+id="$PREFIX-birth"; rm -rf "/tmp/$id"; mkdir -p "/tmp/$id"
+cat > "$TMP/birth.specs.json" <<'EOF'
+[
+ {"id":"i1","claim":"all three raised","location":"a.c:1","category":"correctness","severity":"high","evidence_pro":[{"location":"a.c:1","assertion":"x"}],"raised_by":["codex","gemini","claude"]},
+ {"id":"i2","claim":"two of three","location":"a.c:2","category":"security","severity":"medium","evidence_pro":[{"location":"a.c:2","assertion":"y"}],"raised_by":["codex","claude"]},
+ {"id":"i3","claim":"single raiser","location":"a.c:3","category":"performance","severity":"low","evidence_pro":[{"location":"a.c:3","assertion":"z"}],"raised_by":["gemini"]},
+ {"id":"i4","claim":"unanimous but detail diverges","location":"a.c:4","category":"correctness","severity":"high","evidence_pro":[{"location":"a.c:4","assertion":"w"}],"raised_by":["codex","gemini","claude"],"detail_divergence":true}
+]
+EOF
+"$SC/birth_index" --available "codex gemini claude" --configured "codex gemini claude" < "$TMP/birth.specs.json" > "/tmp/$id/index.json" 2>/dev/null; assert_exit "birth_index full panel -> 0" 0 "$?"
+echo '{}' > "/tmp/$id/manifest.json"
+assert_eq "i1 unanimous -> accepted/peer/fully_vetted" 'accepted|true|true|false' "$(jq -r '.issues[]|select(.id=="i1")|"\(.state)|\(.peer_reviewed)|\(.fully_vetted)|\(.detail_contested)"' "/tmp/$id/index.json")"
+assert_eq "i2 partial (2/3) -> open, not peer"          'open|false|false'        "$(jq -r '.issues[]|select(.id=="i2")|"\(.state)|\(.peer_reviewed)|\(.fully_vetted)"' "/tmp/$id/index.json")"
+assert_eq "i3 single raiser -> open"                     'open'                    "$(jq -r '.issues[]|select(.id=="i3")|.state' "/tmp/$id/index.json")"
+assert_eq "i4 unanimous + divergence -> accepted+detail_contested" 'accepted|true' "$(jq -r '.issues[]|select(.id=="i4")|"\(.state)|\(.detail_contested)"' "/tmp/$id/index.json")"
+assert_eq "evaluated_by = the raisers (sorted unique)" '["claude","codex","gemini"]' "$(jq -c '.evaluated_by.i1' "/tmp/$id/index.json")"
+assert_eq "i2 evaluated_by tracks 2 raisers"            '["claude","codex"]'         "$(jq -c '.evaluated_by.i2' "/tmp/$id/index.json")"
+assert_eq "index installs cleanly (gate-status reads it)" '{"open":2,"low_only":false}' "$("$SC/index" gate-status "$id")"
+
+section "birth_index — degraded panel: unanimous-but-down seat is not fully_vetted"
+id="$PREFIX-birth-down"; rm -rf "/tmp/$id"; mkdir -p "/tmp/$id"
+echo '[{"id":"i1","claim":"c","location":"a:1","category":"correctness","severity":"high","evidence_pro":[{"location":"a:1","assertion":"x"}],"raised_by":["codex","claude"]}]' \
+  | "$SC/birth_index" --available "codex claude" --configured "codex gemini claude" > "/tmp/$id/index.json" 2>/dev/null
+assert_eq "all-available (2) raised, gemini down -> accepted, NOT fully_vetted" 'accepted|true|false' "$(jq -r '.issues[]|select(.id=="i1")|"\(.state)|\(.peer_reviewed)|\(.fully_vetted)"' "/tmp/$id/index.json")"
+
+section "birth_index — validation rejects bad input (exit 3)"
+echo '[{"id":"i1","claim":"c","location":"a:1","category":"style","severity":"style","evidence_pro":[{"location":"a:1","assertion":"x"}],"raised_by":["codex","claude"]}]' \
+  | "$SC/birth_index" --available "codex claude" --configured "codex claude" >/dev/null 2>&1; assert_exit "style severity -> exit 3" 3 "$?"
+echo '[{"id":"i1","claim":"c","location":"a:1","category":"correctness","severity":"high","evidence_pro":[{"location":"a:1","assertion":"x"}],"raised_by":["gemini"]}]' \
+  | "$SC/birth_index" --available "codex claude" --configured "codex claude" >/dev/null 2>&1; assert_exit "raiser not available -> exit 3" 3 "$?"
+echo '[{"id":"i1","claim":"c","location":"a:1","category":"correctness","severity":"high","evidence_pro":[{"location":"a:1","assertion":"x"}],"raised_by":["codex"]},{"id":"i1","claim":"d","location":"a:2","category":"correctness","severity":"high","evidence_pro":[{"location":"a:2","assertion":"y"}],"raised_by":["codex"]}]' \
+  | "$SC/birth_index" --available "codex claude" --configured "codex claude" >/dev/null 2>&1; assert_exit "duplicate id -> exit 3" 3 "$?"
+echo '[{"id":"i1","claim":"c","location":"a:1","category":"correctness","severity":"high","evidence_pro":[],"raised_by":["codex"]}]' \
+  | "$SC/birth_index" --available "codex claude" --configured "codex claude" >/dev/null 2>&1; assert_exit "empty evidence_pro -> exit 3" 3 "$?"
+assert_eq "empty issue list -> empty debate index" '0|debate' "$(echo '[]' | "$SC/birth_index" --available "codex claude" --configured "codex claude" | jq -r '"\(.issues|length)|\(.phase)"')"
+
+# ---------------------------------------------------------------------------
+# run_seat needs a mock CLI on PATH. The mock writes to codex's `-o <file>` and
+# is driven by MOCK_MODE + a per-test counter file so we can exercise repair.
+seat_mockbin="$TMP/seatbin"; mkdir -p "$seat_mockbin"
+cat > "$seat_mockbin/codex" <<'EOF'
+#!/usr/bin/env bash
+out=""; prev=""
+for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
+cat >/dev/null    # drain the prompt
+n=0; [ -f "${MOCK_COUNT:-/dev/null}" ] && n="$(cat "$MOCK_COUNT")"; n=$((n+1)); echo "$n" > "$MOCK_COUNT"
+good='{"claim":"c","location":"a.c:1","category":"correctness","severity":"high","points":[{"assertion":"x","location":"a.c:1"}]}'
+bad='{"location":"a.c:1","category":"correctness","severity":"high","points":[{"assertion":"x","location":"a.c:1"}]}'
+case "$MOCK_MODE" in
+  good)               printf '```%s\n%s\n```\n' "$MOCK_TAG" "$good" > "$out" ;;
+  malformed_then_good) if [ "$n" -eq 1 ]; then printf '```%s\n%s\n```\n' "$MOCK_TAG" "$bad" > "$out"; else printf '```%s\n%s\n```\n' "$MOCK_TAG" "$good" > "$out"; fi ;;
+  always_malformed)   printf '```%s\n%s\n```\n' "$MOCK_TAG" "$bad" > "$out" ;;
+  noblock)            printf 'I will not answer.\n' > "$out" ;;
+esac
+EOF
+chmod +x "$seat_mockbin/codex"
+cat > "$seat_mockbin/agy" <<'EOF'
+#!/usr/bin/env bash
+cat >/dev/null
+printf '```findings\n%s\n```\n' '{"claim":"g","location":"a.c:1","category":"correctness","severity":"high","points":[{"assertion":"x","location":"a.c:1"}]}'
+EOF
+chmod +x "$seat_mockbin/agy"
+seat_home="$TMP/seathome"; mkdir -p "$seat_home"
+printf 'PROMPT\n' > "$TMP/seat.prompt"
+run_seat_codex() { MOCK_TAG="$2" MOCK_MODE="$1" MOCK_COUNT="$TMP/seat.count.$3" PATH="$seat_mockbin:$PATH" HOME="$seat_home" \
+  "$SC/run_seat" --seat codex --tag "$2" --prompt "$TMP/seat.prompt" --raw "$TMP/seat.raw.$3" --parsed "$TMP/seat.parsed.$3" "${@:4}" 2>/dev/null; }
+
+section "run_seat — dispatch + parse, status on stdout"
+st="$(run_seat_codex good findings g1)"
+assert_eq "clean findings -> status 0"          '0' "$st"
+assert_eq "clean findings -> one parsed object" '1' "$(grep -c . "$TMP/seat.parsed.g1")"
+assert_eq "parsed is _source-tagged"            'codex' "$(jq -r '._source' "$TMP/seat.parsed.g1")"
+assert_eq "single dispatch (no repair)"         '1' "$(cat "$TMP/seat.count.g1")"
+
+section "run_seat — one-shot repair salvages a malformed block"
+st="$(run_seat_codex malformed_then_good findings r1)"
+assert_eq "malformed-then-good -> status 0"  '0' "$st"
+assert_eq "exactly two dispatches (1 repair)" '2' "$(cat "$TMP/seat.count.r1")"
+assert_eq "repaired content parsed"          'c' "$(jq -r '.claim' "$TMP/seat.parsed.r1")"
+
+section "run_seat — repair retried once then gives up; --no-repair skips it"
+st="$(run_seat_codex always_malformed findings r2)"
+assert_eq "still malformed after repair -> status 5" '5' "$st"
+assert_eq "repair attempted exactly once (2 calls)"  '2' "$(cat "$TMP/seat.count.r2")"
+st="$(run_seat_codex always_malformed findings r3 --no-repair)"
+assert_eq "--no-repair malformed -> status 5"        '5' "$st"
+assert_eq "--no-repair makes a single dispatch"      '1' "$(cat "$TMP/seat.count.r3")"
+
+section "run_seat — no-block seat is down (status 4), nothing to repair"
+st="$(run_seat_codex noblock findings r4)"
+assert_eq "no block -> status 4"          '4' "$st"
+assert_eq "down seat not re-dispatched"   '1' "$(cat "$TMP/seat.count.r4")"
+
+section "run_seat — repair extends to malformed new_findings blocks"
+st="$(run_seat_codex malformed_then_good new_findings nf1)"
+assert_eq "new_findings repaired -> status 0" '0' "$st"
+assert_eq "new_findings two dispatches"       '2' "$(cat "$TMP/seat.count.nf1")"
+
+section "run_seat — gemini routes through run_agy"
+st="$(timeout 30 env MOCK_MODE=good MOCK_TAG=findings PATH="$seat_mockbin:$PATH" HOME="$seat_home" \
+  "$SC/run_seat" --seat gemini --tag findings --prompt "$TMP/seat.prompt" --raw "$TMP/seat.raw.gem" --parsed "$TMP/seat.parsed.gem" 2>/dev/null)"
+assert_eq "gemini seat -> status 0"      '0' "$st"
+assert_eq "gemini parsed _source=gemini" 'gemini' "$(jq -r '._source' "$TMP/seat.parsed.gem")"
+"$SC/run_seat" --seat mistral --tag findings --prompt "$TMP/seat.prompt" --raw "$TMP/x" --parsed "$TMP/y" >/dev/null 2>&1; assert_exit "unknown seat -> usage exit 2" 2 "$?"
+
+# ---------------------------------------------------------------------------
+section "resolve_instructions — verbatim / none resolved, auto -> sentinel"
+id="$PREFIX-instr"; rm -rf "/tmp/$id"; mkdir -p "/tmp/$id"
+echo '{"instructions":""}' > "/tmp/$id/manifest.json"
+out="$("$SC/resolve_instructions" --id "$id")"; rc=$?
+assert_exit "empty instructions -> exit 0" 0 "$rc"
+assert_eq "empty -> the standard none line" '(none — review the diff on its own terms)' "$out"
+echo '{"instructions":"Focus on the redis TTL logic."}' > "/tmp/$id/manifest.json"
+out="$("$SC/resolve_instructions" --id "$id")"; assert_exit "verbatim -> exit 0" 0 "$?"
+assert_eq "verbatim author text passed through" 'Focus on the redis TTL logic.' "$out"
+echo '{"instructions":"auto"}' > "/tmp/$id/manifest.json"
+out="$("$SC/resolve_instructions" --id "$id" 2>/dev/null)"; rc=$?
+assert_exit "auto -> compose sentinel exit 3" 3 "$rc"
+assert_eq "auto prints the compose sentinel" '__PANEL_COMPOSE_INSTRUCTIONS__' "$out"
+rm -f "/tmp/$id/manifest.json"
+"$SC/resolve_instructions" --id "$id" >/dev/null 2>&1; assert_exit "missing manifest -> exit 1" 1 "$?"
+
+# ---------------------------------------------------------------------------
+section "cleanup / discard — PANEL_REVIEW_KEEP_TMP preserves /tmp diagnostics"
+keeprepo="$TMP/keep-repo"; mkdir -p "$keeprepo"; ( cd "$keeprepo" && git init -q )
+id="$PREFIX-keep"; rm -rf "/tmp/$id"; mkdir -p "/tmp/$id"; echo '{"id":"x"}' > "/tmp/$id/manifest.json"
+mkdir -p "$keeprepo/.panel-review/$id"; echo "$id" > "$keeprepo/.panel-review/$id/.panel-run"
+PANEL_REVIEW_KEEP_TMP=true "$SC/cleanup" --id "$id" --workdir "$keeprepo" 2>/dev/null
+assert_eq "KEEP_TMP cleanup removes the marker"     'gone'    "$([ -d "$keeprepo/.panel-review/$id" ] && echo here || echo gone)"
+assert_eq "KEEP_TMP cleanup preserves /tmp/<id>"    'kept'    "$([ -d "/tmp/$id" ] && echo kept || echo gone)"
+mkdir -p "$keeprepo/.panel-review/$id"; echo "$id" > "$keeprepo/.panel-review/$id/.panel-run"
+"$SC/cleanup" --id "$id" --workdir "$keeprepo" 2>/dev/null
+assert_eq "default cleanup removes /tmp/<id>"       'gone'    "$([ -d "/tmp/$id" ] && echo kept || echo gone)"
+id="$PREFIX-keep2"; rm -rf "/tmp/$id"; mkdir -p "/tmp/$id"; echo '{}' > "/tmp/$id/manifest.json"
+mkdir -p "$keeprepo/.panel-review/$id"; echo "$id" > "$keeprepo/.panel-review/$id/.panel-run"
+PANEL_REVIEW_KEEP_TMP=true "$SC/discard" --workdir "$keeprepo" >/dev/null
+assert_eq "KEEP_TMP discard preserves /tmp/<id>"    'kept'    "$([ -d "/tmp/$id" ] && echo kept || echo gone)"
+assert_eq "KEEP_TMP discard still clears .panel-review" 'gone' "$([ -d "$keeprepo/.panel-review" ] && echo here || echo gone)"
+rm -rf "/tmp/$id"
+
+section "protocol references the new deterministic helpers"
+assert_file_contains "protocol uses birth_index"          'birth_index' "$root/skills/panel-review-for-agent/SKILL.md"
+assert_file_contains "protocol uses run_seat"             'run_seat'    "$root/skills/panel-review-for-agent/SKILL.md"
+assert_file_contains "protocol uses resolve_instructions" 'resolve_instructions' "$root/skills/panel-review-for-agent/SKILL.md"
+
+# ---------------------------------------------------------------------------
 echo
 echo "================================"
 echo "  PASS: $pass   FAIL: $fail"

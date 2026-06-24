@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# resolve_instructions — resolve a run's author instructions to the literal text
+# every seat prompt should carry, for the two DETERMINISTIC cases the referee
+# should never hand-format (SKILL Round 0 step 2):
+#
+#   manifest.instructions == ""      -> the standard "(none …)" line  (exit 0)
+#   manifest.instructions == <text>  -> that author text verbatim     (exit 0)
+#   manifest.instructions == "auto"  -> NOT resolvable here: composing neutral,
+#                                       externally-sourced context is a model task.
+#                                       Print the compose sentinel and exit 3 so the
+#                                       referee branches to compose it itself.
+#
+# Why a script: the verbatim/none cases are byte-exact and must match across every
+# seat, every round, and resume — a place for them removes drift and keeps the
+# referee from re-deriving the empty-case wording. The "auto" case is the only one
+# that genuinely needs the model, and the sentinel makes that hand-off explicit.
+#
+# Usage: resolve_instructions --id <ID>
+#   stdout: the resolved instructions text (exit 0), OR the compose sentinel (exit 3).
+#   The sentinel is also unambiguous on its own line so a caller can branch on EITHER
+#   the exit code or the value; capture into a var (don't redirect into instructions.txt
+#   directly) so the sentinel never lands in the file on the auto path.
+#
+# Exit: 0 resolved · 3 compose-required (auto) · 2 usage · 1 no manifest.
+set -euo pipefail
+here="$(cd "$(dirname "$0")" && pwd)"; . "$here/_panel_common.sh"
+command -v jq >/dev/null 2>&1 || { echo "resolve_instructions: jq not found" >&2; exit 127; }
+
+SENTINEL="__PANEL_COMPOSE_INSTRUCTIONS__"
+NONE_LINE="(none — review the diff on its own terms)"
+
+id=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --id) id="${2-}"; shift 2 ;;
+    *) echo "resolve_instructions: unknown arg: $1" >&2; exit 2 ;;
+  esac
+done
+panel_require_id "$id"
+man="/tmp/$id/manifest.json"
+[ -f "$man" ] || { echo "resolve_instructions: no manifest for $id" >&2; exit 1; }
+
+instr="$(jq -r '.instructions // ""' "$man")"
+if [ "$instr" = "auto" ]; then
+  printf '%s\n' "$SENTINEL"
+  echo "resolve_instructions: instructions=auto — referee must compose neutral context" >&2
+  exit 3
+elif [ -n "$instr" ]; then
+  printf '%s\n' "$instr"          # verbatim author text
+else
+  printf '%s\n' "$NONE_LINE"
+fi

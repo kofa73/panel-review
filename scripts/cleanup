@@ -21,7 +21,13 @@ panel_require_id "$id"; [ -n "$workdir" ] || { echo "cleanup: need --workdir" >&
 marker="$workdir/.panel-review/$id"
 # Guard: only ever rm a path that ends in our validated id, under the expected roots.
 [ -d "$marker" ] && rm -rf -- "$marker"
-[ -d "/tmp/$id" ] && rm -rf -- "/tmp/$id"
+# PANEL_REVIEW_KEEP_TMP=true preserves the /tmp/<id> diagnostic dir (manifest,
+# index, sweeps, raw, audit) while still removing all workspace state below.
+if panel_keep_tmp; then
+  echo "cleanup: PANEL_REVIEW_KEEP_TMP=true — preserving /tmp/$id (workspace state removed)" >&2
+else
+  [ -d "/tmp/$id" ] && rm -rf -- "/tmp/$id"
+fi
 
 # The pre-cleanup verdict snapshot (persisted before cleanup for crash-safety) is a
 # sibling FILE of the run dir, not inside it. Remove it too — otherwise it lingers,

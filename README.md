@@ -252,9 +252,12 @@ malformed block, using its own prior output plus `parse_block --diagnose` output
 | `resolve_diff` | Turn a scope token into the diff text — **one** place owns scope→diff (`start`/`resume`/`continue` hash it, referee reviews it) |
 | `diff_hash` | Stable hash of the resolved diff, for the manifest and the resume/diverged check |
 | `assemble` | Splice scope + diff (or card paths) into a prompt template without an LLM retyping them |
+| `resolve_instructions` | Resolve `manifest.instructions` to the seat-facing text for the two deterministic cases (verbatim author text, or the "(none …)" line); returns a compose **sentinel** (exit 3) for `auto`, the only case that needs the referee to write neutral context |
 | `run_codex` | The **only** way to call the Codex seat — pins `--sandbox read-only`, defaults `--profile panel-review` (auto-creates the profile from a shipped default) |
 | `run_agy` | The **only** way to call the Gemini seat — pins the model and the timeout/stdin fixes, and falls back from the primary Gemini model to a faster one if the primary fails or trips agy's internal "waiting for response" timeout |
+| `run_seat` | Dispatch one **CLI** seat (Codex or Gemini) for a tag, parse the block, and run the one-shot shape repair (diagnose → `repair.tmpl` with the seat's own output → re-dispatch) automatically; prints the final parse status. The Claude seat is a subagent, not a CLI, so it is driven by the referee directly |
 | `extract_block` / `parse_block` | Pull a `findings` / `stances` / `new_findings` block → validated JSONL; `parse_block` exit 4 = no block (down seat) vs empty-but-present, exit 5 = malformed (block present, zero valid). `parse_block --diagnose` reports *why* each item was rejected (reason + offending line) to drive a one-shot repair |
+| `birth_index` | Turn the referee's clustered Round-0 finding-to-issue map into the full `index.json` — assigns each issue's birth state, vetting flags, and `evaluated_by` coverage by the birth-unanimity rule (the deterministic half of clustering; the referee still owns the merge itself) |
 | `decide_round` / `decide_degraded_round` | Build normal (≥2 seats) and degraded (0–1 seat) debate payloads. Both update private `evaluated_by` coverage in the same atomic commit; the degraded path only emits terminal unresolved/contested states and eligible `fully_vetted` flags |
 | `merge_payload` | Fold the referee's addendum (synthesized claims, `add_issues`, fold-reopen) into the `decide_round` payload with `commit-sweep`'s per-key semantics (`set_state` replace, `revise` field-merge) — so additions never become a duplicate `set_state`/`revise` that rejects the round |
 | `init_run` / `resume_check` / `cleanup` | Mint a run (marker-last); decide resume/continuable/diverged/stale/ambiguous; tear down after the verdict |
@@ -293,6 +296,11 @@ Writes are atomic (temp + `sync` + `rename`, prior version rotated to `.bak`). I
 state first and the marker **last**, so a marker always implies valid state. A clean finish removes
 both the cards and `/tmp/<ID>/`; an interruption leaves them for `panel-review:resume`. Use
 `panel-review:status` to inspect a saved session and `panel-review:discard` to remove it.
+
+Setting **`PANEL_REVIEW_KEEP_TMP=true`** makes both `cleanup` and `discard` keep `/tmp/<ID>/` (the
+manifest, index, sweeps, raw seat output, and audit trail) for post-mortem inspection while still
+removing the workspace state (the cards, the marker, and the `.git/info/exclude` line). The durable
+verdict at `/tmp/<ID>.md` survives regardless.
 
 ### The durable verdict file (`/tmp/<ID>.md`)
 

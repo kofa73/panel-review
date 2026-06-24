@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# run_seat — dispatch one EXTERNAL CLI seat (Codex or Gemini) for one tag, parse
+# its block, and run the one-shot shape REPAIR automatically. Wraps the whole
+# dispatch→parse→(diagnose→repair→re-dispatch→re-parse) sequence the referee used
+# to drive by hand for every seat, in every round (SKILL Round 0 step 4, debate
+# step 8). The Claude seat is NOT here: it is a fresh subagent the referee spawns
+# via the Agent tool, not a CLI — only the two CLI seats are scriptable.
+#
+# Usage:
+#   run_seat --seat <codex|gemini> --tag <findings|new_findings|stances> \
+#            --prompt <promptfile> --raw <rawfile> --parsed <parsedfile> \
+#            [--label <label>] [--no-repair]
+#
+#   --prompt   the assembled prompt for this pass (stdin to the CLI).
+#   --raw      where the seat's verbatim response is written (and OVERWRITTEN on a
+#              repair retry, so resume sees the latest output) — same file the
+#              protocol caches via `sweep record`/`ingest-batch`.
+#   --parsed   where the validated JSONL is written (parse_block output, _source-tagged).
+#   --label    _source tag for parse_block (default: the seat name).
+#   --no-repair  skip the malformed-block repair retry (one plain dispatch+parse).
+#
+# Repair fires ONLY on a malformed block (parse exit 5): a format slip, not a bad
+# review — re-asking the seat to fix just the JSON shape salvages complete content
+# and beats re-rolling the blind prompt. A no-block result (exit 4) is a down /
+# refusing seat with nothing to repair; an empty-but-present block (exit 0) is a
+# clean "found nothing". The repair prompt carries ONLY this seat's own output, so
+# blindness holds. Repair runs at most once.
+#
+# Output: the FINAL parse_block status on stdout (0 engaged · 4 no block/down ·
+# 5 still malformed after repair). The script's own exit is 0 unless a usage/setup
+# error occurred (2 usage, 1 missing file) — so the caller reads engagement from
+# stdout, never conflated with the wrapper's own failure.
+set -euo pipefail
+here="$(cd "$(dirname "$0")" && pwd)"
+PR="$here/../prompts"
+
+seat=""; tag=""; prompt=""; raw=""; parsed=""; label=""; repair=1
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --seat)      seat="${2-}"; shift 2 ;;
+    --tag)       tag="${2-}"; shift 2 ;;
+    --prompt)    prompt="${2-}"; shift 2 ;;
+    --raw)       raw="${2-}"; shift 2 ;;
+    --parsed)    parsed="${2-}"; shift 2 ;;
+    --label)     label="${2-}"; shift 2 ;;
+    --no-repair) repair=0; shift ;;
+    *) echo "run_seat: unknown arg: $1" >&2; exit 2 ;;
+  esac
+done
+case "$seat" in
+  codex)  cli="$here/run_codex" ;;
+  gemini) cli="$here/run_agy" ;;
+  *) echo "run_seat: --seat must be codex|gemini (the Claude seat is a subagent, not a CLI)" >&2; exit 2 ;;
+esac
+case "$tag" in findings|new_findings|stances) ;; *) echo "run_seat: --tag must be findings|new_findings|stances" >&2; exit 2 ;; esac
+[ -n "$prompt" ] && [ -f "$prompt" ] || { echo "run_seat: --prompt must name an existing file" >&2; exit 1; }
+[ -n "$raw" ]    || { echo "run_seat: --raw required" >&2; exit 2; }
+[ -n "$parsed" ] || { echo "run_seat: --parsed required" >&2; exit 2; }
+[ -n "$label" ] || label="$seat"
+
+# Dispatch the seat, capturing its output to $raw and never aborting on a seat
+# failure (a down seat = empty/partial $raw = parse_block exit 4; we degrade, not
+# crash). The CLI wrapper's own stderr passes through to ours for logging.
+dispatch() {
+  set +e
+  "$cli" < "$prompt" > "$raw"
+  local rc=$?
+  set -e
+  return "$rc"
+}
+
+parse() { # -> sets `status` to the parse_block exit; writes validated JSONL to $parsed
+  set +e
+  "$here/parse_block" "$tag" "$raw" "$label" > "$parsed"
+  status=$?
+  set -e
+}
+
+dispatch || true
+parse
+
+if [ "$repair" -eq 1 ] && [ "$status" -eq 5 ]; then
+  # Malformed block: diagnose the exact violations and hand the seat back its own
+  # output + those reasons via repair.tmpl. Shape-only fix, this seat's text only.
+  diag="$(mktemp "${TMPDIR:-/tmp}/run_seat_diag.XXXXXX")"
+  tagf="$(mktemp "${TMPDIR:-/tmp}/run_seat_tag.XXXXXX")"
+  rprompt="$(mktemp "${TMPDIR:-/tmp}/run_seat_repair.XXXXXX")"
+  trap 'rm -f "$diag" "$tagf" "$rprompt"' EXIT
+  printf '%s\n' "$tag" > "$tagf"
+  "$here/parse_block" --diagnose "$tag" "$raw" > "$diag" 2>/dev/null || true
+  "$here/assemble" "$PR/repair.tmpl" TAG="$tagf" PREV="$raw" VIOLATIONS="$diag" > "$rprompt"
+  prompt="$rprompt"          # re-dispatch with the repair prompt, OVERWRITING $raw
+  dispatch || true
+  parse
+fi
+
+printf '%s\n' "$status"

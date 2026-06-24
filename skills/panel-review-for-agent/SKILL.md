@@ -61,11 +61,14 @@ SC="${CLAUDE_PLUGIN_ROOT}/scripts"
 PR="${CLAUDE_PLUGIN_ROOT}/prompts"
 
 "$SC/preflight"                              # env check; tail "CODEX: yes|no"/"GEMINI: yes|no"; exit 1 = core unusable (needs jq, git, work-tree, ≥1 peer)
+"$SC/resolve_instructions" --id <id>         # manifest.instructions -> verbatim/none text (exit 0) OR compose sentinel (exit 3 = auto, you compose)
 "$SC/assemble" TMPL KEY=file ...             # splice files into a template's {{KEY}} sentinels -> stdout
 "$SC/run_codex" < prompt > raw 2> err        # Codex seat (pins --profile panel-review, --sandbox read-only; auto-creates the profile)
 "$SC/run_agy"   < prompt > raw 2> err        # Gemini seat (pins model/timeout/stdin)
+"$SC/run_seat" --seat <codex|gemini> --tag <tag> --prompt <f> --raw <f> --parsed <f> [--label L] [--no-repair]  # dispatch a CLI seat + parse + one-shot repair; FINAL parse status on stdout
 "$SC/parse_block" <tag> <raw> [label]        # ```<tag> block -> validated JSONL; exit 4 = NO block (down), 5 = malformed (repair once)
 "$SC/parse_block" --diagnose <tag> <raw>     # WHY each item was rejected (reason + offending line); feeds repair.tmpl on exit 5
+"$SC/birth_index" --available "<seats>" --configured "<seats>" < issues.json   # clustered Round-0 issues -> full index.json (birth state/flags/coverage)
 "$SC/index"   {get|put|issue|bump|state|flag|gate-status|commit-sweep} <id> ...   # ONLY writer of index.json
 "$SC/project_card" --id <id> --workdir <dir> [--index-rev N] < issue.json   # one issue record -> its card
 "$SC/regen_cards"  --id <id> --workdir <dir>                                # rebuild ALL cards from the index
@@ -157,26 +160,30 @@ reviewer-facing fields, so the origins never leak even if adjacent.
    if `/tmp/$id/diff.txt` is empty, stop and say so before running seats (never guess a base branch).
 
 2. **Resolve author instructions once** into `/tmp/$id/instructions.txt` (reused by every
-   seat, every round, and across resume — generate only if the file is absent):
+   seat, every round, and across resume — generate only if the file is absent). The two
+   deterministic cases (verbatim author text, or the empty "(none …)" line) are owned by
+   `resolve_instructions`; only the `auto` sentinel is yours to compose:
 
    ```bash
    if [ ! -f /tmp/$id/instructions.txt ]; then
-     instr="$(jq -r '.instructions // ""' /tmp/$id/manifest.json)"
-     if [ "$instr" = "auto" ]; then
-       # Compose a few NEUTRAL sentences of context the diff does NOT already contain —
+     instr="$("$SC/resolve_instructions" --id "$id")"; rc=$?
+     if [ "$rc" -eq 3 ]; then
+       # auto: compose a few NEUTRAL sentences of context the diff does NOT already contain —
        # branch name, commit subjects on the branch (git log <base>..HEAD --format='%s'),
        # `git status` summary. NEVER paraphrase the diff itself: that injects one
        # interpretation into all three blind seats and defeats their independence. For an
        # `uncommitted` scope there are no commits — fall back to branch + status only, and
-       # if nothing useful exists, write the "(none …)" line below.
+       # if nothing useful exists, write the "(none …)" line.
        printf '%s\n' "<your neutral, externally-sourced context here>" > /tmp/$id/instructions.txt
-     elif [ -n "$instr" ]; then
-       printf '%s\n' "$instr" > /tmp/$id/instructions.txt          # verbatim author text
+     elif [ "$rc" -eq 0 ]; then
+       printf '%s\n' "$instr" > /tmp/$id/instructions.txt          # verbatim author text or the none line
      else
-       printf '(none — review the diff on its own terms)\n' > /tmp/$id/instructions.txt
+       exit "$rc"   # no manifest / usage — a real error, not a review outcome
      fi
    fi
    ```
+   Capture into a variable as shown — never redirect `resolve_instructions` straight into
+   `instructions.txt`, or the compose sentinel lands in the file on the `auto` path.
 
 3. **Assemble the prompt** (same prompt for all three seats):
 
@@ -185,33 +192,36 @@ reviewer-facing fields, so the origins never leak even if adjacent.
    "$SC/assemble" "$PR/blind_pass.tmpl" SCOPE=/tmp/$id/scope.txt INSTRUCTIONS=/tmp/$id/instructions.txt DIFF=/tmp/$id/diff.txt > /tmp/$id/round0.prompt
    ```
 
-4. **Dispatch all three in parallel** (start Codex + Gemini in the background, spawn the Claude
-   seat subagent), each writing to `/tmp/$id/raw/round0.<seat>.txt`. Then parse **and capture each
-   exit code** — never append `|| true`, which would hide a down seat:
+4. **Dispatch all three in parallel.** For the two **CLI seats** (Codex, Gemini) call `run_seat`:
+   it dispatches the seat, parses the `findings` block, and runs the **one-shot shape repair**
+   automatically (diagnose → `repair.tmpl` with the seat's OWN output → re-dispatch → re-parse),
+   printing the FINAL parse status. The **Claude seat** is a subagent, not a CLI, so spawn it and
+   parse/repair it by hand. Never append `|| true` — that would hide a down seat:
 
    ```bash
-   for seat in codex gemini claude; do
-     "$SC/parse_block" findings "/tmp/$id/raw/round0.$seat.txt" "$seat" > "/tmp/$id/f.$seat.json"
-     echo "$?" > "/tmp/$id/status.$seat"      # 0 = engaged, 4 = no block, 5 = malformed block
-   done
-   # Malformed (exit 5) is usually a FORMAT slip, not a bad review: REPAIR each
-   # exit-5 seat ONCE rather than blindly re-rolling. Diagnose the exact
-   # violations, hand the seat back its own output + those violations via
-   # repair.tmpl, and ask only for a corrected block — this salvages complete
-   # findings that merely had the wrong shape and beats re-running the same blind
-   # prompt. (exit 4 = no block at all = nothing to repair → the seat stays down;
-   # that is a malfunction/timeout, not a format slip. The repair prompt carries
-   # the seat's OWN output only — no cross-seat content — so blindness holds.)
-   printf 'findings\n' > /tmp/$id/tag.txt
-   for seat in codex gemini claude; do
-     [ "$(cat /tmp/$id/status.$seat)" = 5 ] || continue
-     "$SC/parse_block" --diagnose findings "/tmp/$id/raw/round0.$seat.txt" > "/tmp/$id/diag.$seat.txt" || true
-     "$SC/assemble" "$PR/repair.tmpl" TAG=/tmp/$id/tag.txt PREV="/tmp/$id/raw/round0.$seat.txt" VIOLATIONS="/tmp/$id/diag.$seat.txt" > "/tmp/$id/repair.$seat.prompt"
-     # …dispatch <seat> with repair.$seat.prompt, OVERWRITING /tmp/$id/raw/round0.$seat.txt…
-     "$SC/parse_block" findings "/tmp/$id/raw/round0.$seat.txt" "$seat" > "/tmp/$id/f.$seat.json"
-     echo "$?" > "/tmp/$id/status.$seat"
-   done
+   # CLI seats: run_seat owns dispatch + parse + repair. Final status on stdout.
+   for seat in codex gemini; do
+     "$SC/run_seat" --seat "$seat" --tag findings \
+       --prompt /tmp/$id/round0.prompt \
+       --raw "/tmp/$id/raw/round0.$seat.txt" --parsed "/tmp/$id/f.$seat.json" > "/tmp/$id/status.$seat"
+   done                                         # 0 = engaged, 4 = no block (down), 5 = malformed after repair
+   # Claude seat (subagent): spawn it, write its returned text to the raw file, then
+   # parse + repair manually — the same one-shot repair run_seat does for the CLI seats.
+   "$SC/parse_block" findings "/tmp/$id/raw/round0.claude.txt" claude > /tmp/$id/f.claude.json
+   echo "$?" > /tmp/$id/status.claude
+   if [ "$(cat /tmp/$id/status.claude)" = 5 ]; then
+     printf 'findings\n' > /tmp/$id/tag.txt
+     "$SC/parse_block" --diagnose findings "/tmp/$id/raw/round0.claude.txt" > /tmp/$id/diag.claude.txt || true
+     "$SC/assemble" "$PR/repair.tmpl" TAG=/tmp/$id/tag.txt PREV=/tmp/$id/raw/round0.claude.txt VIOLATIONS=/tmp/$id/diag.claude.txt > /tmp/$id/repair.claude.prompt
+     # …re-spawn the Claude seat with repair.claude.prompt, OVERWRITING round0.claude.txt…
+     "$SC/parse_block" findings "/tmp/$id/raw/round0.claude.txt" claude > /tmp/$id/f.claude.json
+     echo "$?" > /tmp/$id/status.claude
+   fi
    ```
+   Repairing exit 5 (a FORMAT slip, not a bad review) salvages complete findings that merely had the
+   wrong shape and beats re-running the blind prompt; exit 4 (no block at all) is nothing to repair —
+   the seat stays down. The repair prompt carries only the seat's OWN output, so blindness holds.
+
    Read the **final** status after the retry. Exit **0** ⇒ engaged (an empty file here ⇒ the seat
    ran and found nothing — counts as available). Exit **4** ⇒ the seat produced no findings block at
    all ⇒ **down at Round 0**. Exit **5** *after the retry* ⇒ still malformed ⇒ also unavailable this
@@ -230,22 +240,30 @@ reviewer-facing fields, so the origins never leak even if adjacent.
    - **Drop nothing and truncate nothing.** Show all materially-different points, both sides.
    - This is also the test for folding a later `new_findings` item into an existing issue.
 
-5. **Build each issue record and its birth state** from the merged result. "Available/engaged at
-   Round 0" = a seat that produced parseable findings.
-   - `evidence_pro` = the merged points; `evidence_contra` = `[]`; `peer_reviewed=false`.
-   - **Birth unanimity:** if **all available seats (and ≥2)** independently raised the issue in
-     this pass → `state=accepted`, `peer_reviewed=true`, `rounds_debated=0` (terminal at birth; a
-     later support does NOT count as a round). `fully_vetted=true` only if that set was the full
-     panel (no seat down); else false.
-   - Raisers agree it exists but differ on severity/location → `accepted` + `detail_contested=true`.
-   - Otherwise (raised by only some, or a single seat) → `state=open` for peer review.
-   - **Drop `severity:style`** issues from the debate set — keep them aside for the Style section.
-   - Assign ids `i1,i2,…`. Record origins (which seats, raw wording) under `/tmp/<id>/origins/`.
+5. **Emit your clustered issues; `birth_index` assigns birth state.** Your merge (step 4) is the
+   judgment; the *birth state* it implies is mechanical, so build a finding-to-issue **map** and hand
+   it to `birth_index` rather than computing states by hand. For each clustered issue write one JSON
+   object: `claim`, `location`, `category`, `severity`, `evidence_pro` (the merged points), the
+   `raised_by` list (the available seats that independently raised it), and `detail_divergence:true`
+   if the raisers agreed it exists but differed on severity/location. Assign ids `i1,i2,…`. **Drop
+   `severity:style`** issues from this map (keep them aside for the Style section — `birth_index`
+   rejects a style issue rather than debate it). Record origins (which seats, raw wording) under
+   `/tmp/<id>/origins/`. Then:
+
+   ```bash
+   # /tmp/$id/issues.map.json = a JSON array of the clustered issues described above.
+   "$SC/birth_index" --available "<seats that returned parseable findings>" \
+     --configured "<full panel from preflight>" < /tmp/$id/issues.map.json > /tmp/$id/index.new.json
+   ```
+   `birth_index` applies the birth-unanimity rule exactly — all available seats (and ≥2) raised it →
+   `accepted`/`peer_reviewed=true`, `fully_vetted` only if that set is the whole configured panel,
+   `detail_contested` from `detail_divergence`; otherwise `open`/`peer_reviewed=false` — and writes
+   `evaluated_by` from each issue's raisers. The result is a complete index.
 
 6. **Install the index and project cards:**
 
    ```bash
-   "$SC/index" put "$id" < /tmp/$id/index.new.json      # includes evaluated_by:{issue_id:[Round-0 seats]}
+   "$SC/index" put "$id" < /tmp/$id/index.new.json      # birth_index already set evaluated_by:{issue_id:[Round-0 raisers]}
    "$SC/regen_cards" --id "$id" --workdir "$workdir"     # render every issue's card
    ```
 
@@ -310,8 +328,16 @@ For `round = 1, 2, … max-rounds`, while any issue is `open`:
    `{seat,batch,expected_ids}` and register it after `sweep begin`. After each response, use
    `sweep ingest-batch`; it runs `parse_block`, requires exactly one stance for every expected ID,
    and retains raw plus parsed output only for `status=complete`. `missing`, `empty`, `malformed`,
-   `partial`, and `wrong_ids` remain retryable. Also pull any `"$SC/parse_block" new_findings <raw>
-   <seat>` (exit 4 = none).
+   `partial`, and `wrong_ids` remain retryable. Also pull any **new findings** a seat raised this
+   round from the same raw output. A new-findings block gets the SAME one-shot shape repair as
+   Round-0 findings — for a CLI seat let `run_seat --tag new_findings` dispatch+parse+repair it; for
+   the Claude seat parse and (on exit 5) repair it by hand exactly as in Round 0 step 4. Exit 4 = the
+   seat raised none.
+
+   ```bash
+   "$SC/run_seat" --seat "$seat" --tag new_findings --prompt /tmp/$id/debate.$round.prompt \
+     --raw /tmp/$id/raw/round$round.$seat.$batch.txt --parsed /tmp/$id/nf.$round.$seat.json   # CLI seats
+   ```
 
    ```bash
    "$SC/sweep" plan "$id" "$round" "$epoch" /tmp/$id/plan.$round.json

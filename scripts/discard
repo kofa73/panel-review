@@ -39,12 +39,16 @@ if [ ! -d "$base" ]; then
   exit 0
 fi
 
+# PANEL_REVIEW_KEEP_TMP=true preserves each run's /tmp/<id> diagnostic dir while
+# still clearing all workspace markers below.
+keep_tmp=0; panel_keep_tmp && keep_tmp=1
+
 removed=() skipped=()
 for d in "$base"/*/; do
   [ -d "$d" ] || continue
   name="$(basename "$d")"
   if panel_valid_id "$name"; then
-    [ -d "/tmp/$name" ] && rm -rf -- "/tmp/$name"
+    if [ "$keep_tmp" -eq 0 ] && [ -d "/tmp/$name" ]; then rm -rf -- "/tmp/$name"; fi
     removed+=("$name")
   else
     skipped+=("$name")
@@ -60,7 +64,11 @@ if [ "${#removed[@]}" -eq 0 ] && [ "${#skipped[@]}" -eq 0 ]; then
 fi
 
 for id in "${removed[@]}"; do
-  echo "removed: .panel-review/$id/ + /tmp/$id/"
+  if [ "$keep_tmp" -eq 1 ]; then
+    echo "removed: .panel-review/$id/ (kept /tmp/$id/ — PANEL_REVIEW_KEEP_TMP=true)"
+  else
+    echo "removed: .panel-review/$id/ + /tmp/$id/"
+  fi
 done
 for name in "${skipped[@]}"; do
   # The marker dir itself IS removed (by the wholesale rm -rf above); what is

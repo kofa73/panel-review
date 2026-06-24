@@ -2,7 +2,8 @@
 
 Regression suite for the debate-pipeline scripts. Plain bash + `jq` (the repo has
 no test framework); run it after touching any of: `parse_block`, `decide_round`,
-`merge_payload`, `index` (the `commit-sweep` validator), or the SKILL debate loop.
+`merge_payload`, `index` (the `commit-sweep` validator), `birth_index`, `run_seat`,
+`resolve_instructions`, `cleanup`/`discard`, or the SKILL debate loop.
 
 ## Run
 
@@ -34,8 +35,21 @@ ids under `/tmp/pr-test-$$-*` (because `decide_round`/`index` hardcode
 - **Other scripts**: `sweep` owns batch ingestion/checkpoint/recovery classification; `index
   gate-status` covers low-only predicates; `resolve_diff` combines staged + unstaged changes and has a
   no-`HEAD` fallback; `preflight` recognizes authenticated `codex login status`.
+- **birth_index**: birth-unanimity state/flags/coverage (unanimous→accepted/peer,
+  full-panel→fully_vetted, divergence→detail_contested, partial/single→open),
+  `evaluated_by` from raisers, and validation rejects (style severity, unknown
+  raiser, duplicate id, empty evidence → exit 3); the output installs via `index put`.
+- **run_seat**: dispatch + parse status on stdout (mock CLI on `PATH`); one-shot
+  repair salvages a malformed block; repair is at most once then exit 5; `--no-repair`
+  skips it; a no-block seat is down (4); repair extends to `new_findings`; gemini
+  routes through `run_agy`; unknown seat → usage exit 2.
+- **resolve_instructions**: verbatim/none resolved (exit 0), `auto` → compose
+  sentinel (exit 3), missing manifest → exit 1.
+- **cleanup / discard**: `PANEL_REVIEW_KEEP_TMP=true` preserves `/tmp/<id>` while
+  removing the marker / `.panel-review`; the default still removes `/tmp/<id>`.
 - **Protocol/template contracts**: the suite pins the documented batch-completeness,
-  dropped-seat cleanup, low-only gate, coverage, and prompt/schema requirements.
+  dropped-seat cleanup, low-only gate, coverage, prompt/schema requirements, and the
+  protocol's use of `birth_index` / `run_seat` / `resolve_instructions`.
 
 ## Fixtures
 
