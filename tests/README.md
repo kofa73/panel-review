@@ -1,72 +1,94 @@
 # tests/
 
-Regression suite for the debate-pipeline scripts. Plain bash + `jq` (the repo has
-no test framework); run it after touching any of: `parse_block`, `decide_round`,
-`merge_payload`, `index` (the `commit-sweep` validator), `birth_index`, `run_seat`,
-`resolve_instructions`, `cleanup`/`discard`, or the SKILL debate loop.
+Regression suite for the panel-review scripts. It has two layers:
+
+- **`run_tests.sh`** — plain bash + `jq`, covering the scripts that are still bash
+  (`resolve_diff`, `preflight`, `birth_index`, `run_seat`, `resolve_instructions`,
+  `cleanup`/`discard`) plus the protocol/template contracts. As its **final step**
+  it runs the Python suite below, so this one command exercises the whole pipeline.
+- **`python/`** — `unittest` tests for the stateful scripts that were ported to
+  Python 3 (`index`, `parse_block`, `decide_round`, `decide_degraded_round`,
+  `merge_payload`, `sweep`). These drive each script through its CLI (and import
+  `panel_common` directly where useful).
+
+Run it after touching any of those scripts, the `commit-sweep` validator, the debate
+decision logic, or the SKILL debate loop.
 
 ## Run
 
 ```bash
-./tests/run_tests.sh            # all tests; exits nonzero if any fail
-VERBOSE=1 ./tests/run_tests.sh  # also prints each PASS
+./tests/run_tests.sh                          # bash suite + python suite; nonzero if any fail
+VERBOSE=1 ./tests/run_tests.sh                # also prints each PASS
+python3 -m unittest discover -s tests/python  # just the python suite
+python3 -m unittest discover -s tests/python -v   # verbose
 ```
 
-Requires `jq` and the scripts under `../scripts`. The suite mints throwaway run
-ids under `/tmp/pr-test-$$-*` (because `decide_round`/`index` hardcode
-`/tmp/<id>/` paths) and cleans them up on exit. It does not touch any real run.
+Requires `jq`, `git`, **`python3`**, and the scripts under `../scripts`. Tests mint
+throwaway run ids under `/tmp` (the scripts hardcode `/tmp/<id>/` paths) and clean
+them up. No real run is touched.
 
-## What it covers
+## What the python suite covers (`tests/python/`)
 
-- **parse_block**: normal-mode exit codes on real messy output (empty→0,
-  flat-shape→5, timeout→4); stances parse **byte-identical** to stored output;
-  `--diagnose` pinpoints each failure reason; all-valid → exit 0.
-- **decide_round / decide_degraded_round**: round-1 + round-2 end-to-end through the real `index
-  commit-sweep` (and idempotent re-commit); finding-1 effective-value enum
-  convergence (i4 stays open, ceiling→detail_contested, true-unanimity→adopt);
-  split support/reject cannot adopt a unilateral revision; finding-2 integrity
-  gate (duplicate/missing/unknown `_source` → exit 3);
-  dropped empty seat → decides on remainder, withholds `fully_vetted`; degraded zero/one-seat
-  outcomes and atomically persisted coverage.
-- **merge_payload**: finding-3 set_state-replace + revise field-merge; merged
-  payload commits; contrast that hand-appending is genuinely rejected.
-- **Blindness**: rationale, assertion, precondition, impact, and array-valued
-  location markers reject the round with exit 5.
-- **Other scripts**: `sweep` owns batch ingestion/checkpoint/recovery classification; `index
-  gate-status` covers low-only predicates; `resolve_diff` combines staged + unstaged changes and has a
-  no-`HEAD` fallback; `preflight` recognizes authenticated `codex login status`.
+- **index** (`test_index.py`): `gate-status` low-only predicate; `state` enum
+  validation + `card_rev` bump; `commit-sweep` happy path, idempotent re-commit
+  (no double bump), atomic `evaluated_by` coverage; and the rejection branches —
+  format errors → exit 2, transaction/semantic errors (duplicate target, stale
+  epoch, out-of-order, nonexistent id, invariant violation) → exit 1; `put`
+  invariant; `reopen`.
+- **parse_block** (`test_parse_block.py`): normal-mode exit codes (empty→0,
+  flat-shape→5, no-block→4); stances parse **byte-identical** to the stored
+  fixtures; `--diagnose` pinpoints each failure reason (and exit 5/0); `revision`
+  sub-field stripping; empty-vs-real stances block idiom.
+- **decide_round** (`test_decide_round.py`): round-1/round-2 transitions;
+  effective-value enum convergence (stays-open, ceiling→detail_contested,
+  true-unanimity→adopt); split support/reject cannot adopt a unilateral revision;
+  integrity gate (duplicate/missing/unknown `_source` → exit 3); dropped seat
+  decides on the remainder and withholds `fully_vetted`; the blindness gate
+  (rationale/assertion/precondition/impact/array-location markers → exit 5);
+  sorted-unique `evaluated_by`.
+- **decide_degraded_round** (`test_decide_degraded_round.py`): zero/one-seat
+  terminal outcomes (`unresolved`/`contested`), `fully_vetted` only on full
+  coverage, two-seat → exit 2, integrity → exit 3.
+- **merge_payload** (`test_merge_payload.py`): set_state-replace + revise
+  field-merge; merged payload commits; hand-appending is genuinely rejected.
+- **sweep** (`test_sweep.py`): batch ingestion classification
+  (missing/empty/malformed/partial/wrong_ids/complete); `has`/`resume-plan`;
+  `drop-seat` exclusion; `done`/`commit` (incl. stale-epoch rejection); plan
+  validation.
+
+## What the bash suite covers (`run_tests.sh`)
+
+- **resolve_diff**: combined staged + unstaged tracked diff; no-`HEAD` fallback.
+- **preflight**: recognizes authenticated `codex login status`.
 - **birth_index**: birth-unanimity state/flags/coverage (unanimous→accepted/peer,
   full-panel→fully_vetted, divergence→detail_contested, partial/single→open),
   `evaluated_by` from raisers, and validation rejects (style severity, unknown
-  raiser, duplicate id, empty evidence → exit 3); the output installs via `index put`.
-- **run_seat**: dispatch + parse status on stdout (mock CLI on `PATH`); one-shot
-  repair salvages a malformed block; repair is at most once then exit 5; `--no-repair`
-  skips it; a no-block seat is down (4); repair extends to `new_findings`; gemini
-  routes through `run_agy`; unknown seat → usage exit 2.
-- **resolve_instructions**: verbatim/none resolved (exit 0), `auto` → compose
-  sentinel (exit 3), missing manifest → exit 1.
+  raiser, duplicate id, empty evidence → exit 3); output installs via `index put`.
+- **run_seat**: dispatch + parse status (mock CLI on `PATH`); one-shot repair
+  salvages a malformed block; repair at most once then exit 5; `--no-repair`;
+  no-block seat is down (4); repair extends to `new_findings`; gemini routes
+  through `run_agy`; unknown seat → usage exit 2.
+- **resolve_instructions**: verbatim/none resolved (0), `auto` → sentinel (3),
+  missing manifest → exit 1.
 - **cleanup / discard**: `PANEL_REVIEW_KEEP_TMP=true` preserves `/tmp/<id>` while
   removing the marker / `.panel-review`; the default still removes `/tmp/<id>`.
-- **Protocol/template contracts**: the suite pins the documented batch-completeness,
-  dropped-seat cleanup, low-only gate, coverage, prompt/schema requirements, and the
-  protocol's use of `birth_index` / `run_seat` / `resolve_instructions`.
+- **Protocol/template contracts**: pins the documented batch-completeness,
+  dropped-seat cleanup, low-only gate, coverage, prompt/schema requirements, and
+  the protocol's use of `birth_index` / `run_seat` / `resolve_instructions`.
 
 ## Fixtures
 
-`fixtures/` holds captured **real** run output so tests are self-contained
-(don't depend on `/tmp` oracle dirs that get cleaned):
+`fixtures/` holds captured **real** run output so tests are self-contained. They are
+now consumed by the Python suite:
 
-- `parse_block/round0.claude.flat.txt` — the real flat-shape failure
-  (valid JSON, wrong schema) that motivated `--diagnose`.
+- `parse_block/round0.claude.flat.txt` — real flat-shape failure (valid JSON, wrong
+  schema) that motivated `--diagnose`.
 - `parse_block/round0.{codex.empty,gemini.timeout}.txt` — clean-empty vs no-block.
 - `parse_block/round1.<seat>.stances.txt` + `expected.<seat>.stances.json` —
-  raw → parsed regression oracle.
+  raw → parsed regression oracle (byte-identical check).
 - `decide_round/index.round0.json`, `manifest.json`, `stances.round1.json`,
-  `evaluated.round0.json` — a full round-0 result + round-1 stances + the
-  cumulative `evaluated_by` map.
+  `evaluated.round0.json` — a full round-0 result + round-1 stances + the cumulative
+  `evaluated_by` map.
 
-Synthetic per-reason / edge cases are built inline in `run_tests.sh`.
-
-Source runs (for regenerating fixtures, if still present):
-`/tmp/panel-20260624-074239-aeb340eb` (full debate) and
-`/tmp/panel-20260621-161717-42270ee2` (round-0 with the flat-shape failure).
+Synthetic per-reason / edge cases are built inline (in `run_tests.sh` for bash, and
+within each `test_*.py`).

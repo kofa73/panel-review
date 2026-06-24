@@ -19,6 +19,23 @@ class TestParseBlock(unittest.TestCase):
         self.assertEqual(res.returncode, 0)
         self.assertEqual(res.stdout, '')
 
+    def test_empty_vs_real_stances_block(self):
+        # SKILL idiom: an empty stances block is present-but-empty -> exit 0, no
+        # output (the referee skips recording it); a real one emits >=1 object.
+        with tempfile.TemporaryDirectory() as d:
+            empty = os.path.join(d, 'empty.txt')
+            with open(empty, 'w') as f:
+                f.write('```stances\n```\n')
+            res = self.run_script(['stances', empty, 'gemini'])
+            self.assertEqual(res.returncode, 0)
+            self.assertEqual(res.stdout, '')
+            real = os.path.join(d, 'real.txt')
+            with open(real, 'w') as f:
+                f.write('```stances\n{"id":"i1","stance":"support","rationale":"ok"}\n```\n')
+            res = self.run_script(['stances', real, 'gemini'])
+            self.assertEqual(res.returncode, 0)
+            self.assertTrue(res.stdout.strip())
+
     def test_flat_shape_findings(self):
         # round0.claude.flat.txt -> exit 5
         fixture = os.path.join(self.fixtures_dir, 'round0.claude.flat.txt')
