@@ -1,190 +1,402 @@
-#!/usr/bin/env bash
-# index — the only writer of /tmp/<ID>/index.json (the canonical issue index).
-# Counter/state/flag math lives HERE (deterministic), not in the protocol prose.
-# Every mutation is an atomic rewrite and bumps the issue's card_rev so the
-# projected card can be detected as stale.
-#
-# Subcommands:
-#   index get   <ID>                          print index.json
-#   index put   <ID>                          replace index.json from stdin (validated)
-#   index issue <ID> <issue-id>               print one issue record (or empty)
-#   index bump  <ID> <issue-id>               +1 rounds_debated, +1 card_rev
-#   index state <ID> <issue-id> <state>       set .state, +1 card_rev
-#                 (flag in: peer_reviewed|fully_vetted|detail_contested)
-#   index gate-status <ID>                    print {open,low_only} without mutating
-#   index reopen <ID> both|unresolved|contested
-#                 Re-open leftover issues for another debate cycle: matching issues
-#                 -> state=open, rounds_debated=0, vetting flags false; global round=0,
-#                 committed_rounds=[]. Keeps evidence. Exit 3 if no such issue.
+#!/usr/bin/env python3
+"""The canonical, locked writer for /tmp/<ID>/index.json."""
 
-#   index commit-sweep <ID> <round-int> <epoch-int>   (payload JSON on stdin)
-#                 The crash-safe way to apply a whole debate round in ONE atomic,
-#                 idempotent step. Guarded by .committed_rounds.
-#                 but applies the round's ENTIRE decision set at once
-#                 so nothing touches index.json until the single commit (a crash
-#                 before it leaves round N wholly unapplied; a re-run is a no-op).
-#                 Payload (all keys optional):
-#                   {"add_issues":[<full issue record>...],
-#                    "bump":["i1",...],                       // reached >=2 engaged -> +rounds_debated
-#                    "set_state":[{"id","state"}],
-#                    "set_flag":[{"id","flag","value"}],      // flag in peer_reviewed|fully_vetted|detail_contested
-#                    "add_evidence":[{"id","side":"pro|contra","point":{...}}],
-#                    "revise":[{"id","fields":{severity?,claim?,location?,category?}}],
-#                    "evaluated_by":{"issue-id":["seat",...]}}
-set -euo pipefail
-here="$(cd "$(dirname "$0")" && pwd)"; . "$here/_panel_common.sh"
-command -v jq >/dev/null 2>&1 || { echo "index: jq not found" >&2; exit 127; }
+import copy
+import fcntl
+import json
+import os
+import sys
 
-cmd="${1-}"; id="${2-}"; panel_require_id "$id"
-f="/tmp/$id/index.json"
-[ -f "$f" ] || { echo "index: no index for $id" >&2; exit 1; }
+from panel_common import (
+    CATEGORIES,
+    SEVERITIES,
+    STATES,
+    panel_atomic_write,
+    panel_require_id,
+    panel_valid_id,
+    valid_location,
+    valid_point,
+)
 
-# Serialize mutations on index.json for a given run ID.
-case "$cmd" in
-  put|bump|state|flag|commit-sweep|reopen)
-    mkdir -p "/tmp/$id"
-    touch "/tmp/$id/.index.lock"
-    exec 9>"/tmp/$id/.index.lock"
-    flock -x 9
-    ;;
-esac
 
-mutate() { # jq-filter on the index file -> atomic rewrite, transactional.
-  # NEVER pipe jq straight into panel_atomic_write: if jq fails mid-pipe, the
-  # writer still receives EOF and renames an EMPTY file over index.json,
-  # destroying the run. Stage jq output in a temp first; only on jq success
-  # do we atomically install it (panel_atomic_write keeps the .bak rotation).
-  local filter="$1"; shift
-  local tmp; tmp="$(mktemp "/tmp/$id/.idx.XXXXXX")"
-  if jq "$@" "($filter) | if (.issues | any(((.state == \"accepted\" or .state == \"rejected\") and .peer_reviewed != true) or (.fully_vetted == true and .peer_reviewed != true))) then error(\"terminal/fully_vetted states require peer_reviewed=true\") else . end" "$f" > "$tmp"; then
-    panel_atomic_write "$f" < "$tmp"; rm -f "$tmp"
-  else
-    rm -f "$tmp"; echo "index: mutate failed (filter rejected or bad JSON); index.json left intact" >&2; exit 1
-  fi
-}
+FLAGS = {"peer_reviewed", "fully_vetted", "detail_contested"}
+PAYLOAD_KEYS = {"add_issues", "bump", "set_state", "set_flag", "add_evidence", "revise", "evaluated_by"}
 
-case "$cmd" in
-  get)   cat "$f" ;;
-  issue) jq -c --arg i "$3" '.issues[] | select(.id==$i)' "$f" ;;
-  gate-status)
-         jq -c '[.issues[] | select(.state=="open")] as $open
-                | {open:($open|length), low_only:(($open|length)>0 and ($open|all(.severity=="low")))}' "$f" ;;
-  put)   tmp="$(cat)"; printf '%s' "$tmp" | jq -e 'if (.issues | any(((.state == "accepted" or .state == "rejected") and .peer_reviewed != true) or (.fully_vetted == true and .peer_reviewed != true))) then error("invariant violation: terminal/fully_vetted require peer_reviewed=true") else . end' >/dev/null || { echo "index put: invalid JSON or invariant violation" >&2; exit 1; }
-         printf '%s' "$tmp" | panel_atomic_write "$f" ;;
-  bump)  mutate '(.issues[] | select(.id==$i)) |= (.rounds_debated = ((.rounds_debated//0)+1) | .card_rev = ((.card_rev//0)+1))' --arg i "$3" ;;
-  state) case "$4" in open|accepted|rejected|contested|unresolved|merged) ;; *) echo "index state: bad state $4 (allowed: open|accepted|rejected|contested|unresolved|merged)" >&2; exit 2;; esac
-         mutate '(.issues[] | select(.id==$i)) |= (.state=$s | .card_rev=((.card_rev//0)+1))' --arg i "$3" --arg s "$4" ;;
-  flag)  case "$4" in peer_reviewed|fully_vetted|detail_contested) ;; *) echo "index flag: bad flag $4" >&2; exit 2;; esac
-         case "$5" in true) v=true;; false) v=false;; *) echo "index flag: bool must be true|false" >&2; exit 2;; esac
-         mutate "(.issues[] | select(.id==\$i)) |= (.$4=\$v | .card_rev=((.card_rev//0)+1))" --arg i "$3" --argjson v "$v" ;;
 
-  commit-sweep)
-         r="${3-}"
-         epoch="${4-}"
-	         case "$r" in ''|*[!0-9]*) echo "index commit-sweep: round must be an integer" >&2; exit 2;; esac
-	         case "$epoch" in ''|*[!0-9]*) echo "index commit-sweep: epoch must be an integer" >&2; exit 2;; esac
-	         p="$(cat)"; [ -n "$p" ] || p='{}'
-	         printf '%s' "$p" | jq -e 'type=="object"' >/dev/null 2>&1 || { echo "index commit-sweep: payload must be a JSON object" >&2; exit 2; }
-	         printf '%s' "$p" | jq -e '
-	           def valid_location:
-	             (type == "string" and length > 0) or (type == "array" and length > 0 and (map(type == "string" and length > 0) | all));
-	           def valid_point:
-	             type == "object" and
-	             (.assertion | type == "string") and
-	             (has("location") and (.location | valid_location)) and
-	             ((has("precondition") | not) or (.precondition | type == "string")) and
-	             ((has("impact") | not) or (.impact | type == "string"));
-                   (keys | inside(["add_issues", "bump", "set_state", "set_flag", "add_evidence", "revise", "evaluated_by"])) and
-	           ((has("add_issues") | not) or (.add_issues | type == "array" and (map(
-	             type == "object" and (.id | type == "string" and test("\\A[A-Za-z0-9._-]+\\z") and . != "." and . != "..") and
-	             (.claim | type == "string") and (has("location") and (.location | valid_location)) and
-	             (.category | type == "string" and IN("security", "correctness", "performance", "maintainability", "style")) and
-	             (.severity | type == "string" and IN("critical", "high", "medium", "low", "style")) and
-	             (.evidence_pro | type == "array" and length > 0 and (map(valid_point) | all)) and
-	             (.evidence_contra | type == "array" and (map(valid_point) | all)) and
-	             (.peer_reviewed | type == "boolean") and (.fully_vetted | type == "boolean") and (.detail_contested | type == "boolean") and
-	             (.state | type == "string" and IN("open", "accepted", "rejected")) and
-	             (.rounds_debated == 0) and (.card_rev == 0) and
-	             (if .fully_vetted then .peer_reviewed == true else true end) and
-	             (if (.state == "accepted" or .state == "rejected") then .peer_reviewed == true else true end)
-	           ) | all))) and
-	           ((has("bump") | not) or (.bump | type == "array" and (map(type == "string") | all))) and
-	           ((has("set_state") | not) or (.set_state | type == "array" and (map(
-	             type == "object" and (.id | type == "string") and (.state | type == "string" and IN("open", "accepted", "rejected", "contested", "unresolved", "merged"))
-	           ) | all))) and
-	           ((has("set_flag") | not) or (.set_flag | type == "array" and (map(
-	             type == "object" and (.id | type == "string") and (.flag | type == "string" and IN("peer_reviewed", "fully_vetted", "detail_contested")) and (.value | type == "boolean")
-	           ) | all))) and
-	           ((has("add_evidence") | not) or (.add_evidence | type == "array" and (map(
-	             type == "object" and (.id | type == "string") and (.side | type == "string" and IN("pro", "contra")) and (.point | valid_point)
-	           ) | all))) and
-                   ((has("revise") | not) or (.revise | type == "array" and (map(
-	             type == "object" and (.id | type == "string") and (.fields | (
-	               type == "object" and (keys | inside(["severity", "claim", "location", "category"])) and
-	               ((has("claim") | not) or (.claim | type == "string")) and
-	               ((has("location") | not) or (.location | valid_location)) and
-	               ((has("category") | not) or (.category | type == "string" and IN("security", "correctness", "performance", "maintainability", "style"))) and
-	               ((has("severity") | not) or (.severity | type == "string" and IN("critical", "high", "medium", "low", "style")))
-	             ))
-                   ) | all))) and
-                   ((has("evaluated_by") | not) or (.evaluated_by | type == "object" and
-                     (to_entries | map(.key | type == "string") | all) and
-                     (to_entries | map(.value | type == "array" and (map(type == "string") | all) and (unique | length == length)) | all)))
-	         ' >/dev/null 2>&1 || { echo "index commit-sweep: invalid payload format" >&2; exit 2; }
-	         mutate 'if (((.run_epoch // 0) | tostring) != $epoch) then error("stale sweep commit: run epoch \(.run_epoch//0) != \($epoch)")
-                 elif ((.committed_rounds // []) | any(. == $r)) then .
-                 elif (((.round // 0) + 1) != $r) then error("out of order commit: expected round \((.round // 0) + 1) but got \($r)")
-                 elif (([.issues[].id] as $existing | [$p.add_issues[]?.id] | any(IN($existing[])))) then error("add_issues contains already existing IDs")
-                 elif (([$p.add_issues[]?.id] | unique | length) != ($p.add_issues // [] | length)) then error("add_issues contains duplicate IDs")
-                 elif (([$p.set_state[]?.id] | unique | length) != ($p.set_state // [] | length)) then error("duplicate set_state for same ID")
-                 elif (([$p.set_flag[]? | "\(.id)-\(.flag)"] | unique | length) != ($p.set_flag // [] | length)) then error("duplicate set_flag for same ID/flag")
-                 elif (([$p.revise[]?.id] | unique | length) != ($p.revise // [] | length)) then error("duplicate revise for same ID")
-                 elif (([.issues[].id] | unique) as $valid_ids | (
-                   ([$p.bump[]?] | any(IN($valid_ids[]) | not)) or
-                   ([$p.set_state[]?.id] | any(IN($valid_ids[]) | not)) or
-                   ([$p.set_flag[]?.id] | any(IN($valid_ids[]) | not)) or
-                   ([$p.add_evidence[]?.id] | any(IN($valid_ids[]) | not)) or
-                   ([$p.revise[]?.id] | any(IN($valid_ids[]) | not)) or
-                   (($p.evaluated_by // {} | keys) | any(IN($valid_ids[]) | not))
-                 )) then error("mutation target IDs do not exist or target a newly added issue")
-                 else .committed_rounds = ((.committed_rounds // []) + [$r])
-                   | .round = $r
-                   | .issues = (.issues + ($p.add_issues // []))
-                   | .evaluated_by = ((.evaluated_by // {}) + ($p.evaluated_by // {}))
-                   | reduce (($p.bump // []) | unique)[] as $id (.;
-                       .issues |= map(if .id == $id then .rounds_debated += 1 | .card_rev += 1 else . end))
-                   | reduce ($p.set_state // [])[] as $m (.;
-                       .issues |= map(if .id == $m.id then .state = $m.state | .card_rev += 1 else . end))
-                   | reduce ($p.set_flag // [])[] as $m (.;
-                       .issues |= map(if .id == $m.id then .[$m.flag] = $m.value | .card_rev += 1 else . end))
-                   | reduce ($p.add_evidence // [])[] as $m (.;
-                       .issues |= map(if .id == $m.id then
-                                        if $m.side == "pro" then .evidence_pro += [$m.point]
-                                        else .evidence_contra += [$m.point] end
-                                        | .card_rev += 1
-                                      else . end))
-                   | reduce ($p.revise // [])[] as $m (.;
-                       .issues |= map(if .id == $m.id then . * $m.fields | .card_rev += 1 else . end))
-                 end' --arg epoch "$epoch" --argjson r "$r" --argjson p "$p" ;;
-  reopen)
-         category="${3-}"
-         case "$category" in both|unresolved|contested) ;; *) echo "index reopen: category must be both|unresolved|contested" >&2; exit 2;; esac
-         # Count matches first so the caller can distinguish "nothing to do" (exit 3).
-         n="$(jq --arg category "$category" '[.issues[] | select(
-                ($category=="both" and (.state=="unresolved" or .state=="contested"))
-                or ($category=="unresolved" and .state=="unresolved")
-                or ($category=="contested" and .state=="contested"))] | length' "$f")"
-         if [ "$n" -eq 0 ]; then echo "index reopen: no $category issue to re-open" >&2; exit 3; fi
-         # Re-open selected issues + reset global counters; keep evidence; bump card_rev.
-         mutate '
-           .committed_rounds=[] | .round=0 | .run_epoch=((.run_epoch//0)+1)
-           | (.issues[] | select(
-               ($category=="both" and (.state=="unresolved" or .state=="contested"))
-               or ($category=="unresolved" and .state=="unresolved")
-               or ($category=="contested" and .state=="contested")
-             )) |= (.state="open" | .rounds_debated=0
-                    | .peer_reviewed=false | .fully_vetted=false | .detail_contested=false
-                    | .card_rev=((.card_rev//0)+1))
-         ' --arg category "$category" ;;
-  *) echo "usage: index {get|put|issue|bump|state|flag|gate-status|commit-sweep|reopen} <ID> ..." >&2; exit 2 ;;
-esac
+class TransactionError(Exception):
+    pass
+
+
+def compact(value):
+    return json.dumps(value, separators=(",", ":"), ensure_ascii=False)
+
+
+def jq_default(value, fallback):
+    """Implement jq's `//` default for null and false values."""
+    return fallback if value is None or value is False else value
+
+
+def issue_invariant_violated(index):
+    issues = index.get("issues") if type(index) is dict else None
+    if type(issues) is not list:
+        return False
+    return any(
+        type(issue) is dict
+        and (
+            (issue.get("state") in ("accepted", "rejected") and issue.get("peer_reviewed") is not True)
+            or (issue.get("fully_vetted") is True and issue.get("peer_reviewed") is not True)
+        )
+        for issue in issues
+    )
+
+
+def validate_issue(issue):
+    return (
+        type(issue) is dict
+        and type(issue.get("id")) is str
+        and panel_valid_id(issue["id"])
+        and type(issue.get("claim")) is str
+        and "location" in issue
+        and valid_location(issue["location"])
+        and type(issue.get("category")) is str
+        and issue["category"] in CATEGORIES
+        and type(issue.get("severity")) is str
+        and issue["severity"] in SEVERITIES
+        and type(issue.get("evidence_pro")) is list
+        and bool(issue["evidence_pro"])
+        and all(valid_point(point) for point in issue["evidence_pro"])
+        and type(issue.get("evidence_contra")) is list
+        and all(valid_point(point) for point in issue["evidence_contra"])
+        and all(type(issue.get(flag)) is bool for flag in FLAGS)
+        and issue.get("state") in ("open", "accepted", "rejected")
+        and type(issue.get("rounds_debated")) in {int, float}
+        and not isinstance(issue.get("rounds_debated"), bool)
+        and issue["rounds_debated"] == 0
+        and type(issue.get("card_rev")) in {int, float}
+        and not isinstance(issue.get("card_rev"), bool)
+        and issue["card_rev"] == 0
+        and (not issue["fully_vetted"] or issue["peer_reviewed"])
+        and (issue["state"] not in {"accepted", "rejected"} or issue["peer_reviewed"])
+    )
+
+
+def validate_payload(payload):
+    if type(payload) is not dict or not set(payload).issubset(PAYLOAD_KEYS):
+        return False
+    if "add_issues" in payload and not (
+        type(payload["add_issues"]) is list and all(validate_issue(issue) for issue in payload["add_issues"])
+    ):
+        return False
+    if "bump" in payload and not (
+        type(payload["bump"]) is list and all(type(issue_id) is str for issue_id in payload["bump"])
+    ):
+        return False
+    if "set_state" in payload and not (
+        type(payload["set_state"]) is list
+        and all(
+            type(change) is dict
+            and type(change.get("id")) is str
+            and type(change.get("state")) is str
+            and change["state"] in STATES
+            for change in payload["set_state"]
+        )
+    ):
+        return False
+    if "set_flag" in payload and not (
+        type(payload["set_flag"]) is list
+        and all(
+            type(change) is dict
+            and type(change.get("id")) is str
+            and type(change.get("flag")) is str
+            and change["flag"] in FLAGS
+            and type(change.get("value")) is bool
+            for change in payload["set_flag"]
+        )
+    ):
+        return False
+    if "add_evidence" in payload and not (
+        type(payload["add_evidence"]) is list
+        and all(
+            type(change) is dict
+            and type(change.get("id")) is str
+            and type(change.get("side")) is str
+            and change["side"] in {"pro", "contra"}
+            and valid_point(change.get("point"))
+            for change in payload["add_evidence"]
+        )
+    ):
+        return False
+    if "revise" in payload and not (
+        type(payload["revise"]) is list and all(validate_revision(change) for change in payload["revise"])
+    ):
+        return False
+    if "evaluated_by" in payload and not (
+        type(payload["evaluated_by"]) is dict
+        and all(
+            type(issue_id) is str
+            and type(seats) is list
+            and all(type(seat) is str for seat in seats)
+            and len(set(seats)) == len(seats)
+            for issue_id, seats in payload["evaluated_by"].items()
+        )
+    ):
+        return False
+    return True
+
+
+def validate_revision(change):
+    if type(change) is not dict or type(change.get("id")) is not str or type(change.get("fields")) is not dict:
+        return False
+    fields = change["fields"]
+    if not set(fields).issubset({"severity", "claim", "location", "category"}):
+        return False
+    return (
+        ("claim" not in fields or type(fields["claim"]) is str)
+        and ("location" not in fields or valid_location(fields["location"]))
+        and ("category" not in fields or (type(fields["category"]) is str and fields["category"] in CATEGORIES))
+        and ("severity" not in fields or (type(fields["severity"]) is str and fields["severity"] in SEVERITIES))
+    )
+
+
+def require_targets(index, payload):
+    issues = index.get("issues", [])
+    existing = {issue.get("id") for issue in issues if type(issue) is dict}
+    added_ids = [issue["id"] for issue in payload.get("add_issues", [])]
+    if any(issue_id in existing for issue_id in added_ids):
+        raise TransactionError("add_issues contains already existing IDs")
+    if len(set(added_ids)) != len(added_ids):
+        raise TransactionError("add_issues contains duplicate IDs")
+    state_ids = [change["id"] for change in payload.get("set_state", [])]
+    if len(set(state_ids)) != len(state_ids):
+        raise TransactionError("duplicate set_state for same ID")
+    flag_pairs = [(change["id"], change["flag"]) for change in payload.get("set_flag", [])]
+    if len(set(flag_pairs)) != len(flag_pairs):
+        raise TransactionError("duplicate set_flag for same ID/flag")
+    revise_ids = [change["id"] for change in payload.get("revise", [])]
+    if len(set(revise_ids)) != len(revise_ids):
+        raise TransactionError("duplicate revise for same ID")
+    targets = list(payload.get("bump", []))
+    targets += state_ids
+    targets += [change["id"] for change in payload.get("set_flag", [])]
+    targets += [change["id"] for change in payload.get("add_evidence", [])]
+    targets += revise_ids
+    targets += list(payload.get("evaluated_by", {}).keys())
+    if any(target not in existing for target in targets):
+        raise TransactionError("mutation target IDs do not exist or target a newly added issue")
+
+
+def increment(issue, field):
+    value = issue.get(field, 0)
+    if value is None:
+        # jq's += would fail here; ordinary persisted records always have counters.
+        raise TransactionError("counter is not numeric")
+    issue[field] = value + 1
+
+
+def apply_sweep(index, payload, round_number, epoch):
+    current_epoch = jq_default(index.get("run_epoch"), 0)
+    if str(current_epoch) != epoch:
+        raise TransactionError("stale sweep commit")
+    committed = jq_default(index.get("committed_rounds"), [])
+    if round_number in committed:
+        return index, True
+    if jq_default(index.get("round"), 0) + 1 != round_number:
+        raise TransactionError("out of order commit")
+    require_targets(index, payload)
+
+    index["committed_rounds"] = committed + [round_number]
+    index["round"] = round_number
+    index["issues"] = index["issues"] + payload.get("add_issues", [])
+    evaluated_by = jq_default(index.get("evaluated_by"), {})
+    index["evaluated_by"] = {**evaluated_by, **payload.get("evaluated_by", {})}
+    for issue_id in set(payload.get("bump", [])):
+        for issue in index["issues"]:
+            if issue.get("id") == issue_id:
+                increment(issue, "rounds_debated")
+                increment(issue, "card_rev")
+    for change in payload.get("set_state", []):
+        for issue in index["issues"]:
+            if issue.get("id") == change["id"]:
+                issue["state"] = change["state"]
+                increment(issue, "card_rev")
+    for change in payload.get("set_flag", []):
+        for issue in index["issues"]:
+            if issue.get("id") == change["id"]:
+                issue[change["flag"]] = change["value"]
+                increment(issue, "card_rev")
+    for change in payload.get("add_evidence", []):
+        for issue in index["issues"]:
+            if issue.get("id") == change["id"]:
+                key = "evidence_pro" if change["side"] == "pro" else "evidence_contra"
+                issue[key] = issue[key] + [change["point"]]
+                increment(issue, "card_rev")
+    for change in payload.get("revise", []):
+        for issue in index["issues"]:
+            if issue.get("id") == change["id"]:
+                issue.update(change["fields"])
+                increment(issue, "card_rev")
+    if issue_invariant_violated(index):
+        raise TransactionError("terminal/fully_vetted states require peer_reviewed=true")
+    return index, False
+
+
+def read_index(path):
+    with open(path, "r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def write_index(path, index):
+    panel_atomic_write(path, compact(index) + "\n")
+
+
+def mutation_failure():
+    print("index: mutate failed (filter rejected or bad JSON); index.json left intact", file=sys.stderr)
+    return 1
+
+
+def main(argv):
+    cmd = argv[1] if len(argv) > 1 else ""
+    run_id = argv[2] if len(argv) > 2 else ""
+    panel_require_id(run_id)
+    path = f"/tmp/{run_id}/index.json"
+    if not os.path.isfile(path):
+        print(f"index: no index for {run_id}", file=sys.stderr)
+        return 1
+
+    if cmd == "get":
+        with open(path, "rb") as handle:
+            sys.stdout.buffer.write(handle.read())
+        return 0
+    if cmd == "issue":
+        issue_id = argv[3] if len(argv) > 3 else ""
+        index = read_index(path)
+        for issue in index["issues"]:
+            if issue.get("id") == issue_id:
+                print(compact(issue))
+        return 0
+    if cmd == "gate-status":
+        index = read_index(path)
+        open_issues = [issue for issue in index["issues"] if issue.get("state") == "open"]
+        print(compact({"open": len(open_issues), "low_only": bool(open_issues) and all(issue.get("severity") == "low" for issue in open_issues)}))
+        return 0
+
+    mutations = {"put", "bump", "state", "flag", "commit-sweep", "reopen"}
+    if cmd not in mutations:
+        print("usage: index {get|put|issue|bump|state|flag|gate-status|commit-sweep|reopen} <ID> ...", file=sys.stderr)
+        return 2
+    os.makedirs(f"/tmp/{run_id}", exist_ok=True)
+    with open(f"/tmp/{run_id}/.index.lock", "a+b") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        if cmd == "put":
+            raw = sys.stdin.buffer.read()
+            try:
+                candidate = json.loads(raw)
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                print("index put: invalid JSON or invariant violation", file=sys.stderr)
+                return 1
+            if issue_invariant_violated(candidate):
+                print("index put: invalid JSON or invariant violation", file=sys.stderr)
+                return 1
+            panel_atomic_write(path, raw.rstrip(b"\n"))
+            return 0
+
+        if cmd == "state":
+            state = argv[4] if len(argv) > 4 else ""
+            if state not in STATES:
+                print(f"index state: bad state {state} (allowed: open|accepted|rejected|contested|unresolved|merged)", file=sys.stderr)
+                return 2
+        if cmd == "flag":
+            flag = argv[4] if len(argv) > 4 else ""
+            boolean = argv[5] if len(argv) > 5 else ""
+            if flag not in FLAGS:
+                print(f"index flag: bad flag {flag}", file=sys.stderr)
+                return 2
+            if boolean not in {"true", "false"}:
+                print("index flag: bool must be true|false", file=sys.stderr)
+                return 2
+        if cmd == "commit-sweep":
+            round_text = argv[3] if len(argv) > 3 else ""
+            epoch = argv[4] if len(argv) > 4 else ""
+            if not round_text.isascii() or not round_text.isdecimal():
+                print("index commit-sweep: round must be an integer", file=sys.stderr)
+                return 2
+            if not epoch.isascii() or not epoch.isdecimal():
+                print("index commit-sweep: epoch must be an integer", file=sys.stderr)
+                return 2
+            raw = sys.stdin.buffer.read()
+            if not raw:
+                raw = b"{}"
+            try:
+                payload = json.loads(raw)
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                print("index commit-sweep: payload must be a JSON object", file=sys.stderr)
+                return 2
+            if type(payload) is not dict:
+                print("index commit-sweep: payload must be a JSON object", file=sys.stderr)
+                return 2
+            if not validate_payload(payload):
+                print("index commit-sweep: invalid payload format", file=sys.stderr)
+                return 2
+        if cmd == "reopen":
+            category = argv[3] if len(argv) > 3 else ""
+            if category not in {"both", "unresolved", "contested"}:
+                print("index reopen: category must be both|unresolved|contested", file=sys.stderr)
+                return 2
+
+        try:
+            index = copy.deepcopy(read_index(path))
+            if cmd == "bump":
+                issue_id = argv[3] if len(argv) > 3 else ""
+                for issue in index["issues"]:
+                    if issue.get("id") == issue_id:
+                        issue["rounds_debated"] = jq_default(issue.get("rounds_debated"), 0) + 1
+                        issue["card_rev"] = jq_default(issue.get("card_rev"), 0) + 1
+                if issue_invariant_violated(index):
+                    raise TransactionError()
+                write_index(path, index)
+            elif cmd == "state":
+                issue_id = argv[3] if len(argv) > 3 else ""
+                for issue in index["issues"]:
+                    if issue.get("id") == issue_id:
+                        issue["state"] = state
+                        issue["card_rev"] = jq_default(issue.get("card_rev"), 0) + 1
+                if issue_invariant_violated(index):
+                    raise TransactionError()
+                write_index(path, index)
+            elif cmd == "flag":
+                issue_id = argv[3] if len(argv) > 3 else ""
+                for issue in index["issues"]:
+                    if issue.get("id") == issue_id:
+                        issue[flag] = boolean == "true"
+                        issue["card_rev"] = jq_default(issue.get("card_rev"), 0) + 1
+                if issue_invariant_violated(index):
+                    raise TransactionError()
+                write_index(path, index)
+            elif cmd == "commit-sweep":
+                updated, idempotent = apply_sweep(index, payload, int(round_text), epoch)
+                if not idempotent:
+                    write_index(path, updated)
+            else:
+                def matches(issue):
+                    return issue.get("state") in ("unresolved", "contested") if category == "both" else issue.get("state") == category
+
+                if not any(matches(issue) for issue in index["issues"]):
+                    print(f"index reopen: no {category} issue to re-open", file=sys.stderr)
+                    return 3
+                index["committed_rounds"] = []
+                index["round"] = 0
+                index["run_epoch"] = jq_default(index.get("run_epoch"), 0) + 1
+                for issue in index["issues"]:
+                    if matches(issue):
+                        issue.update({"state": "open", "rounds_debated": 0, "peer_reviewed": False, "fully_vetted": False, "detail_contested": False})
+                        issue["card_rev"] = jq_default(issue.get("card_rev"), 0) + 1
+                if issue_invariant_violated(index):
+                    raise TransactionError()
+                write_index(path, index)
+        except (KeyError, TypeError, ValueError, TransactionError, json.JSONDecodeError):
+            return mutation_failure()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))
