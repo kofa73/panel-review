@@ -1,50 +1,93 @@
-#!/usr/bin/env bash
-# merge_payload — combine the referee's judgment additions into the mechanical
-# round payload from `decide_round`, with the per-key semantics `index
-# commit-sweep` requires. The referee must NEVER append a 2nd set_state/revise
-# for an id (commit-sweep rejects duplicate state/flag/revise targets and leaves
-# the round uncommitted) — it folds additions in here instead.
-#
-# Usage:  merge_payload <base.json>           # addendum (a payload-shaped object) on stdin
-#         -> merged payload on stdout
-#
-# Both base and addendum are commit-sweep payloads (any subset of keys). Merge:
-#   bump          union, unique
-#   set_state     by id; ADDENDUM WINS (so folding a new finding can reopen an
-#                 issue decide_round just terminated: addendum {id,state:"open"})
-#   set_flag      by (id,flag); addendum wins
-#   revise        by id; FIELDS deep-merged (base.fields + addendum.fields), so a
-#                 referee-synthesized `claim` joins decide_round's enum `severity`
-#                 on the SAME issue instead of becoming a duplicate revise entry
-#   add_evidence  concatenated (append)
-#   add_issues    concatenated (append)
-#   evaluated_by  merged by issue id; addendum values replace base values
-# Empty arrays are dropped. Output still goes through `index commit-sweep`, which
-# re-validates everything.
-set -euo pipefail
-command -v jq >/dev/null 2>&1 || { echo "merge_payload: jq not found" >&2; exit 127; }
+#!/usr/bin/env python3
+"""Merge a referee addendum into a commit-sweep payload."""
 
-[ "$#" -ge 1 ] || { echo "usage: merge_payload <base.json>   (addendum on stdin)" >&2; exit 2; }
-base="$1"
-[ -f "$base" ] || { echo "merge_payload: no such base file: $base" >&2; exit 1; }
-jq -e 'type=="object"' "$base" >/dev/null 2>&1 || { echo "merge_payload: base is not a JSON object" >&2; exit 2; }
+import json
+import os
+import sys
 
-add="$(cat)"; [ -n "$add" ] || add='{}'
-printf '%s' "$add" | jq -e 'type=="object"' >/dev/null 2>&1 || { echo "merge_payload: addendum is not a JSON object" >&2; exit 2; }
 
-jq -n --slurpfile b "$base" --argjson add "$add" '
-  ($b[0]) as $base |
-  # base entries first, addendum second; jq group_by is stable, so `last` per
-  # group == the addendum (addendum wins). revise additionally deep-merges fields.
-  {
-    bump:        ((($base.bump // []) + ($add.bump // [])) | unique),
-    set_state:   ((($base.set_state // []) + ($add.set_state // [])) | group_by(.id) | map(last)),
-    set_flag:    ((($base.set_flag  // []) + ($add.set_flag  // [])) | group_by("\(.id) \(.flag)") | map(last)),
-    revise:      ((($base.revise    // []) + ($add.revise    // [])) | group_by(.id)
-                  | map({id: .[0].id, fields: (map(.fields) | add)})),
-    add_evidence:(($base.add_evidence // []) + ($add.add_evidence // [])),
-    add_issues:  (($base.add_issues // []) + ($add.add_issues // [])),
-    evaluated_by:(($base.evaluated_by // {}) + ($add.evaluated_by // {}))
-  }
-  | with_entries(select(.value | length > 0))
-'
+def jq_default(value, fallback):
+    """Implement jq's `//` default for null and false values."""
+    return fallback if value is None or value is False else value
+
+
+def last_by(entries, key):
+    groups = {}
+    for entry in entries:
+        groups[key(entry)] = entry
+    return [groups[group_key] for group_key in sorted(groups)]
+
+
+def merge_revisions(entries):
+    groups = {}
+    for entry in entries:
+        issue_id = entry["id"]
+        if issue_id not in groups:
+            groups[issue_id] = {}
+        groups[issue_id].update(entry["fields"])
+    return [{"id": issue_id, "fields": groups[issue_id]} for issue_id in sorted(groups)]
+
+
+def merge(base, addendum):
+    payload = {
+        "bump": sorted(set(jq_default(base.get("bump"), []) + jq_default(addendum.get("bump"), []))),
+        "set_state": last_by(
+            jq_default(base.get("set_state"), []) + jq_default(addendum.get("set_state"), []),
+            lambda entry: entry["id"],
+        ),
+        "set_flag": last_by(
+            jq_default(base.get("set_flag"), []) + jq_default(addendum.get("set_flag"), []),
+            lambda entry: (entry["id"], entry["flag"]),
+        ),
+        "revise": merge_revisions(jq_default(base.get("revise"), []) + jq_default(addendum.get("revise"), [])),
+        "add_evidence": jq_default(base.get("add_evidence"), []) + jq_default(addendum.get("add_evidence"), []),
+        "add_issues": jq_default(base.get("add_issues"), []) + jq_default(addendum.get("add_issues"), []),
+        "evaluated_by": {
+            **jq_default(base.get("evaluated_by"), {}),
+            **jq_default(addendum.get("evaluated_by"), {}),
+        },
+    }
+    return {key: value for key, value in payload.items() if len(value) > 0}
+
+
+def read_object(raw, label):
+    try:
+        value = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        print(f"merge_payload: {label} is not a JSON object", file=sys.stderr)
+        return None
+    if type(value) is not dict:
+        print(f"merge_payload: {label} is not a JSON object", file=sys.stderr)
+        return None
+    return value
+
+
+def main(argv):
+    if len(argv) < 2:
+        print("usage: merge_payload <base.json>   (addendum on stdin)", file=sys.stderr)
+        return 2
+
+    base_path = argv[1]
+    if not os.path.isfile(base_path):
+        print(f"merge_payload: no such base file: {base_path}", file=sys.stderr)
+        return 1
+    try:
+        with open(base_path, "r", encoding="utf-8") as handle:
+            base = read_object(handle.read(), "base")
+    except OSError:
+        print(f"merge_payload: no such base file: {base_path}", file=sys.stderr)
+        return 1
+    if base is None:
+        return 2
+
+    addendum_raw = sys.stdin.read().rstrip("\n")
+    addendum = read_object(addendum_raw or "{}", "addendum")
+    if addendum is None:
+        return 2
+
+    print(json.dumps(merge(base, addendum), separators=(",", ":"), ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))
