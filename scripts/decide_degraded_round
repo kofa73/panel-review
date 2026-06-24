@@ -1,55 +1,142 @@
-#!/usr/bin/env bash
-# decide_degraded_round — terminal, non-voting decision for a round with zero
-# or one complete seat. It records coverage but never bumps, revises, accepts,
-# rejects, or promotes seat text: a lone stance cannot establish existence.
-set -euo pipefail
-here="$(cd "$(dirname "$0")" && pwd)"; . "$here/_panel_common.sh"
-command -v jq >/dev/null 2>&1 || { echo "decide_degraded_round: jq not found" >&2; exit 127; }
+#!/usr/bin/env python3
+"""Terminal, non-voting decision for a round with zero or one complete seat."""
 
-id=""; round=""; configured=""; engaged=""; stances=""
-while [ "$#" -gt 0 ]; do
-  case "$1" in
-    --id) id="${2-}"; shift 2 ;;
-    --round) round="${2-}"; shift 2 ;;
-    --configured) configured="${2-}"; shift 2 ;;
-    --engaged) engaged="${2-}"; shift 2 ;;
-    --stances) stances="${2-}"; shift 2 ;;
-    *) echo "decide_degraded_round: unknown arg: $1" >&2; exit 2 ;;
-  esac
-done
-panel_require_id "$id"
-case "$round" in ''|*[!0-9]*) echo "decide_degraded_round: --round must be an integer" >&2; exit 2;; esac
-[ -n "$stances" ] && [ -f "$stances" ] || { echo "decide_degraded_round: --stances must name a file" >&2; exit 1; }
-idx="/tmp/$id/index.json"; [ -f "$idx" ] || { echo "decide_degraded_round: no index for $id" >&2; exit 1; }
+import json
+import os
+import re
+import sys
 
-cfg_json="$(printf '%s\n' $configured | jq -R . | jq -cs 'map(select(length>0))')"
-eng_json="$(printf '%s\n' $engaged | jq -R . | jq -cs 'map(select(length>0))')"
-if [ "$(printf '%s' "$eng_json" | jq 'length')" -gt 1 ]; then
-  echo "decide_degraded_round: requires zero or one engaged seat" >&2; exit 2
-fi
+here = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, here)
+import panel_common
 
-errs="$(jq -nr --argjson idx "$(cat "$idx")" --slurpfile st "$stances" --argjson configured "$cfg_json" --argjson engaged "$eng_json" '
-  [$idx.issues[] | select(.state=="open") | .id] as $open |
-  ([ $engaged[] | select(. as $s | ($configured | index($s)) == null) | "engaged seat not in configured panel: \(.)" ]
-   + [ $st[]._source | select(. as $s | ($engaged | index($s)) == null) | "unknown _source: \(.)" ]
-   + [ $engaged[] as $seat | $open[] as $issue
-       | ([ $st[] | select(._source==$seat and .id==$issue) ] | length) as $n
-       | select($n != 1) | "expected exactly 1 stance for seat=\($seat) issue=\($issue), got \($n)" ]
-   + (if ($engaged|length)==0 and ($st|length)>0 then ["zero-seat round has stances"] else [] end)) | .[]')"
-if [ -n "$errs" ]; then
-  { echo "decide_degraded_round: stance-integrity violation(s):"; printf '%s\n' "$errs" | sed 's/^/  - /'; } >&2
-  exit 3
-fi
 
-jq -n --argjson idx "$(cat "$idx")" --argjson configured "$cfg_json" --argjson engaged "$eng_json" '
-  ($engaged[0] // null) as $seat |
-  [ $idx.issues[] | select(.state=="open") | . as $issue
-    | (($idx.evaluated_by[$issue.id] // []) + (if $seat == null then [] else [$seat] end) | unique) as $covered_by
-    | {id:$issue.id,
-       state:(if $seat != null and $issue.peer_reviewed then "contested" else "unresolved" end),
-       fully_vetted:($seat != null and $issue.peer_reviewed and (($configured - $covered_by)|length==0)),
-       covered_by:$covered_by} ] as $D |
-  {set_state:[$D[] | {id,state}],
-   set_flag:[$D[] | select(.fully_vetted) | {id,flag:"fully_vetted",value:true}],
-   evaluated_by:($D | map({key:.id,value:.covered_by}) | from_entries)}
-  | with_entries(select(.value|length>0))'
+def compact(value):
+    return json.dumps(value, separators=(",", ":"), ensure_ascii=False)
+
+
+def fail(message, code):
+    print(message, file=sys.stderr)
+    sys.exit(code)
+
+
+def split_seats(value):
+    return value.split()
+
+
+def load_json(path):
+    with open(path, encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def load_stances(path):
+    with open(path, encoding="utf-8") as handle:
+        return [json.loads(line) for line in handle if line.strip()]
+
+
+def main():
+    args = sys.argv[1:]
+    values = {"id": "", "round": "", "configured": "", "engaged": "", "stances": ""}
+    options = {f"--{key}": key for key in values}
+    while args:
+        option = args.pop(0)
+        if option not in options:
+            fail(f"decide_degraded_round: unknown arg: {option}", 2)
+        if not args:
+            fail(f"decide_degraded_round: unknown arg: {option}", 2)
+        values[options[option]] = args.pop(0)
+
+    panel_common.panel_require_id(values["id"])
+    if not re.fullmatch(r"[0-9]+", values["round"]):
+        fail("decide_degraded_round: --round must be an integer", 2)
+    if not values["stances"] or not os.path.isfile(values["stances"]):
+        fail("decide_degraded_round: --stances must name a file", 1)
+
+    index_path = f"/tmp/{values['id']}/index.json"
+    if not os.path.isfile(index_path):
+        fail(f"decide_degraded_round: no index for {values['id']}", 1)
+
+    index = load_json(index_path)
+    stances = load_stances(values["stances"])
+    configured = split_seats(values["configured"])
+    engaged = split_seats(values["engaged"])
+
+    if len(engaged) > 1:
+        fail("decide_degraded_round: requires zero or one engaged seat", 2)
+
+    errors = []
+    open_ids = [issue["id"] for issue in index.get("issues", []) if issue.get("state") == "open"]
+
+    for seat in engaged:
+        if seat not in configured:
+            errors.append(f"engaged seat not in configured panel: {seat}")
+
+    # "each stance whose _source is not an engaged seat (do NOT dedupe — one message per offending stance, matching the Bash)"
+    for stance in stances:
+        source = stance.get("_source")
+        if source not in engaged:
+            # If source is None we should probably still print 'None'
+            source_str = json.dumps(source) if source is None else source
+            if source is None: # match jq printing null
+                source_str = "null"
+            errors.append(f"unknown _source: {source_str}")
+
+    for seat in engaged:
+        for issue_id in open_ids:
+            count = sum(1 for stance in stances if stance.get("_source") == seat and stance.get("id") == issue_id)
+            if count != 1:
+                errors.append(f"expected exactly 1 stance for seat={seat} issue={issue_id}, got {count}")
+
+    if not engaged and stances:
+        errors.append("zero-seat round has stances")
+
+    if errors:
+        print("decide_degraded_round: stance-integrity violation(s):", file=sys.stderr)
+        for error in errors:
+            print(f"  - {error}", file=sys.stderr)
+        sys.exit(3)
+
+    seat = engaged[0] if engaged else None
+    evaluated_by_dict = index.get("evaluated_by") or {}
+
+    set_state = []
+    set_flag = []
+    evaluated_by = {}
+
+    for issue in index.get("issues", []):
+        if issue.get("state") != "open":
+            continue
+
+        issue_id = issue["id"]
+
+        prev_eval = evaluated_by_dict.get(issue_id) or []
+        covered_by = sorted(list(set(prev_eval + ([seat] if seat else []))))
+
+        peer_reviewed = issue.get("peer_reviewed") is True
+
+        if seat is not None and peer_reviewed:
+            state = "contested"
+        else:
+            state = "unresolved"
+
+        fully_vetted = (seat is not None and peer_reviewed and all(c in covered_by for c in configured))
+
+        set_state.append({"id": issue_id, "state": state})
+        if fully_vetted:
+            set_flag.append({"id": issue_id, "flag": "fully_vetted", "value": True})
+
+        evaluated_by[issue_id] = covered_by
+
+    payload = {}
+    if set_state:
+        payload["set_state"] = set_state
+    if set_flag:
+        payload["set_flag"] = set_flag
+    if evaluated_by:
+        payload["evaluated_by"] = evaluated_by
+
+    print(compact(payload))
+
+
+if __name__ == "__main__":
+    main()

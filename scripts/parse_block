@@ -29,7 +29,7 @@ def ok_points(obj):
     return len(normalize_points(obj)) > 0
 
 def ok_id(obj): return isinstance(obj.get("id"), str)
-def ok_stance(obj): 
+def ok_stance(obj):
     return isinstance(obj.get("stance"), str) and bool(re.match(r"^(support|support_with_revision|reject)$", obj.get("stance", "")))
 
 def diag_findings(obj):
@@ -58,7 +58,7 @@ def diag_stances(obj):
 def valid_stances(obj):
     if not (ok_object(obj) and ok_id(obj) and ok_stance(obj)):
         return False, None
-    
+
     if "revision" in obj:
         if isinstance(obj["revision"], dict):
             rev = obj["revision"]
@@ -88,13 +88,13 @@ def valid_stances(obj):
             pass
         else:
             del obj["new_evidence"]
-            
+
     if "evidence" in obj:
         if isinstance(obj["evidence"], dict) and valid_point(obj["evidence"]):
             pass
         else:
             del obj["evidence"]
-            
+
     return True, obj
 
 def diag_default(obj):
@@ -162,12 +162,12 @@ def main():
     # 4. Try whole-block JSON decode
     parsed_whole = False
     lines_to_process = []
-    
+
     decoder = json.JSONDecoder()
     pos = 0
     items = []
     stream_success = True
-    
+
     while pos < len(raw):
         match = re.match(r'\s*', raw[pos:])
         if match:
@@ -212,18 +212,18 @@ def main():
                 print(f"item {item_count}: not valid JSON (syntax error)")
                 print(f"    >>> {line}")
                 continue
-                
+
             try:
                 reason = diag_func(obj)
             except Exception:
                 reason = "could not evaluate (unexpected shape)"
-                
+
             if reason != "valid":
                 bad += 1
                 print(f"item {item_count}: {reason}")
                 print(f"    >>> {line}")
             continue
-            
+
         # Normal mode
         try:
             obj = json.loads(line)
@@ -238,21 +238,21 @@ def main():
                 bad += 1
         except json.JSONDecodeError:
             bad += 1
-            
+
     if diagnose:
         print(f"parse_block --diagnose '{tag}': {item_count} item(s), {bad} invalid", file=sys.stderr)
         if bad == 0:
             sys.exit(0)
         else:
             sys.exit(5)
-            
+
     if bad > 0:
         print(f"parse_block: skipped {bad} malformed line(s) in '{tag}'", file=sys.stderr)
-        
+
     if n == 0:
         print("parse_block: block present with non-whitespace content but zero valid objects parsed", file=sys.stderr)
         sys.exit(5)
-        
+
     sys.exit(0)
 
 if __name__ == "__main__":

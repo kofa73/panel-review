@@ -8,7 +8,7 @@ class TestParseBlock(unittest.TestCase):
     def setUp(self):
         self.script_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'parse_block'))
         self.fixtures_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'fixtures', 'parse_block'))
-        
+
     def run_script(self, args):
         return subprocess.run([self.script_path] + args, capture_output=True, text=True)
 
@@ -59,7 +59,7 @@ class TestParseBlock(unittest.TestCase):
             res = self.run_script(['--diagnose', 'findings', tmp_path])
             self.assertEqual(res.returncode, 5)
             stdout = res.stdout
-            
+
             self.assertIn("item 2: missing or non-string field `claim`", stdout)
             self.assertIn("item 3: missing/invalid `category`", stdout)
             self.assertIn("item 4: missing/invalid `severity`", stdout)
