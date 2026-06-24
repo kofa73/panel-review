@@ -1,184 +1,383 @@
-#!/usr/bin/env bash
-# sweep — checkpointed debate sweeps, so a crash mid-sweep never double-counts.
-# A sweep = one full pass over the open issues across all engaged seats. Per-seat
-# outputs are cached as they land; a sweep is "committed" only when complete, and
-# ONLY a committed sweep increments rounds_debated. On resume, cached outputs let
-# the referee rerun just the missing seats.
-#
-# Subcommands:
-#   sweep begin  <ID> <round> <epoch>             create the sweep dir
-#   sweep record <ID> <round> <epoch> <seat> <file> [batch] cache one seat/batch's raw output
-#   sweep plan <ID> <round> <epoch> <plan.json>   register expected seat/batch inputs
-#   sweep ingest-batch <ID> <round> <epoch> <seat> <batch> <expected.ids> <raw>
-#                                                parse and checkpoint one complete batch
-#   sweep drop-seat <ID> <round> <seat>           discard a seat's cached batch outputs
-#   sweep resume-plan <ID>                         print the next round's reusable/missing batches
-#   sweep has    <ID> <round> <seat> [batch]        exit 0 if that seat/batch already recorded
-#   sweep commit <ID> <round> <epoch>             commit the sweep; bump issue ids on stdin (one per line)
-#   sweep done   <ID> <round>                 exit 0 if the sweep is committed
-#
-# Idempotency: the durable record of "this round was counted" lives in the index
-# (.committed_rounds), not in the marker file. `commit` delegates the bump to
-# `index commit-sweep`, which is a no-op if the round is already committed — so a
-# crash mid-commit, then a resume + re-commit, never double-counts. `done`
-# queries that same committed_rounds, so it is the single source of truth.
-set -euo pipefail
-here="$(cd "$(dirname "$0")" && pwd)"; . "$here/_panel_common.sh"
+#!/usr/bin/env python3
+"""Checkpointed debate-sweep state management."""
 
-cmd="${1-}"; id="${2-}"; panel_require_id "$id"
-round="${3-}"
-if [ "$cmd" != "resume-plan" ]; then
-  case "$round" in ''|*[!0-9]*) echo "sweep: round must be a number" >&2; exit 2;; esac
-fi
-sd="/tmp/$id/sweeps/round-$round"
+import datetime
+import glob
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
 
-idx="/tmp/$id/index.json"
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
 
-case "$cmd" in
-  begin)
-          epoch="${4-}"
-          case "$epoch" in ''|*[!0-9]*) echo "sweep begin: requires numeric epoch" >&2; exit 2;; esac
-          curr_epoch="$(jq -r '.run_epoch // 0' "$idx")"
-          if [ "$curr_epoch" != "$epoch" ]; then echo "sweep begin: stale run epoch $epoch != $curr_epoch" >&2; exit 1; fi
-          if [ -d "$sd" ]; then
-            if [ -s "$sd/.epoch" ]; then
-              dir_epoch="$(cat "$sd/.epoch")"
-              if [ "$epoch" != "$dir_epoch" ]; then rm -rf -- "$sd"; fi
-            else
-              rm -rf -- "$sd"
-            fi
-          fi
-          mkdir -p "$sd" 
-          if ! [ -s "$sd/.epoch" ]; then
-            echo "$epoch" | panel_atomic_write "$sd/.epoch"
-          fi
-          ;;
-  record) epoch="${4-}"; seat="${5-}"; src="${6-}"; batch="${7-all}"
-	          case "$epoch" in ''|*[!0-9]*) echo "sweep record: requires numeric epoch" >&2; exit 2;; esac
-	          case "$seat" in ''|*[!A-Za-z0-9._-]*) echo "sweep: bad seat name" >&2; exit 2;; esac
-	          case "$batch" in ''|*[!A-Za-z0-9._-]*) echo "sweep: bad batch name" >&2; exit 2;; esac
-	          [ -f "$src" ] || { echo "sweep record: no such file: $src" >&2; exit 1; }
-	          [ -d "$sd" ] || { echo "sweep record: sweep dir not found" >&2; exit 1; }
-	          [ -s "$sd/.epoch" ] || { echo "sweep record: sweep epoch not found or empty" >&2; exit 1; }
-	          curr_epoch="$(jq -r '.run_epoch // 0' "$idx")"
-	          dir_epoch="$(cat "$sd/.epoch")"
-	          case "$dir_epoch" in ''|*[!0-9]*) echo "sweep record: sweep epoch not numeric" >&2; exit 1;; esac
-	          if [ "$epoch" != "$dir_epoch" ]; then echo "sweep record: stale worker epoch $epoch != $dir_epoch" >&2; exit 1; fi
-	          if [ "$curr_epoch" != "$dir_epoch" ]; then echo "sweep record: stale run epoch" >&2; exit 1; fi
-	          # Atomic temp+sync+rename (via panel_atomic_write) so an interrupted copy
-	          # never leaves a truncated $seat.$batch.out that `has` would accept.
-	          panel_atomic_write "$sd/$seat.$batch.out" < "$src" ;;
-  plan)   epoch="${4-}"; plan="${5-}"
-          case "$epoch" in ''|*[!0-9]*) echo "sweep plan: requires numeric epoch" >&2; exit 2;; esac
-          [ -f "$plan" ] || { echo "sweep plan: no such file: $plan" >&2; exit 1; }
-          [ -d "$sd" ] && [ -s "$sd/.epoch" ] || { echo "sweep plan: sweep dir not found" >&2; exit 1; }
-          [ "$(cat "$sd/.epoch")" = "$epoch" ] || { echo "sweep plan: stale worker epoch" >&2; exit 1; }
-          jq -e '
-            type=="object" and (.batches|type=="array" and length>0) and
-            ([.batches[] | select(type!="object" or (.seat|type)!="string" or (.batch|type)!="string" or (.expected_ids|type)!="array" or (.expected_ids|length)==0 or (.expected_ids|map(type=="string" and length>0)|all|not))] | length == 0) and
-            ([.batches[] | "\(.seat)\u0000\(.batch)"] | unique | length == length) and
-            all(.batches[]; .expected_ids as $ids | ($ids|unique|length) == ($ids|length))' "$plan" >/dev/null \
-            || { echo "sweep plan: invalid batch plan" >&2; exit 2; }
-          if [ -f "$sd/plan.json" ]; then
-            jq -e --slurpfile requested "$plan" --argjson epoch "$epoch" '(.epoch == $epoch)
-              and .batches == $requested[0].batches' "$sd/plan.json" >/dev/null \
-              || { echo "sweep plan: existing plan differs" >&2; exit 1; }
-          else
-            jq -c --argjson epoch "$epoch" '. + {epoch:$epoch, dropped_seats:[]}' "$plan" | panel_atomic_write "$sd/plan.json"
-          fi ;;
-  ingest-batch)
-          epoch="${4-}"; seat="${5-}"; batch="${6-}"; expected="${7-}"; raw="${8-}"
-          case "$epoch" in ''|*[!0-9]*) echo "sweep ingest-batch: requires numeric epoch" >&2; exit 2;; esac
-          case "$seat" in ''|*[!A-Za-z0-9._-]*) echo "sweep ingest-batch: bad seat name" >&2; exit 2;; esac
-          case "$batch" in ''|*[!A-Za-z0-9._-]*) echo "sweep ingest-batch: bad batch name" >&2; exit 2;; esac
-          [ -d "$sd" ] && [ -s "$sd/.epoch" ] || { echo "sweep ingest-batch: sweep dir not found" >&2; exit 1; }
-          [ "$(cat "$sd/.epoch")" = "$epoch" ] || { echo "sweep ingest-batch: stale worker epoch" >&2; exit 1; }
-          [ -f "$expected" ] || { echo "sweep ingest-batch: no expected IDs file" >&2; exit 1; }
-          [ -f "$sd/plan.json" ] || { echo "sweep ingest-batch: no batch plan" >&2; exit 1; }
-          jq -e --arg seat "$seat" '((.dropped_seats // []) | index($seat)) == null' "$sd/plan.json" >/dev/null \
-            || { echo "sweep ingest-batch: seat was dropped" >&2; exit 1; }
-          if [ ! -f "$raw" ]; then printf '%s\n' '{"status":"missing"}'; exit 0; fi
-          parsed="$(mktemp "$sd/.parsed.XXXXXX")"
-          set +e
-          "$here/parse_block" stances "$raw" "$seat" > "$parsed"
-          parse_rc=$?
-          set -e
-          if [ "$parse_rc" -eq 4 ]; then rm -f "$parsed"; printf '%s\n' '{"status":"missing"}'; exit 0; fi
-          if [ ! -s "$parsed" ]; then
-            rm -f "$parsed"
-            if [ "$parse_rc" -eq 5 ]; then printf '%s\n' '{"status":"malformed"}'; else printf '%s\n' '{"status":"empty"}'; fi
-            exit 0
-          fi
-          exp_ids="$(mktemp "$sd/.expected.XXXXXX")"; got_ids="$(mktemp "$sd/.received.XXXXXX")"
-          LC_ALL=C sort -u "$expected" > "$exp_ids"
-          if [ ! -s "$exp_ids" ] || [ "$(wc -l < "$expected")" -ne "$(wc -l < "$exp_ids")" ]; then
-            rm -f "$parsed" "$exp_ids" "$got_ids"; echo "sweep ingest-batch: expected IDs must be unique, non-empty lines" >&2; exit 2
-          fi
-          planned_ids="$(mktemp "$sd/.planned.XXXXXX")"
-          jq -r --arg seat "$seat" --arg batch "$batch" '.batches[] | select(.seat==$seat and .batch==$batch) | .expected_ids[]' "$sd/plan.json" | LC_ALL=C sort > "$planned_ids"
-          if ! cmp -s "$exp_ids" "$planned_ids"; then
-            rm -f "$parsed" "$exp_ids" "$got_ids" "$planned_ids"; echo "sweep ingest-batch: expected IDs do not match the batch plan" >&2; exit 2
-          fi
-          jq -r '.id' "$parsed" | LC_ALL=C sort > "$got_ids"
-          if cmp -s "$exp_ids" "$got_ids" && [ "$(wc -l < "$parsed")" -eq "$(wc -l < "$exp_ids")" ]; then
-            panel_atomic_write "$sd/$seat.$batch.out" < "$raw"
-            panel_atomic_write "$sd/$seat.$batch.stances.json" < "$parsed"
-            panel_atomic_write "$sd/$seat.$batch.expected.ids" < "$exp_ids"
-            rm -f "$parsed" "$exp_ids" "$got_ids" "$planned_ids"
-            printf '%s\n' '{"status":"complete"}'
-          else
-            uniq_got="$(mktemp "$sd/.received-unique.XXXXXX")"; LC_ALL=C sort -u "$got_ids" > "$uniq_got"
-            if [ "$(wc -l < "$got_ids")" -ne "$(wc -l < "$uniq_got")" ] \
-               || comm -23 "$got_ids" "$exp_ids" | grep -q . \
-               || [ "$(wc -l < "$got_ids")" -gt "$(wc -l < "$exp_ids")" ]; then status="wrong_ids"
-            else status="partial"
-            fi
-            rm -f "$parsed" "$exp_ids" "$got_ids" "$planned_ids" "$uniq_got"
-            printf '{"status":"%s"}\n' "$status"
-          fi ;;
-  drop-seat)
-          seat="${4-}"
-          case "$seat" in ''|*[!A-Za-z0-9._-]*) echo "sweep drop-seat: bad seat name" >&2; exit 2;; esac
-          [ -d "$sd" ] || { echo "sweep drop-seat: sweep dir not found" >&2; exit 1; }
-          rm -f -- "$sd/$seat."*.out "$sd/$seat."*.stances.json "$sd/$seat."*.expected.ids
-          if [ -f "$sd/plan.json" ]; then
-            jq --arg seat "$seat" '.dropped_seats = ((.dropped_seats // []) + [$seat] | unique)' "$sd/plan.json" | panel_atomic_write "$sd/plan.json"
-          fi ;;
-  resume-plan)
-          next="$(jq -r '(.round // 0) + 1' "$idx")"; sd="/tmp/$id/sweeps/round-$next"
-          [ -d "$sd" ] || { jq -cn --argjson round "$next" '{round:$round,status:"no_sweep",batches:[]}' ; exit 0; }
-          [ -s "$sd/.epoch" ] || { echo "sweep resume-plan: missing sweep epoch" >&2; exit 1; }
-          epoch="$(cat "$sd/.epoch")"; current="$(jq -r '.run_epoch // 0' "$idx")"
-          [ "$epoch" = "$current" ] || { echo "sweep resume-plan: stale sweep epoch" >&2; exit 1; }
-          [ -f "$sd/plan.json" ] || { jq -cn --argjson round "$next" --argjson epoch "$epoch" '{round:$round,epoch:$epoch,status:"no_plan",batches:[]}' ; exit 0; }
-          complete='[]'
-          while IFS=$'\t' read -r seat batch; do
-            [ -f "$sd/$seat.$batch.out" ] || continue
-            complete="$(printf '%s' "$complete" | jq -c --arg seat "$seat" --arg batch "$batch" '. + [{seat:$seat,batch:$batch}]')"
-          done < <(jq -r '.batches[] | [.seat,.batch] | @tsv' "$sd/plan.json")
-          jq -c --argjson round "$next" --argjson epoch "$epoch" --argjson complete "$complete" '
-            {round:$round,epoch:$epoch,batches:[.batches[] as $b |
-              {seat:$b.seat,batch:$b.batch,status:(if ((.dropped_seats // []) | index($b.seat)) != null then "dropped"
-                elif ($complete | any(.seat==$b.seat and .batch==$b.batch)) then "complete" else "missing" end)}]}' "$sd/plan.json" ;;
-  has)    seat="$4"; batch="${5-all}"
-	          case "$batch" in ''|*[!A-Za-z0-9._-]*) echo "sweep: bad batch name" >&2; exit 2;; esac
-	          [ -f "$sd/$seat.$batch.out" ] ;;
-  done)   [ -f "$idx" ] && jq -e --argjson r "$round" '((.committed_rounds // []) | any(. == $r))' "$idx" >/dev/null 2>&1 ;;
-  commit) epoch="${4-}"
-          case "$epoch" in ''|*[!0-9]*) echo "sweep commit: requires numeric epoch" >&2; exit 2;; esac
-          [ -d "$sd" ] || { echo "sweep commit: no sweep $round for $id" >&2; exit 1; }
-          # The round's full decision payload (states, flags, evidence, new issues,
-          # and the `bump` id list — see `index commit-sweep`) arrives on stdin.
-          # Apply it as ONE atomic, idempotent step so a crash never leaves a
-          # half-applied round, then drop the audit marker (committed_rounds in the
-          # index is the real source of truth, this file is just for inspection).
-          [ -s "$sd/.epoch" ] || { echo "sweep commit: no epoch found or empty" >&2; exit 1; }
-          dir_epoch="$(cat "$sd/.epoch")"
-          case "$dir_epoch" in ''|*[!0-9]*) echo "sweep commit: sweep epoch not numeric" >&2; exit 1;; esac
-          if [ "$epoch" != "$dir_epoch" ]; then echo "sweep commit: stale worker epoch $epoch != $dir_epoch" >&2; exit 1; fi
-          curr_epoch="$(jq -r '.run_epoch // 0' "$idx")"
-          if [ "$curr_epoch" != "$dir_epoch" ]; then echo "sweep commit: stale run epoch" >&2; exit 1; fi
-          cat | "$here/index" commit-sweep "$id" "$round" "$epoch"
-          date -Is | panel_atomic_write "$sd/sweep_complete" ;;
-  *) echo "usage: sweep {begin|record|plan|ingest-batch|drop-seat|resume-plan|has|done|commit} <ID> <round> ..." >&2; exit 2 ;;
-esac
+from panel_common import panel_atomic_write, panel_require_id
+
+
+NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+NUMBER_RE = re.compile(r"^[0-9]+$")
+USAGE = "usage: sweep {begin|record|plan|ingest-batch|drop-seat|resume-plan|has|done|commit} <ID> <round> ..."
+
+
+def fail(message, code):
+    print(message, file=sys.stderr)
+    return code
+
+
+def compact(value):
+    return json.dumps(value, separators=(",", ":"), ensure_ascii=False)
+
+
+def is_number(value):
+    return bool(NUMBER_RE.fullmatch(value))
+
+
+def valid_name(value):
+    return bool(NAME_RE.fullmatch(value))
+
+
+def read_index(path):
+    with open(path, encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def jq_raw(value):
+    if value is None:
+        return "0"
+    if type(value) is str:
+        return value
+    return compact(value)
+
+
+def index_epoch(path):
+    return jq_raw(read_index(path).get("run_epoch", 0))
+
+
+def read_epoch(path):
+    with open(path, encoding="utf-8") as handle:
+        return handle.read().strip()
+
+
+def epoch_file_present(path):
+    return os.path.isfile(path) and os.path.getsize(path) > 0
+
+
+def sorted_ids(values):
+    return sorted(values, key=lambda value: value.encode("utf-8"))
+
+
+def write_atomic(path, data):
+    panel_atomic_write(path, data)
+
+
+def validate_plan(plan):
+    if type(plan) is not dict or type(plan.get("batches")) is not list or not plan["batches"]:
+        return False
+    pairs = set()
+    for batch in plan["batches"]:
+        if type(batch) is not dict:
+            return False
+        seat = batch.get("seat")
+        name = batch.get("batch")
+        expected = batch.get("expected_ids")
+        if type(seat) is not str or type(name) is not str or type(expected) is not list or not expected:
+            return False
+        if any(type(issue_id) is not str or not issue_id for issue_id in expected):
+            return False
+        pair = (seat, name)
+        if pair in pairs or len(set(expected)) != len(expected):
+            return False
+        pairs.add(pair)
+    return True
+
+
+def expected_ids(path):
+    with open(path, "rb") as handle:
+        raw = handle.read()
+    lines = raw.decode("utf-8").split("\n")
+    if raw.endswith(b"\n"):
+        lines.pop()
+    unique = sorted_ids(set(lines))
+    if not unique or any(not line for line in lines) or len(lines) != len(unique):
+        return None
+    return unique
+
+
+def parsed_ids(path):
+    with open(path, "rb") as handle:
+        raw = handle.read()
+    parsed_lines = raw.decode("utf-8").split("\n")
+    if raw.endswith(b"\n"):
+        parsed_lines.pop()
+    received_output = "".join(f"{json.loads(line)['id']}\n" for line in parsed_lines)
+    return parsed_lines, sorted_ids(received_output.split("\n")[:-1])
+
+
+def cmd_begin(sd, idx, epoch):
+    if not is_number(epoch):
+        return fail("sweep begin: requires numeric epoch", 2)
+    current = index_epoch(idx)
+    if current != epoch:
+        return fail(f"sweep begin: stale run epoch {epoch} != {current}", 1)
+    epoch_path = os.path.join(sd, ".epoch")
+    if os.path.isdir(sd):
+        if not epoch_file_present(epoch_path) or read_epoch(epoch_path) != epoch:
+            shutil.rmtree(sd)
+    os.makedirs(sd, exist_ok=True)
+    if not epoch_file_present(epoch_path):
+        write_atomic(epoch_path, f"{epoch}\n")
+    return 0
+
+
+def cmd_record(sd, idx, epoch, seat, src, batch):
+    if not is_number(epoch):
+        return fail("sweep record: requires numeric epoch", 2)
+    if not valid_name(seat):
+        return fail("sweep: bad seat name", 2)
+    if not valid_name(batch):
+        return fail("sweep: bad batch name", 2)
+    if not os.path.isfile(src):
+        return fail(f"sweep record: no such file: {src}", 1)
+    if not os.path.isdir(sd):
+        return fail("sweep record: sweep dir not found", 1)
+    epoch_path = os.path.join(sd, ".epoch")
+    if not epoch_file_present(epoch_path):
+        return fail("sweep record: sweep epoch not found or empty", 1)
+    directory_epoch = read_epoch(epoch_path)
+    if not is_number(directory_epoch):
+        return fail("sweep record: sweep epoch not numeric", 1)
+    if epoch != directory_epoch:
+        return fail(f"sweep record: stale worker epoch {epoch} != {directory_epoch}", 1)
+    if index_epoch(idx) != directory_epoch:
+        return fail("sweep record: stale run epoch", 1)
+    with open(src, "rb") as handle:
+        write_atomic(os.path.join(sd, f"{seat}.{batch}.out"), handle.read())
+    return 0
+
+
+def cmd_plan(sd, epoch, plan_path):
+    if not is_number(epoch):
+        return fail("sweep plan: requires numeric epoch", 2)
+    if not os.path.isfile(plan_path):
+        return fail(f"sweep plan: no such file: {plan_path}", 1)
+    epoch_path = os.path.join(sd, ".epoch")
+    if not os.path.isdir(sd) or not epoch_file_present(epoch_path):
+        return fail("sweep plan: sweep dir not found", 1)
+    if read_epoch(epoch_path) != epoch:
+        return fail("sweep plan: stale worker epoch", 1)
+    try:
+        with open(plan_path, encoding="utf-8") as handle:
+            plan = json.load(handle)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return fail("sweep plan: invalid batch plan", 2)
+    if not validate_plan(plan):
+        return fail("sweep plan: invalid batch plan", 2)
+    stored_path = os.path.join(sd, "plan.json")
+    if os.path.isfile(stored_path):
+        try:
+            with open(stored_path, encoding="utf-8") as handle:
+                stored = json.load(handle)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return fail("sweep plan: existing plan differs", 1)
+        if type(stored.get("epoch")) is not int or stored["epoch"] != int(epoch) or stored.get("batches") != plan["batches"]:
+            return fail("sweep plan: existing plan differs", 1)
+    else:
+        stored = dict(plan)
+        stored["epoch"] = int(epoch)
+        stored["dropped_seats"] = []
+        write_atomic(stored_path, compact(stored) + "\n")
+    return 0
+
+
+def cmd_ingest_batch(sd, epoch, seat, batch, expected_path, raw_path):
+    if not is_number(epoch):
+        return fail("sweep ingest-batch: requires numeric epoch", 2)
+    if not valid_name(seat):
+        return fail("sweep ingest-batch: bad seat name", 2)
+    if not valid_name(batch):
+        return fail("sweep ingest-batch: bad batch name", 2)
+    epoch_path = os.path.join(sd, ".epoch")
+    if not os.path.isdir(sd) or not epoch_file_present(epoch_path):
+        return fail("sweep ingest-batch: sweep dir not found", 1)
+    if read_epoch(epoch_path) != epoch:
+        return fail("sweep ingest-batch: stale worker epoch", 1)
+    if not os.path.isfile(expected_path):
+        return fail("sweep ingest-batch: no expected IDs file", 1)
+    plan_path = os.path.join(sd, "plan.json")
+    if not os.path.isfile(plan_path):
+        return fail("sweep ingest-batch: no batch plan", 1)
+    with open(plan_path, encoding="utf-8") as handle:
+        plan = json.load(handle)
+    if seat in plan.get("dropped_seats", []):
+        return fail("sweep ingest-batch: seat was dropped", 1)
+    if not os.path.isfile(raw_path):
+        print('{"status":"missing"}')
+        return 0
+    parsed = tempfile.NamedTemporaryFile(prefix=".parsed.", dir=sd, delete=False)
+    try:
+        with parsed:
+            result = subprocess.run(
+                [os.path.join(HERE, "parse_block"), "stances", raw_path, seat],
+                stdout=parsed,
+            )
+        if result.returncode == 4:
+            print('{"status":"missing"}')
+            return 0
+        if os.path.getsize(parsed.name) == 0:
+            print('{"status":"malformed"}' if result.returncode == 5 else '{"status":"empty"}')
+            return 0
+        wanted = expected_ids(expected_path)
+        if wanted is None:
+            return fail("sweep ingest-batch: expected IDs must be unique, non-empty lines", 2)
+        planned = []
+        for entry in plan.get("batches", []):
+            if entry.get("seat") == seat and entry.get("batch") == batch:
+                planned.extend(entry.get("expected_ids", []))
+        if wanted != sorted_ids(planned):
+            return fail("sweep ingest-batch: expected IDs do not match the batch plan", 2)
+        lines, received = parsed_ids(parsed.name)
+        if received == wanted and len(lines) == len(wanted):
+            with open(raw_path, "rb") as handle:
+                write_atomic(os.path.join(sd, f"{seat}.{batch}.out"), handle.read())
+            with open(parsed.name, "rb") as handle:
+                write_atomic(os.path.join(sd, f"{seat}.{batch}.stances.json"), handle.read())
+            write_atomic(os.path.join(sd, f"{seat}.{batch}.expected.ids"), "".join(f"{value}\n" for value in wanted))
+            print('{"status":"complete"}')
+            return 0
+        unique_received = sorted_ids(set(received))
+        if len(received) != len(unique_received) or any(value not in wanted for value in received) or len(received) > len(wanted):
+            status = "wrong_ids"
+        else:
+            status = "partial"
+        print(compact({"status": status}))
+        return 0
+    finally:
+        try:
+            os.unlink(parsed.name)
+        except OSError:
+            pass
+
+
+def cmd_drop_seat(sd, seat):
+    if not valid_name(seat):
+        return fail("sweep drop-seat: bad seat name", 2)
+    if not os.path.isdir(sd):
+        return fail("sweep drop-seat: sweep dir not found", 1)
+    for suffix in (".out", ".stances.json", ".expected.ids"):
+        for path in glob.glob(os.path.join(sd, f"{seat}.*{suffix}")):
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+    plan_path = os.path.join(sd, "plan.json")
+    if os.path.isfile(plan_path):
+        with open(plan_path, encoding="utf-8") as handle:
+            plan = json.load(handle)
+        plan["dropped_seats"] = sorted(set(plan.get("dropped_seats", [])) | {seat})
+        write_atomic(plan_path, compact(plan) + "\n")
+    return 0
+
+
+def cmd_resume_plan(run_id, idx):
+    index = read_index(idx)
+    next_round = (index.get("round", 0) if index.get("round") is not None else 0) + 1
+    sd = os.path.join("/tmp", run_id, "sweeps", f"round-{next_round}")
+    if not os.path.isdir(sd):
+        print(compact({"round": next_round, "status": "no_sweep", "batches": []}))
+        return 0
+    epoch_path = os.path.join(sd, ".epoch")
+    if not epoch_file_present(epoch_path):
+        return fail("sweep resume-plan: missing sweep epoch", 1)
+    epoch = read_epoch(epoch_path)
+    if epoch != jq_raw(index.get("run_epoch", 0)):
+        return fail("sweep resume-plan: stale sweep epoch", 1)
+    plan_path = os.path.join(sd, "plan.json")
+    if not os.path.isfile(plan_path):
+        print(compact({"round": next_round, "epoch": int(epoch), "status": "no_plan", "batches": []}))
+        return 0
+    with open(plan_path, encoding="utf-8") as handle:
+        plan = json.load(handle)
+    dropped = plan.get("dropped_seats", [])
+    batches = []
+    for entry in plan["batches"]:
+        if entry["seat"] in dropped:
+            status = "dropped"
+        elif os.path.isfile(os.path.join(sd, f"{entry['seat']}.{entry['batch']}.out")):
+            status = "complete"
+        else:
+            status = "missing"
+        batches.append({"seat": entry["seat"], "batch": entry["batch"], "status": status})
+    print(compact({"round": next_round, "epoch": int(epoch), "batches": batches}))
+    return 0
+
+
+def cmd_commit(sd, idx, run_id, round_text, epoch):
+    if not is_number(epoch):
+        return fail("sweep commit: requires numeric epoch", 2)
+    if not os.path.isdir(sd):
+        return fail(f"sweep commit: no sweep {round_text} for {run_id}", 1)
+    epoch_path = os.path.join(sd, ".epoch")
+    if not epoch_file_present(epoch_path):
+        return fail("sweep commit: no epoch found or empty", 1)
+    directory_epoch = read_epoch(epoch_path)
+    if not is_number(directory_epoch):
+        return fail("sweep commit: sweep epoch not numeric", 1)
+    if epoch != directory_epoch:
+        return fail(f"sweep commit: stale worker epoch {epoch} != {directory_epoch}", 1)
+    if index_epoch(idx) != directory_epoch:
+        return fail("sweep commit: stale run epoch", 1)
+    result = subprocess.run(
+        [os.path.join(HERE, "index"), "commit-sweep", run_id, round_text, epoch],
+        stdin=sys.stdin.buffer,
+    )
+    if result.returncode:
+        return result.returncode
+    write_atomic(os.path.join(sd, "sweep_complete"), datetime.datetime.now().astimezone().isoformat() + "\n")
+    return 0
+
+
+def main(argv):
+    cmd = argv[1] if len(argv) > 1 else ""
+    run_id = argv[2] if len(argv) > 2 else ""
+    panel_require_id(run_id)
+    round_text = argv[3] if len(argv) > 3 else ""
+    if cmd != "resume-plan" and not is_number(round_text):
+        return fail("sweep: round must be a number", 2)
+    sd = os.path.join("/tmp", run_id, "sweeps", f"round-{round_text}")
+    idx = os.path.join("/tmp", run_id, "index.json")
+
+    if cmd == "begin":
+        return cmd_begin(sd, idx, argv[4] if len(argv) > 4 else "")
+    if cmd == "record":
+        return cmd_record(sd, idx, argv[4] if len(argv) > 4 else "", argv[5] if len(argv) > 5 else "", argv[6] if len(argv) > 6 else "", argv[7] if len(argv) > 7 else "all")
+    if cmd == "plan":
+        return cmd_plan(sd, argv[4] if len(argv) > 4 else "", argv[5] if len(argv) > 5 else "")
+    if cmd == "ingest-batch":
+        return cmd_ingest_batch(sd, argv[4] if len(argv) > 4 else "", argv[5] if len(argv) > 5 else "", argv[6] if len(argv) > 6 else "", argv[7] if len(argv) > 7 else "", argv[8] if len(argv) > 8 else "")
+    if cmd == "drop-seat":
+        return cmd_drop_seat(sd, argv[4] if len(argv) > 4 else "")
+    if cmd == "resume-plan":
+        return cmd_resume_plan(run_id, idx)
+    if cmd == "has":
+        seat = argv[4] if len(argv) > 4 else ""
+        batch = argv[5] if len(argv) > 5 else "all"
+        if not valid_name(batch):
+            return fail("sweep: bad batch name", 2)
+        return 0 if os.path.isfile(os.path.join(sd, f"{seat}.{batch}.out")) else 1
+    if cmd == "done":
+        if not os.path.isfile(idx):
+            return 1
+        return 0 if any(
+            type(value) in {int, float} and value == int(round_text)
+            for value in read_index(idx).get("committed_rounds", [])
+        ) else 1
+    if cmd == "commit":
+        return cmd_commit(sd, idx, run_id, round_text, argv[4] if len(argv) > 4 else "")
+    return fail(USAGE, 2)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))
