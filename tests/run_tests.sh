@@ -83,7 +83,58 @@ assert_file_contains "protocol delegates batch admission" 'sweep ingest-batch' "
 assert_file_contains "protocol delegates dropped-seat cleanup" 'sweep" drop-seat' "$root/skills/panel-review-for-agent/SKILL.md"
 assert_file_contains "protocol reapplies the low-only gate" 'Low-severity stop gate (after each committed round)' "$root/skills/panel-review-for-agent/SKILL.md"
 assert_file_contains "README uses general constrained-seat wording" 'any seat running in a constrained/sandboxed workspace' "$root/README.md"
+assert_file_contains "README warns to run in an isolated environment (broad seat permissions)" 'isolated environment (Docker' "$root/README.md"
 assert_file_contains "CLAUDE.md uses general constrained-seat wording" 'constrained/sandboxed workspace' "$root/CLAUDE.md"
+assert_file_contains "blind_pass template carries the scratch sentinel" '{{SCRATCH}}' "$root/prompts/blind_pass.tmpl"
+assert_file_contains "debate template carries the scratch sentinel"     '{{SCRATCH}}' "$root/prompts/debate.tmpl"
+assert_file_contains "protocol passes SCRATCH to assemble" 'SCRATCH=/tmp/$id/scratch.txt' "$root/skills/panel-review-for-agent/SKILL.md"
+assert_file_contains "protocol snapshots the tracked tree" 'repo_guard" snapshot' "$root/skills/panel-review-for-agent/SKILL.md"
+assert_file_contains "protocol verifies + restores the tree" 'repo_guard" verify' "$root/skills/panel-review-for-agent/SKILL.md"
+assert_file_contains "Claude seat exposes read-only tilth tools" 'mcp__tilth__tilth_search' "$root/agents/panel-review-claude-seat.md"
+case "$(grep -F 'tools:' "$root/agents/panel-review-claude-seat.md")" in
+  *mcp__tilth__tilth_write*) bad "Claude seat must NOT expose tilth write tool" ;;
+  *) ok "Claude seat excludes tilth write tool" ;;
+esac
+case "$(grep -F 'codex exec' "$root/scripts/run_codex")" in
+  *--sandbox\ read-only*) bad "run_codex must no longer pin --sandbox read-only" ;;
+  *--dangerously-bypass-approvals-and-sandbox*) ok "run_codex bypasses the sandbox" ;;
+  *) bad "run_codex codex exec invocation unrecognized" ;;
+esac
+assert_file_contains "run_agy passes skip-permissions for tilth" '--dangerously-skip-permissions' "$root/scripts/run_agy"
+# run_codex feeds the prompt on stdin (codex's documented [PROMPT]-or-stdin contract);
+# unlike agy it has no flag that consumes the prompt, so stdin is parser-safe.
+assert_file_contains "run_codex feeds the prompt via stdin" '< "$promptfile"' "$root/scripts/run_codex"
+
+# ---------------------------------------------------------------------------
+section "repo_guard — snapshot / verify / restore protects tracked files"
+rg="$TMP/guard-repo"; mkdir -p "$rg"
+(
+  cd "$rg" || exit 1
+  git init -q
+  printf 'orig\n' > a.txt; printf 'keep\n' > b.txt
+  git add .
+  git -c user.name=test -c user.email=test@example.invalid commit -qm init
+)
+gid="$PREFIX-guard"; rm -rf "/tmp/$gid"
+"$SC/repo_guard" snapshot --id "$gid" --workdir "$rg" >/dev/null 2>&1; assert_exit "snapshot clean tree -> 0" 0 "$?"
+"$SC/repo_guard" verify --id "$gid" --workdir "$rg" > "$TMP/guard.v1" 2>/dev/null; assert_exit "verify clean -> 0" 0 "$?"
+assert_eq "clean verify emits no drift" '' "$(cat "$TMP/guard.v1")"
+printf 'tampered\n' > "$rg/a.txt"
+"$SC/repo_guard" verify --id "$gid" --workdir "$rg" > "$TMP/guard.v2" 2>/dev/null; assert_exit "modified tracked file -> exit 1" 1 "$?"
+assert_file_contains "verify names the drifted file" 'modified: a.txt' "$TMP/guard.v2"
+"$SC/repo_guard" verify --id "$gid" --workdir "$rg" --restore >/dev/null 2>&1; assert_exit "restore pass still reports drift (exit 1)" 1 "$?"
+assert_eq "restore reverted the tracked file"      'orig' "$(cat "$rg/a.txt")"
+"$SC/repo_guard" verify --id "$gid" --workdir "$rg" >/dev/null 2>&1; assert_exit "post-restore verify clean -> 0" 0 "$?"
+mkdir -p "$rg/.panel-review/$gid/work"; echo scratch > "$rg/.panel-review/$gid/work/s.txt"
+"$SC/repo_guard" verify --id "$gid" --workdir "$rg" >/dev/null 2>&1; assert_exit "untracked scratch is ignored -> 0" 0 "$?"
+# A baseline taken on a DIRTY tree restores the dirty bytes, not HEAD.
+gid2="$PREFIX-guard-dirty"; rm -rf "/tmp/$gid2"
+printf 'dirty\n' > "$rg/a.txt"
+"$SC/repo_guard" snapshot --id "$gid2" --workdir "$rg" >/dev/null 2>&1
+printf 'tampered2\n' > "$rg/a.txt"
+"$SC/repo_guard" verify --id "$gid2" --workdir "$rg" --restore >/dev/null 2>&1 || true
+assert_eq "dirty-at-snapshot restores the dirty bytes (not HEAD)" 'dirty' "$(cat "$rg/a.txt")"
+rm -rf "/tmp/$gid" "/tmp/$gid2"
 
 # ---------------------------------------------------------------------------
 section "birth_index — mechanical Round-0 state / flags / coverage"
@@ -191,6 +242,57 @@ st="$(timeout 30 env MOCK_MODE=good MOCK_TAG=findings PATH="$seat_mockbin:$PATH"
 assert_eq "gemini seat -> status 0"      '0' "$st"
 assert_eq "gemini parsed _source=gemini" 'gemini' "$(jq -r '._source' "$TMP/seat.parsed.gem")"
 "$SC/run_seat" --seat mistral --tag findings --prompt "$TMP/seat.prompt" --raw "$TMP/x" --parsed "$TMP/y" >/dev/null 2>&1; assert_exit "unknown seat -> usage exit 2" 2 "$?"
+
+# ---------------------------------------------------------------------------
+# run_agy invocation contract. agy's `--print` TAKES the prompt as its argument;
+# a bare `--print` + stdin desyncs parsing and silently drops --model and
+# --print-timeout (agy then runs the ~/.gemini default model at the 5m default
+# cap). The stub records argv (one token per line, per-call separators) and the
+# piped prompt so we can assert the exact flags and the genuine model fallback.
+agy_mockbin="$TMP/agybin"; mkdir -p "$agy_mockbin"
+cat > "$agy_mockbin/agy" <<'EOF'
+#!/usr/bin/env bash
+{ printf '%s\n' "$@"; printf '<<<CALL>>>\n'; } >> "$AGY_ARGV"
+cat >> "$AGY_STDIN"
+n=0; [ -f "$AGY_COUNT" ] && n="$(cat "$AGY_COUNT")"; n=$((n+1)); echo "$n" > "$AGY_COUNT"
+fb='```findings
+{"claim":"g","location":"a.c:1","category":"correctness","severity":"high","points":[{"assertion":"x","location":"a.c:1"}]}
+```'
+case "${AGY_MODE:-good}" in
+  good)              printf '%s\n' "$fb" ;;
+  timeout_then_good) if [ "$n" -eq 1 ]; then printf 'Error: timed out waiting for response\n'; else printf '%s\n' "$fb"; fi ;;
+  always_timeout)    printf 'Error: timed out waiting for response\n' ;;
+esac
+exit 0
+EOF
+chmod +x "$agy_mockbin/agy"
+printf 'PLEASE REVIEW THIS DIFF SENTINEL-7Q\n' > "$TMP/agy.in"
+run_agy_t() { # $1=mode $2=tag ; prompt on stdin (run_agy with no args)
+  AGY_MODE="$1" AGY_ARGV="$TMP/agy.argv.$2" AGY_STDIN="$TMP/agy.stdin.$2" AGY_COUNT="$TMP/agy.count.$2" \
+    PATH="$agy_mockbin:$PATH" timeout 30 "$SC/run_agy" < "$TMP/agy.in" > "$TMP/agy.out.$2" 2>"$TMP/agy.err.$2"
+}
+
+section "run_agy — invocation binds flags (no bare --print, prompt via stdin)"
+run_agy_t good p1; assert_exit "primary good -> exit 0" 0 "$?"
+if grep -Fxq -- '--print' "$TMP/agy.argv.p1"; then bad "run_agy must NOT pass a bare --print (it swallows --model)"; else ok "no bare --print token"; fi
+assert_file_contains "passes --print-timeout=15m (=form, bound budget)" '--print-timeout=15m' "$TMP/agy.argv.p1"
+assert_file_contains "passes --dangerously-skip-permissions"            '--dangerously-skip-permissions' "$TMP/agy.argv.p1"
+if grep -Fxq -- 'Gemini 3.1 Pro (High)' "$TMP/agy.argv.p1"; then ok "primary model is Pro (High)"; else bad "primary model not Pro (High)"; fi
+assert_file_contains "prompt reaches agy via stdin" 'SENTINEL-7Q' "$TMP/agy.stdin.p1"
+assert_eq "primary success = single dispatch" '1' "$(cat "$TMP/agy.count.p1")"
+assert_file_contains "primary output carries the findings block" '```findings' "$TMP/agy.out.p1"
+
+section "run_agy — print-timeout (exit 0 + error tail) triggers the Flash fallback"
+run_agy_t timeout_then_good p2; assert_exit "fallback recovers -> exit 0" 0 "$?"
+assert_eq "primary timeout + fallback = two dispatches" '2' "$(cat "$TMP/agy.count.p2")"
+if grep -Fxq -- 'Gemini 3.5 Flash (High)' "$TMP/agy.argv.p2"; then ok "fallback model is Flash (High)"; else bad "fallback did not switch to Flash (High)"; fi
+assert_file_contains "fallback output carries the findings block" '```findings' "$TMP/agy.out.p2"
+assert_file_contains "logs the fallback switch" 'retrying with fallback' "$TMP/agy.err.p2"
+
+section "run_agy — both models time out -> seat fails (exit 1)"
+run_agy_t always_timeout p3; assert_exit "both fail -> exit 1" 1 "$?"
+assert_eq "both attempts dispatched" '2' "$(cat "$TMP/agy.count.p3")"
+assert_file_contains "reports both-model failure" 'both primary' "$TMP/agy.err.p3"
 
 # ---------------------------------------------------------------------------
 section "resolve_instructions — verbatim / none resolved, auto -> sentinel"

@@ -43,6 +43,40 @@ Three rules govern how it treats the result:
 It extends the upstream `codex-peer-review` (Claude + Codex only); the additions are the Gemini
 seat, the blind debate, and crash-resumable state.
 
+### Prerequisite: tilth (code-intelligence MCP)
+
+All three seats use [`tilth`](https://github.com/jahala/tilth) for AST-aware code
+navigation. Install it in at least read-only mode (add `--edit` if you also want your
+agents to use tilth for editing elsewhere — panel-review's review stays read-only either
+way), and register it with each host the seats run under:
+
+    cargo install tilth        # or: npx tilth   (then ensure it's on PATH)
+
+    tilth install claude-code  # Claude seat
+    tilth install codex        # Codex seat
+    tilth install antigravity  # Gemini/agy seat
+
+If `tilth` is missing a seat loses code navigation but still reviews from the diff;
+panel-review does not install or manage tilth.
+
+### Read-only by construction
+
+The seats may now **write throwaway scratch scripts** (to check arithmetic, parse, enumerate
+cases) under a git-ignored `.panel-review/<ID>/work/` subtree, and Codex runs with its sandbox
+bypassed so its MCP/tilth calls work. The **code under review is still never modified**: the referee
+snapshots the tracked tree at the start (`scripts/repo_guard`) and, after every seat pass, reverts
+any tracked-file change and flags it loudly in the verdict's Process notes. Integrity is enforced by
+that guard plus the disposable container the panel runs in — not by per-seat sandboxes.
+
+> **⚠️ Run this in an isolated environment (Docker container or a throwaway VM).** To let the seats
+> use tilth and run scratch scripts, all three run with **broad write/execute permissions**: Codex
+> with its sandbox bypassed (`--dangerously-bypass-approvals-and-sandbox`), Gemini/`agy` with
+> `--dangerously-skip-permissions`, and the Claude seat with `Bash`. `repo_guard` protects **only the
+> code under review** (it reverts changes to tracked files in your repo) — it does **not** confine a
+> seat from touching the rest of the machine: other directories, your home dir, credentials, the
+> network. Treat a panel run as executing untrusted agentic code with your user's privileges, and
+> isolate it accordingly. Do not run it directly on a host you care about.
+
 ---
 
 ## Using it
@@ -253,9 +287,10 @@ malformed block, using its own prior output plus `parse_block --diagnose` output
 | `diff_hash` | Stable hash of the resolved diff, for the manifest and the resume/diverged check |
 | `assemble` | Splice scope + diff (or card paths) into a prompt template without an LLM retyping them |
 | `resolve_instructions` | Resolve `manifest.instructions` to the seat-facing text for the two deterministic cases (verbatim author text, or the "(none …)" line); returns a compose **sentinel** (exit 3) for `auto`, the only case that needs the referee to write neutral context |
-| `run_codex` | The **only** way to call the Codex seat — pins `--sandbox read-only`, defaults `--profile panel-review` (auto-creates the profile from a shipped default) |
-| `run_agy` | The **only** way to call the Gemini seat — pins the model and the timeout/stdin fixes, and falls back from the primary Gemini model to a faster one if the primary fails or trips agy's internal "waiting for response" timeout |
-| `run_seat` | Dispatch one **CLI** seat (Codex or Gemini) for a tag, parse the block, and run the one-shot shape repair (diagnose → `repair.tmpl` with the seat's own output → re-dispatch) automatically; prints the final parse status. The Claude seat is a subagent, not a CLI, so it is driven by the referee directly. **CLI seats are long-running** (minutes; `run_agy` up to ~31 min), longer than the Bash tool's foreground timeout (2 min default, 10 min max), so the referee dispatches each seat as its own **background** call — a foreground dispatch is killed mid-pass and the empty raw file reads as a down seat |
+| `run_codex` | The **only** way to call the Codex seat — defaults `--profile panel-review` (auto-creates the profile from a shipped default) and runs with the sandbox **bypassed** (`--dangerously-bypass-approvals-and-sandbox`, the only mode where Codex's MCP/tilth runs and it can write scratch; integrity is enforced by `repo_guard`, not this sandbox) |
+| `repo_guard` | Protect the **code under review**: `snapshot` records the tracked tree (a `git stash create` SHA + a sha256 manifest) at the start; `verify --restore` after each seat pass detects, reverts, and reports any tracked-file drift. Untracked scratch and the `.panel-review/` cache are left alone |
+| `run_agy` | The **only** way to call the Gemini seat — pins the model, a 15-min `--print-timeout` budget, and the flag-binding invocation (prompt on **stdin with no bare `--print`**, since agy's `--print` takes the prompt as its argument and would otherwise swallow `--model`); falls back from the primary Gemini model to a faster one if the primary fails or exhausts its `--print-timeout` (whose expiry prints `Error: timed out waiting for response`) |
+| `run_seat` | Dispatch one **CLI** seat (Codex or Gemini) for a tag, parse the block, and run the one-shot shape repair (diagnose → `repair.tmpl` with the seat's own output → re-dispatch) automatically; prints the final parse status. The Claude seat is a subagent, not a CLI, so it is driven by the referee directly. **CLI seats are long-running** (minutes; `run_agy` up to ~34 min across its two 15-min model attempts), longer than the Bash tool's foreground timeout (2 min default, 10 min max), so the referee dispatches each seat as its own **background** call — a foreground dispatch is killed mid-pass and the empty raw file reads as a down seat |
 | `extract_block` / `parse_block` | Pull a `findings` / `stances` / `new_findings` block → validated JSONL; `parse_block` exit 4 = no block (down seat) vs empty-but-present, exit 5 = malformed (block present, zero valid). `parse_block --diagnose` reports *why* each item was rejected (reason + offending line) to drive a one-shot repair |
 | `birth_index` | Turn the referee's clustered Round-0 finding-to-issue map into the full `index.json` — assigns each issue's birth state, vetting flags, and `evaluated_by` coverage by the birth-unanimity rule (the deterministic half of clustering; the referee still owns the merge itself) |
 | `decide_round` / `decide_degraded_round` | Build normal (≥2 seats) and degraded (0–1 seat) debate payloads. Both update private `evaluated_by` coverage in the same atomic commit; the degraded path only emits terminal unresolved/contested states and eligible `fully_vetted` flags |
@@ -283,7 +318,7 @@ derived, regenerable cache; state is never inferred from them.
 
 | Path | Holds |
 |------|-------|
-| `.panel-review/<ID>/issue-<id>.md` | the blind cards (kept in the repo so any seat running in a constrained/sandboxed workspace — e.g. Codex's read-only sandbox — can still read them; git-excluded and kept out of every scope so they never contaminate an `--uncommitted` review) |
+| `.panel-review/<ID>/issue-<id>.md` | the blind cards (kept in the repo so any seat running in a constrained/sandboxed workspace — e.g. a seat under an externally-imposed read-only mount — can still read them; git-excluded and kept out of every scope so they never contaminate an `--uncommitted` review) |
 | `.panel-review/<ID>/` (the dir) | the per-worktree marker / lock — its name carries `<ID>` |
 | `/tmp/<ID>/manifest.json` | scope, limits, diff hash, phase |
 | `/tmp/<ID>/index.json` | the **issue index** — the authoritative record of every issue: its state (e.g. `accepted`), flags, counters, and evidence (all defined under [How an issue moves](#how-an-issue-moves-transitions)); cards are rendered from it and the verdict is read off it (referee only) |
@@ -371,11 +406,13 @@ Behavioral rules the referee must follow. The seat wrappers enforce the flag-pin
 discipline.
 
 - The Gemini seat is called **only** via `scripts/run_agy`, never raw `agy`.
-- The Codex seat is called **only** via `scripts/run_codex` (defaults `--profile panel-review`,
-  `--sandbox read-only`), never with a hardcoded `-m`.
+- The Codex seat is called **only** via `scripts/run_codex` (defaults `--profile panel-review`; runs
+  with the sandbox bypassed so MCP/tilth + scratch work), never with a hardcoded `-m`.
 - **Never** hand-create, edit, or delete `~/.codex/config.toml`. `run_codex` owns
   `~/.codex/panel-review.config.toml` (auto-created from a shipped default); leave it and any other
   `~/.codex/*.config.toml` profile to their tools.
+- The code under review is **never modified**: `scripts/repo_guard` snapshots the tracked tree and
+  auto-reverts any tracked-file change after every seat pass. Seats write only to `.panel-review/<ID>/work/`.
 - `index.json` is written **only** through the `index` / `sweep` scripts; cards **only** through
   `project_card` / `regen_cards`. Never hand-write state files.
 - The Claude seat is spawned as a fresh `panel-review:panel-review-claude-seat` subagent — **never forked**.

@@ -8,14 +8,31 @@
 # Output: final assistant message on stdout. Nonzero exit = seat failed
 #         (caller degrades). codex missing -> exit 127.
 #
-# Pins the two non-negotiables structurally so they can't be fat-fingered:
+# Pins the non-negotiables structurally so they can't be fat-fingered:
 #  - --profile panel-review  (NEVER hardcode -m / a raw model; the profile owns
 #                             model selection. Panel Review's profile is separate
 #                             from upstream peer-review and is auto-created from
 #                             assets/default-panel-review.config.toml on first use.
 #                             Override only the profile name via CODEX_PROFILE.)
-#  - --sandbox read-only     (Codex may read the working tree to investigate
-#                             cross-file context, but never write.)
+#  - --dangerously-bypass-approvals-and-sandbox
+#                            (Codex runs with NO sandbox and NO approval prompts.
+#                             This is required, not a convenience: under ANY Codex
+#                             sandbox — read-only OR workspace-write — Codex
+#                             auto-cancels every MCP tool call ("call cancelled"),
+#                             so its tilth code-intelligence never runs; and the
+#                             review now expects the seat to write throwaway scratch
+#                             scripts to verify deterministic things. approval_policy
+#                             alone does not lift the MCP cancellation. Repo
+#                             integrity is NOT delegated to this sandbox: it is
+#                             enforced by scripts/repo_guard (snapshot + auto-revert
+#                             of any tracked-file change) plus the disposable,
+#                             externally-sandboxed container the panel runs in — the
+#                             same trust model run_agy already relies on.)
+#  - -c mcp_servers.tilth.args=["--mcp"]
+#                            (defense-in-depth: force Codex's tilth server into
+#                             read-only MCP mode, stripping any global `--edit` the
+#                             user configured via `tilth install codex`. panel-review
+#                             never edits the code under review.)
 # Set CODEX_JSONL=/path to also capture the raw --json event stream (default
 # discarded); --json is required because -o writes only the final message.
 set -euo pipefail
@@ -48,7 +65,10 @@ else
 fi
 
 # -o writes the final assistant message to outfile; --json events go to JSONL.
-if ! codex exec --profile "$PROFILE" --sandbox read-only \
+# See the header for why the sandbox is bypassed (MCP/tilth + scratch writes) and
+# how repo integrity is enforced instead (scripts/repo_guard + the container).
+if ! codex exec --profile "$PROFILE" --dangerously-bypass-approvals-and-sandbox \
+       -c 'mcp_servers.tilth.args=["--mcp"]' \
        -o "$outfile" --json < "$promptfile" > "$JSONL" 2>/dev/null; then
   echo "run_codex: codex exec failed (profile=$PROFILE)" >&2
   exit 1

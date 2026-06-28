@@ -7,69 +7,53 @@
 # Output: final assistant response on stdout. Nonzero exit = failed (caller
 #         degrades, running with the remaining seats). agy's own stderr is forwarded.
 #
-# WHY this wrapper exists (all verified to cause empty output / exit 124 hangs):
-#  - agy --print DRAINS STDIN TO EOF in print mode. A non-TTY stdin with no EOF
-#    (background subagent, open pipe) blocks forever -> timeout kills it, 0 bytes.
-#    Fix: always feed the prompt via a file (< file) so stdin hits EOF instantly.
-#  - --print-timeout defaults to 5m0s, which kills real reviews mid-stream.
-#    We force 30m + a wall `timeout` >= that.
-#  - Do NOT pass --dangerously-skip-permissions: it is unnecessary. In --print
-#    mode agy already auto-approves any tool call not explicitly DENIED in
-#    ~/.gemini/antigravity-cli/settings.json (allow-list entries are not required).
-#    Verified: without the flag the seat reads files, runs grep/awk, and even
-#    writes files + runs shell via its run_command/write_to_file tools. So the flag
-#    grants nothing here. IMPORTANT: withholding it does NOT make the seat
-#    read-only — agy is a full agentic tool user and, as currently configured, can
-#    write the working tree and execute commands (unlike run_codex, which pins
-#    --sandbox read-only). agy --sandbox does NOT prevent this (tested: repo writes
-#    still succeed). The seat is constrained only by the deny-list in that settings
-#    file + the disposable-container trust model. (An older note claimed the flag
-#    hangs print mode into an agentic loop; not reproducible on the current agy —
-#    likely a side effect of a previously-loaded agy skill, now gone.)
-#  - PRIMARY model + FALLBACK model. agy has a SEPARATE internal "waiting for
-#    response" timeout (~10m, observed on agy 1.0.10) that is NOT --print-timeout
-#    and is exposed by NO flag. It trips when a slow model takes too long on a
-#    heavy agentic prompt: Gemini 3.1 Pro (High) hits it on large review prompts
-#    that ask the seat to investigate with git. When it does, agy does NOT exit
-#    promptly — it keeps running (observed), so the outer `timeout` is what ends
-#    the attempt with a non-zero status, which is our fallback trigger. Gemini 3.5
-#    Flash (High) answers fast enough to finish and produced equivalent findings
-#    in testing, so it is the fallback. Both are real Gemini models (Pro > Flash,
-#    High effort) — verify names with `agy models`, and do NOT use agy's
+# WHY this wrapper exists / the non-obvious agy contract:
+#  - PROMPT VIA STDIN, NO `--print` FLAG. agy's `--print` is NOT a boolean — it
+#    TAKES THE PROMPT AS ITS ARGUMENT (`--print "<prompt>"`; `--prompt` is an
+#    alias). A bare `--print` with the prompt on stdin makes `--print` swallow the
+#    NEXT token (`--model`) and desyncs the whole parse: --model AND --print-timeout
+#    are silently dropped, so agy runs the ~/.gemini/.../settings.json default model
+#    (Gemini 3.1 Pro) at the 5m DEFAULT print cap. Symptom seen in the field: every
+#    attempt logged model="" and died at ~1497 polls (~5m), and the Pro->Flash
+#    "fallback" was really two Pro runs. Fix: feed the prompt on stdin (a non-TTY
+#    pipe that hits EOF) with NO `--print`; agy then reads stdin non-interactively
+#    and the flags below actually bind. Confirmed in agy's own CLI logs: this form
+#    logs model="Gemini 3.5 Flash (High)" and honors --print-timeout to the second.
+#  - --print-timeout=15m, =FORM. agy's default is 5m0s, which guillotines a heavy
+#    review mid-investigation. 15m is enough for a thorough Pro/Flash pass; the
+#    outer `timeout WALL_TIMEOUT` is the hard backstop if agy ever truly hangs.
+#  - --dangerously-skip-permissions: REQUIRED so the seat can actually RUN its tools
+#    non-interactively — tilth (native MCP), grep/read, and the scratch-script writes
+#    the review prompt asks for. It auto-approves those tool calls; agy is already a
+#    full agentic tool user, so this does not newly "unsandbox" it. Repo integrity is
+#    enforced by scripts/repo_guard (snapshot + auto-revert), not by agy, on top of
+#    the disposable-container trust model.
+#  - PRIMARY Pro, FALLBACK Flash. Now that --model binds, the fallback genuinely
+#    switches: Gemini 3.1 Pro (High) primary (best quality), Gemini 3.5 Flash (High)
+#    fallback (faster, finishes comfortably inside the budget, gave equivalent
+#    findings in testing). Verify names with `agy models`; do NOT use agy's
 #    Claude/GPT-OSS entries. Update these lines when a new top model ships.
-#  - FALLBACK triggers two ways: (a) the attempt exits non-zero (agy's own error,
-#    or the outer `timeout` killing an over-long run); or (b) while agy is still
-#    running, its output has ENDED with "Error: timed out waiting for response"
-#    AND produced nothing new for IDLE_GIVEUP seconds. (b) is a DOCUMENTED
-#    WORKAROUND for the agy bug above (it prints the error and then hangs instead
-#    of exiting): without it, a hang is only caught at WALL_TIMEOUT (~31m).
-#    The naive form of (b) — scanning stdout for the phrase — is unsafe: a valid
-#    review can QUOTE "timed out waiting for response" (reviewing a log or error
-#    path), and a brief paused agentic turn can leave a quoted line trailing for a
-#    few seconds. The IDLE_GIVEUP window is the safeguard: a real review either
-#    keeps streaming (resets the idle timer) or finishes and exits (we then trust
-#    its exit code), so it will not sit dead-stopped on that exact trailing line
-#    for a full minute. Residual risk accepted: a review whose LAST output is
-#    exactly that line and which then stalls > IDLE_GIVEUP (e.g. a very long tool
-#    call) would be cut over to the fallback. Remove (b) if agy is fixed to exit
-#    non-zero on its own timeout.
+#  - "Error: timed out waiting for response" IS --print-timeout firing. agy prints
+#    that line and exits 0 (a clean exit, NOT a hang), leaving truncated output with
+#    no findings block. attempt() therefore treats output that ENDS with that line
+#    as a failure (see agy_ended_with_timeout) so the fallback model is tried; a real
+#    review that merely QUOTES the phrase mid-content is unaffected (the match is
+#    anchored to the final bytes). A genuine hang is caught by `timeout WALL_TIMEOUT`.
 
 set -euo pipefail
 
 PRIMARY_MODEL="Gemini 3.1 Pro (High)"
 FALLBACK_MODEL="Gemini 3.5 Flash (High)"
-PRINT_TIMEOUT="30m"
-WALL_TIMEOUT=1860   # seconds, hard outer bound per attempt (>= PRINT_TIMEOUT)
-IDLE_GIVEUP=60      # seconds of no new output, while the output already ends with
-                    # agy's timeout error line, before we give up on the model
+PRINT_TIMEOUT="15m"
+WALL_TIMEOUT=1020   # seconds, hard outer bound per attempt (>= PRINT_TIMEOUT 15m + startup slack)
 
 command -v agy >/dev/null 2>&1 || { echo "run_agy: agy CLI not found" >&2; exit 127; }
 
-# True only when agy's output currently TERMINATES with its own response-timeout
-# error line — agy's "Error: " prefix required, anchored to the END of the output
-# (tr drops newlines so the regex `$` matches the true end). agy writes this as
-# the last thing on its internal timeout; a valid review quoting the phrase has it
-# mid-content, not as the final bytes.
+# True only when agy's output TERMINATES with its --print-timeout error line —
+# "Error: " prefix required, anchored to the END of the output (tr drops newlines
+# so the regex `$` matches the true end). agy writes this as the last thing when
+# --print-timeout fires; a valid review that quotes the phrase has it mid-content,
+# not as the final bytes.
 agy_ended_with_timeout() {
   tail -c 160 "$1" 2>/dev/null | tr -d '\n' \
     | grep -qE 'Error: timed out waiting for response[[:space:]]*$'
@@ -87,33 +71,29 @@ fi
 
 # Run one model. agy's stdout -> $outfile (relayed verbatim by the caller on the
 # chosen attempt); its stderr stays on our stderr (the caller captures it).
-# Returns 0 on success, non-zero to trigger the fallback. Two failure paths (see
-# the FALLBACK note in the header): the attempt exits non-zero, OR — while agy is
-# still running — its output ends with agy's timeout error line and has not grown
-# for IDLE_GIVEUP seconds (agy prints that error then hangs instead of exiting).
-# On a real process exit we trust the exit code and do NOT re-inspect content, so
-# a valid review that happens to end on that line and exits is never second-guessed.
+# Returns 0 on success, non-zero to trigger the fallback. Two failure paths: the
+# attempt exits non-zero (agy error, or `timeout` killing a true hang), OR it exits
+# 0 but its output ENDS with agy's --print-timeout error line (a fired print-timeout
+# is a clean exit-0 with truncated, block-less output — see agy_ended_with_timeout).
 attempt() {
-  local model="$1" pid rc prev=-1 size last_change now
+  local model="$1" rc
   : > "$outfile"
-  timeout "$WALL_TIMEOUT" agy --print \
-    --model "$model" \
-    --print-timeout "$PRINT_TIMEOUT" \
-    < "$promptfile" > "$outfile" &
-  pid=$!
-  last_change=$(date +%s)
-  while kill -0 "$pid" 2>/dev/null; do
-    size=$(wc -c < "$outfile" 2>/dev/null || echo 0)
-    if [ "$size" != "$prev" ]; then prev=$size; last_change=$(date +%s); fi
-    now=$(date +%s)
-    if [ "$(( now - last_change ))" -ge "$IDLE_GIVEUP" ] && agy_ended_with_timeout "$outfile"; then
-      kill "$pid" 2>/dev/null || true
-      wait "$pid" 2>/dev/null || true
-      return 1
-    fi
-    sleep 5
-  done
-  if wait "$pid"; then rc=0; else rc=$?; fi
+  # NO bare `--print`: agy's --print TAKES THE PROMPT AS ITS ARGUMENT, so a bare
+  # `--print` with the prompt on stdin swallows the following flag (--model) and
+  # desyncs parsing — --model AND --print-timeout get dropped and agy silently
+  # falls back to the ~/.gemini default model + the 5m default print cap. Feed the
+  # prompt on stdin with NO --print (agy reads piped stdin non-interactively) so
+  # the flags below actually bind. --print-timeout uses the =form for safety.
+  if timeout "$WALL_TIMEOUT" agy \
+       --print-timeout="$PRINT_TIMEOUT" \
+       --model "$model" \
+       --dangerously-skip-permissions \
+       < "$promptfile" > "$outfile"; then rc=0; else rc=$?; fi
+  # A fired --print-timeout makes agy print its error line and exit 0 (a clean
+  # exit, not a hang). Treat that truncated output as a failure so the fallback
+  # model is tried — otherwise a timed-out attempt looks like success and the
+  # caller relays output with no findings block.
+  if agy_ended_with_timeout "$outfile"; then return 1; fi
   return "$rc"
 }
 

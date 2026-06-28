@@ -63,7 +63,9 @@ PR="${CLAUDE_PLUGIN_ROOT}/prompts"
 "$SC/preflight"                              # env check; tail "CODEX: yes|no"/"GEMINI: yes|no"; exit 1 = core unusable (needs jq, git, work-tree, ≥1 peer)
 "$SC/resolve_instructions" --id <id>         # manifest.instructions -> verbatim/none text (exit 0) OR compose sentinel (exit 3 = auto, you compose)
 "$SC/assemble" TMPL KEY=file ...             # splice files into a template's {{KEY}} sentinels -> stdout
-"$SC/run_codex" < prompt > raw 2> err        # Codex seat (pins --profile panel-review, --sandbox read-only; auto-creates the profile)
+"$SC/repo_guard" snapshot --id <id> --workdir <dir>          # record tracked-tree baseline (git stash create SHA + sha256 manifest)
+"$SC/repo_guard" verify   --id <id> --workdir <dir> --restore  # re-hash tracked files; auto-revert drift; nonzero + drift list = a seat touched the code
+"$SC/run_codex" < prompt > raw 2> err        # Codex seat (pins --profile panel-review; sandbox BYPASSED so MCP/tilth + scratch work — repo_guard enforces integrity; auto-creates the profile)
 "$SC/run_agy"   < prompt > raw 2> err        # Gemini seat (pins model/timeout/stdin)
 "$SC/run_seat" --seat <codex|gemini> --tag <tag> --prompt <f> --raw <f> --parsed <f> [--label L] [--no-repair]  # dispatch a CLI seat + parse + one-shot repair; FINAL parse status on stdout
 "$SC/parse_block" <tag> <raw> [label]        # ```<tag> block -> validated JSONL; exit 4 = NO block (down), 5 = malformed (repair once)
@@ -85,7 +87,7 @@ Seat wrappers take the prompt on stdin and print the **final response only**; no
 CLI missing → 127) means that seat is down → **degrade, never abort.** `parse_block` exit **4**
 means the seat returned no block at all (down / malfunctioned), distinct from an empty-but-present
 block (ran, found nothing). **Run everything from cwd = `workdir` (repo root)** so seat
-working-tree reads and the Codex read-only sandbox resolve.
+working-tree reads, scratch paths, and `repo_guard` all resolve against the same tree.
 
 **CLI seats are long-running — dispatch them in the background, never foreground.** `run_codex` /
 `run_agy` (and `run_seat`, which wraps them) routinely take several minutes, and `run_agy` can run up
@@ -171,6 +173,14 @@ reviewer-facing fields, so the origins never leak even if adjacent.
    A `question=` scope produces an empty diff (the question itself is the scope). For a diff scope,
    if `/tmp/$id/diff.txt` is empty, stop and say so before running seats (never guess a base branch).
 
+   Then **snapshot the tracked tree** so any seat write can be detected and reverted (the seats now
+   run with write access — Codex's sandbox is bypassed for MCP/tilth + scratch — so this guard, not a
+   per-seat sandbox, protects the code under review):
+
+   ```bash
+   "$SC/repo_guard" snapshot --id "$id" --workdir "$workdir"
+   ```
+
 2. **Resolve author instructions once** into `/tmp/$id/instructions.txt` (reused by every
    seat, every round, and across resume — generate only if the file is absent). The two
    deterministic cases (verbatim author text, or the empty "(none …)" line) are owned by
@@ -197,11 +207,16 @@ reviewer-facing fields, so the origins never leak even if adjacent.
    Capture into a variable as shown — never redirect `resolve_instructions` straight into
    `instructions.txt`, or the compose sentinel lands in the file on the `auto` path.
 
-3. **Assemble the prompt** (same prompt for all three seats):
+3. **Assemble the prompt** (same prompt for all three seats). Also prepare the **scratch dir** the
+   seats write throwaway scripts into — a git-ignored subtree of the run marker (`.panel-review/<id>/`
+   is already excluded), passed as the `{{SCRATCH}}` sentinel. The path is **relative** because every
+   seat runs from cwd = workdir:
 
    ```bash
+   mkdir -p "$workdir/.panel-review/$id/work"
+   printf '%s\n' ".panel-review/$id/work" > /tmp/$id/scratch.txt
    echo "<one-line scope description>" > /tmp/$id/scope.txt   # or the question text for a question scope
-   "$SC/assemble" "$PR/blind_pass.tmpl" SCOPE=/tmp/$id/scope.txt INSTRUCTIONS=/tmp/$id/instructions.txt DIFF=/tmp/$id/diff.txt > /tmp/$id/round0.prompt
+   "$SC/assemble" "$PR/blind_pass.tmpl" SCOPE=/tmp/$id/scope.txt INSTRUCTIONS=/tmp/$id/instructions.txt DIFF=/tmp/$id/diff.txt SCRATCH=/tmp/$id/scratch.txt > /tmp/$id/round0.prompt
    ```
 
 4. **Dispatch all three in parallel.** For the two **CLI seats** (Codex, Gemini) call `run_seat`:
@@ -243,6 +258,18 @@ reviewer-facing fields, so the origins never leak even if adjacent.
    count toward the available-seat count, birth unanimity, or `fully_vetted` (panel is degraded and
    `fully_vetted` can never become true while a seat is unavailable). Don't confuse a down/malformed
    seat with a clean empty review.
+
+   **Guard the tree once all three seats have returned.** A seat is supposed to touch only its own
+   scratch subdir; verify nothing else changed and auto-revert if it did:
+
+   ```bash
+   mkdir -p /tmp/$id/origins
+   "$SC/repo_guard" verify --id "$id" --workdir "$workdir" --restore > /tmp/$id/origins/guard.round0.txt || true
+   ```
+   Exit 0 ⇒ clean (the file is empty). Nonzero ⇒ the listed tracked files were modified and have been
+   restored from the snapshot; **keep that drift list** — every guard violation is surfaced verbatim
+   in the verdict's Process notes (it does not abort the review). `|| true` only stops `set -e` from
+   tripping on the expected nonzero; do not discard the captured list.
 
 4. **Merge findings into issues (your judgment — this is the one place you cluster).** Read every
    finding. Two findings become one issue **only if** they are at the **same location/code-path
@@ -333,8 +360,11 @@ For `round = 1, 2, … max-rounds`, while any issue is `open`:
    ```bash
    printf '%s\n' "$OPEN_CARD_PATHS" > /tmp/$id/cards.$round.txt
    # /tmp/$id/instructions.txt was resolved in Round 0 step 2; on a resume that began at the
-   # debate loop, regenerate it the same way if absent before assembling.
-   "$SC/assemble" "$PR/debate.tmpl" CARDS=/tmp/$id/cards.$round.txt INSTRUCTIONS=/tmp/$id/instructions.txt > /tmp/$id/debate.$round.prompt
+   # debate loop, regenerate it the same way if absent before assembling. Same for the scratch
+   # dir + its sentinel file (Round 0 step 3) — recreate both if a resume skipped Round 0.
+   mkdir -p "$workdir/.panel-review/$id/work"
+   [ -f /tmp/$id/scratch.txt ] || printf '%s\n' ".panel-review/$id/work" > /tmp/$id/scratch.txt
+   "$SC/assemble" "$PR/debate.tmpl" CARDS=/tmp/$id/cards.$round.txt INSTRUCTIONS=/tmp/$id/instructions.txt SCRATCH=/tmp/$id/scratch.txt > /tmp/$id/debate.$round.prompt
    # run each seat/batch -> /tmp/$id/raw/round$round.<seat>.<batch>.txt
    ```
    Spawn a **fresh** `panel-review:panel-review-claude-seat` subagent for the Claude seat each round.
@@ -360,6 +390,14 @@ For `round = 1, 2, … max-rounds`, while any issue is `open`:
    "$SC/sweep" ingest-batch "$id" "$round" "$epoch" "$seat" "$batch" \
      /tmp/$id/batch.$round.$seat.$batch.ids /tmp/$id/raw/round$round.$seat.$batch.txt
    ```
+   **Guard the tree** once every seat of the round has returned (same as Round 0 — append, don't
+   overwrite, so earlier rounds' violations survive in the verdict):
+
+   ```bash
+   mkdir -p /tmp/$id/origins
+   "$SC/repo_guard" verify --id "$id" --workdir "$workdir" --restore >> /tmp/$id/origins/guard.debate.txt || true
+   ```
+   Any drift is reverted from the snapshot and carried into the verdict's Process notes.
 7. **Engaged = COMPLETE this pass.** A seat is engaged only when all of its planned batches are
    `complete` in `"$SC/sweep" resume-plan "$id"`. A seat with any other batch status is not engaged.
 8. **Retry every non-complete batch once, THEN re-check engagement.** A malformed response gets the
@@ -572,6 +610,9 @@ origins only here. Severity → headings: `critical`/`high` → **Critical**, `m
 ### Process notes
 - independent Round-0 support per accepted issue; notable field mutations ("high → low on agreement")
 - seat health: timeouts / retries / any peer seat (Codex or Gemini) down; any blind-leak-check result
+- **guard violations:** if `/tmp/$id/origins/guard.round0.txt` or `guard.debate.txt` is non-empty, list
+  each drifted tracked file **loudly** here ("⚠ a seat modified `<file>` during review; reverted from
+  the start-of-review snapshot") — the review continued, but a seat broke the read-only contract
 ```
 
 Before cleanup, persist the final verdict so a crash after cleanup but before return
@@ -609,9 +650,15 @@ Never return raw seat output, card text, or per-round transcripts.
 
 - ✅ Seats only via `scripts/` — `run_agy` for Gemini, `run_codex` for Codex; the Claude seat only
   as a fresh `panel-review:panel-review-claude-seat` subagent (**never fork**). Never raw `agy`/`codex`.
-- ✅ `run_codex` pins `--sandbox read-only` + `--profile panel-review` (never `-m`); it auto-creates
-  `~/.codex/panel-review.config.toml` from the shipped default. **Never** hand-create, edit, or delete
-  `~/.codex/config.toml` or other `~/.codex/*.config.toml` profiles yourself.
+- ✅ `run_codex` pins `--profile panel-review` (never `-m`) and runs with the sandbox **bypassed**
+  (`--dangerously-bypass-approvals-and-sandbox` — the only mode in which Codex's MCP/tilth calls run
+  and it can write scratch); it auto-creates `~/.codex/panel-review.config.toml` from the shipped
+  default. **Never** hand-create, edit, or delete `~/.codex/config.toml` or other
+  `~/.codex/*.config.toml` profiles yourself.
+- ✅ Code-under-review integrity is enforced by **`repo_guard`**, not by per-seat sandboxes: snapshot
+  the tracked tree after `resolve_diff`, `verify --restore` after every seat pass (Round 0 + each
+  debate round), and surface any reverted drift in Process notes. Seats write only to the
+  `.panel-review/<id>/work` scratch subtree.
 - ✅ Gemini seat uses a **Gemini** model (run_agy's pin), never agy's Claude/GPT-OSS entries.
 - ✅ `index.json` is written **only** through the `index`/`sweep` scripts; cards **only** through
   `project_card`/`regen_cards`. Never hand-write state files.

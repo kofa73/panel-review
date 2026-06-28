@@ -87,7 +87,12 @@ round limit. Unanimity-or-human: no majority vote, no referee fact-checking insi
   `set_state`/`revise` for one id — that makes `commit-sweep` reject the round; merge through here.
 - `project_card` / `regen_cards` — the **only** way to render issue records → blind cards.
 - `run_codex` / `run_agy` — the **only** way to call the Codex / Gemini seats (they pin the
-  sandbox/model/profile). Never call `codex` or `agy` raw.
+  model/profile, and the flags that let MCP/tilth run: `run_codex` bypasses the Codex sandbox,
+  `run_agy` passes `--dangerously-skip-permissions`). Never call `codex` or `agy` raw.
+- `repo_guard` — protects the **code under review**. `snapshot` records the tracked tree (a
+  `git stash create` SHA + sha256 manifest) at the start; `verify --restore` after each seat pass
+  reverts and reports any tracked-file drift. Replaces the per-seat read-only sandbox (seats now write
+  scratch); it guards tracked content only, leaving untracked scratch and the `.panel-review/` cache alone.
 - `run_seat` — dispatch/retry wrapper for the two **CLI** seats (Codex, Gemini): dispatch →
   `parse_block` → one-shot `repair.tmpl` retry on a malformed block; prints the final parse status.
   The Claude seat is a subagent, not a CLI, so the referee drives it directly (never via `run_seat`).
@@ -108,8 +113,9 @@ round limit. Unanimity-or-human: no majority vote, no referee fact-checking insi
 
 `/tmp/<ID>/` is the **single source of truth** (manifest, index, sweeps, raw seat output, origins,
 audit); cards under `<workdir>/.panel-review/<ID>/` are a regenerable cache (kept in the repo so any
-seat running in a constrained/sandboxed workspace — e.g. Codex's read-only sandbox — can read them;
-git-excluded). The per-workdir **marker** is the
+seat running in a constrained/sandboxed workspace — e.g. an externally-imposed read-only mount — can
+read them; git-excluded). Seats also write throwaway scratch under `.panel-review/<ID>/work/` (a
+git-ignored subtree of the marker, removed with it at cleanup). The per-workdir **marker** is the
 `.panel-review/<ID>/` dir itself. `init_run` writes `/tmp` state first and the marker **last**, so a
 marker always implies valid state. The verdict is also saved to `/tmp/<ID>.md` — a **sibling** of
 `/tmp/<ID>/`, deliberately outside it so cleanup/discard never delete it.
@@ -119,10 +125,13 @@ same workdir are unsupported by design.
 
 ## Hard constraints (from README — don't break)
 
-- Seats called only via `run_codex` / `run_agy`, never raw.
+- Seats called only via `run_codex` / `run_agy`, never raw. `run_codex` runs the sandbox bypassed
+  (MCP/tilth + scratch); the code under review is protected by `repo_guard`, not the sandbox.
 - Never hand-create/edit/delete `~/.codex/config.toml`; `run_codex` owns
   `~/.codex/panel-review.config.toml`.
 - `index.json` written only via `index`/`sweep`; cards only via `project_card`/`regen_cards`.
+- The code under review is never modified: `repo_guard snapshot` at the start, `verify --restore`
+  after every seat pass; reverted drift is flagged in the verdict's Process notes.
 - Claude seat is spawned fresh (`panel-review:panel-review-claude-seat`), never forked.
 - The referee returns **only** the synthesized verdict — never raw seat output, card text, or
   per-round transcripts. No seat ever sees who raised a point or the stance tally (blindness).
