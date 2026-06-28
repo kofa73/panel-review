@@ -103,6 +103,44 @@ class IndexTest(unittest.TestCase):
         self.assertEqual(self.commit(payload).returncode, 0)
         self.assertEqual(self.read_index()["issues"][0]["rounds_debated"], 1)
 
+    def test_commit_writes_audit_trail(self):
+        audit_file = self.run_dir / "audit" / "round-1.md"
+        payload = {
+            "add_issues": [issue("i3", state="open")],
+            "bump": ["i1"],
+            "set_state": [{"id": "i1", "state": "accepted"}],
+            "set_flag": [{"id": "i1", "flag": "peer_reviewed", "value": True}],
+            "add_evidence": [{"id": "i2", "side": "contra", "point": {"assertion": "A counterpoint.", "location": "src/file.py:2"}}],
+            "revise": [{"id": "i2", "fields": {"severity": "high"}}],
+            "evaluated_by": {"i1": ["codex", "claude"]},
+        }
+        self.assertEqual(self.commit(payload).returncode, 0)
+        self.assertTrue(audit_file.exists())
+        text = audit_file.read_text(encoding="utf-8")
+        for marker in (
+            "# Round 1 audit",
+            "## New issues", "`i3`",
+            "## State changes", "`i1`: open → accepted",
+            "## Flag changes", "peer_reviewed",
+            "## Revisions", "`i2` severity",
+            "## Evidence added", "`i2` contra",
+            "## Coverage (evaluated_by)", "`i1`: codex, claude",
+            "## Rounds debated bumped",
+        ):
+            self.assertIn(marker, text)
+        # The trail is inspection-only: an idempotent re-commit of an already-committed
+        # round must not regenerate it (nothing is re-applied, so nothing is re-audited).
+        audit_file.unlink()
+        self.assertEqual(self.commit(payload).returncode, 0)
+        self.assertFalse(audit_file.exists())
+
+    def test_commit_empty_round_writes_no_audit(self):
+        # A round that applies no field mutations leaves no audit file (only non-empty
+        # trails are persisted), yet still commits and advances the round counter.
+        self.assertEqual(self.commit({}).returncode, 0)
+        self.assertEqual(self.read_index()["round"], 1)
+        self.assertFalse((self.run_dir / "audit" / "round-1.md").exists())
+
     def test_commit_rejections_keep_index_intact(self):
         original = self.index_path.read_bytes()
         cases = [

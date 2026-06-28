@@ -67,7 +67,8 @@ round limit. Unanimity-or-human: no majority vote, no referee fact-checking insi
 
 - `index` — the **only** writer of `/tmp/<ID>/index.json`. State/flag/counter math lives here;
   `commit-sweep` applies a whole debate round atomically and idempotently (guarded by
-  `committed_rounds`). Never hand-write `index.json`.
+  `committed_rounds`), and writes that round's inspection-only `audit/round-<N>.md` trail as a
+  best-effort side effect (the referee no longer hand-writes the audit trail). Never hand-write `index.json`.
 - `decide_round` / `decide_degraded_round` — the **only** builders of normal and degraded debate
   `commit-sweep` payloads. They apply the
   Transitions table mechanically (stance counting, `bump`, `peer_reviewed`/`fully_vetted`, enum

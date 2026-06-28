@@ -172,7 +172,7 @@ All five items below are now implemented and covered by the regression suite.
 - Extend tests for the remaining helpers and for full live dispatch/repair,
   Round-0 birth indexing, and crash/recovery paths.
 
-## Suggested maintenance direction: selective Python migration
+## Suggested maintenance direction: selective Python migration (done)
 
 Do not rewrite every shell script. The current scripts are mostly command
 orchestration plus `jq`; a wholesale port would add a Python runtime requirement

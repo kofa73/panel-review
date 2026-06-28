@@ -87,6 +87,17 @@ means the seat returned no block at all (down / malfunctioned), distinct from an
 block (ran, found nothing). **Run everything from cwd = `workdir` (repo root)** so seat
 working-tree reads and the Codex read-only sandbox resolve.
 
+**CLI seats are long-running — dispatch them in the background, never foreground.** `run_codex` /
+`run_agy` (and `run_seat`, which wraps them) routinely take several minutes, and `run_agy` can run up
+to ~31 min (its wall timeout). The Bash **tool's** foreground timeout defaults to **2 min** and maxes
+at **10 min** — shorter than a seat's worst case — so a foreground dispatch *will* be killed
+mid-pass, and a killed pass leaves a 0-byte raw file that then reads as a **down seat** (false
+degrade). So launch **each** CLI seat as its **own** Bash call with `run_in_background: true` (one
+call per seat, not a single foreground `for`-loop): backgrounded commands run detached, survive across
+turns, run the seats concurrently, and re-invoke you when each exits — then read its raw/parsed/status
+files. A raised foreground `timeout` is only a fallback for a single seat you deliberately run inline,
+and even the 10-min max cannot cover `run_agy`'s worst case.
+
 ## The three seats
 
 | Seat | How you run it | Blindness |
@@ -136,10 +147,11 @@ A **point**: `{"location":"file:line"|["file:line",...]|"analysis","assertion":"
 - `card_rev`/`rounds_debated` are bumped by the `index`/`sweep` scripts — never hand-edit them.
 
 **Origins are yours alone.** Keep origin seats, Round-0 agreement count, original raw wording, and
-per-round stances in `/tmp/<id>/origins/`, and the field-mutation/merge audit trail in
-`/tmp/<id>/audit/` (write them with any atomic means, e.g. `index`-style temp files or
-`project_card`'s sibling `write_card`). The `audit/` trail is for human inspection only; nothing
-reads it back. **None of this ever enters a card or a seat prompt.** `project_card` only renders the
+per-round stances in `/tmp/<id>/origins/` (write them with any atomic means, e.g. `index`-style temp
+files or `project_card`'s sibling `write_card`). The per-round field-mutation audit trail in
+`/tmp/<id>/audit/round-<N>.md` is written **for you** by `index commit-sweep` as it applies each
+round — you do not write it. The `audit/` trail is for human inspection only; nothing reads it back.
+**None of this ever enters a card or a seat prompt.** `project_card` only renders the
 reviewer-facing fields, so the origins never leak even if adjacent.
 
 ---
@@ -200,11 +212,13 @@ reviewer-facing fields, so the origins never leak even if adjacent.
 
    ```bash
    # CLI seats: run_seat owns dispatch + parse + repair. Final status on stdout.
-   for seat in codex gemini; do
-     "$SC/run_seat" --seat "$seat" --tag findings \
-       --prompt /tmp/$id/round0.prompt \
-       --raw "/tmp/$id/raw/round0.$seat.txt" --parsed "/tmp/$id/f.$seat.json" > "/tmp/$id/status.$seat"
-   done                                         # 0 = engaged, 4 = no block (down), 5 = malformed after repair
+   # Dispatch each as its OWN Bash call with run_in_background:true (NOT this foreground
+   # for-loop) — they run minutes-long and a foreground call is killed at the 2-min tool
+   # default, leaving a 0-byte raw that looks like a down seat. The command per seat:
+   "$SC/run_seat" --seat "$seat" --tag findings \
+     --prompt /tmp/$id/round0.prompt \
+     --raw "/tmp/$id/raw/round0.$seat.txt" --parsed "/tmp/$id/f.$seat.json" > "/tmp/$id/status.$seat"
+   # status.$seat: 0 = engaged, 4 = no block (down), 5 = malformed after repair
    # Claude seat (subagent): spawn it, write its returned text to the raw file, then
    # parse + repair manually — the same one-shot repair run_seat does for the CLI seats.
    "$SC/parse_block" findings "/tmp/$id/raw/round0.claude.txt" claude > /tmp/$id/f.claude.json
@@ -335,6 +349,8 @@ For `round = 1, 2, … max-rounds`, while any issue is `open`:
    seat raised none.
 
    ```bash
+   # Same as Round 0: each CLI seat is its OWN background Bash call (run_in_background:true),
+   # never a foreground dispatch — debate passes are just as long-running.
    "$SC/run_seat" --seat "$seat" --tag new_findings --prompt /tmp/$id/debate.$round.prompt \
      --raw /tmp/$id/raw/round$round.$seat.$batch.txt --parsed /tmp/$id/nf.$round.$seat.json   # CLI seats
    ```

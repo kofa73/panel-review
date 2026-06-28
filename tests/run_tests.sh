@@ -217,14 +217,35 @@ mkdir -p "$keeprepo/.panel-review/$id"; echo "$id" > "$keeprepo/.panel-review/$i
 PANEL_REVIEW_KEEP_TMP=true "$SC/cleanup" --id "$id" --workdir "$keeprepo" 2>/dev/null
 assert_eq "KEEP_TMP cleanup removes the marker"     'gone'    "$([ -d "$keeprepo/.panel-review/$id" ] && echo here || echo gone)"
 assert_eq "KEEP_TMP cleanup preserves /tmp/<id>"    'kept'    "$([ -d "/tmp/$id" ] && echo kept || echo gone)"
+# Default behavior (env var unset/false) must purge /tmp/<id>. The test runner may
+# itself export PANEL_REVIEW_KEEP_TMP=true (it is a documented diagnostic toggle), so
+# clear it explicitly here — otherwise this case silently inherits the ambient value
+# and stops testing the default at all.
 mkdir -p "$keeprepo/.panel-review/$id"; echo "$id" > "$keeprepo/.panel-review/$id/.panel-run"
-"$SC/cleanup" --id "$id" --workdir "$keeprepo" 2>/dev/null
+env -u PANEL_REVIEW_KEEP_TMP "$SC/cleanup" --id "$id" --workdir "$keeprepo" 2>/dev/null
 assert_eq "default cleanup removes /tmp/<id>"       'gone'    "$([ -d "/tmp/$id" ] && echo kept || echo gone)"
+# Same env-var sensitivity holds for explicit false.
+mkdir -p "/tmp/$id"; echo '{"id":"x"}' > "/tmp/$id/manifest.json"
+mkdir -p "$keeprepo/.panel-review/$id"; echo "$id" > "$keeprepo/.panel-review/$id/.panel-run"
+PANEL_REVIEW_KEEP_TMP=false "$SC/cleanup" --id "$id" --workdir "$keeprepo" 2>/dev/null
+assert_eq "KEEP_TMP=false cleanup removes /tmp/<id>" 'gone'   "$([ -d "/tmp/$id" ] && echo kept || echo gone)"
 id="$PREFIX-keep2"; rm -rf "/tmp/$id"; mkdir -p "/tmp/$id"; echo '{}' > "/tmp/$id/manifest.json"
 mkdir -p "$keeprepo/.panel-review/$id"; echo "$id" > "$keeprepo/.panel-review/$id/.panel-run"
 PANEL_REVIEW_KEEP_TMP=true "$SC/discard" --workdir "$keeprepo" >/dev/null
 assert_eq "KEEP_TMP discard preserves /tmp/<id>"    'kept'    "$([ -d "/tmp/$id" ] && echo kept || echo gone)"
 assert_eq "KEEP_TMP discard still clears .panel-review" 'gone' "$([ -d "$keeprepo/.panel-review" ] && echo here || echo gone)"
+rm -rf "/tmp/$id"
+# Default discard purges /tmp/<id> too (again clearing the ambient toggle).
+id="$PREFIX-keep3"; rm -rf "/tmp/$id"; mkdir -p "/tmp/$id"; echo '{}' > "/tmp/$id/manifest.json"
+mkdir -p "$keeprepo/.panel-review/$id"; echo "$id" > "$keeprepo/.panel-review/$id/.panel-run"
+env -u PANEL_REVIEW_KEEP_TMP "$SC/discard" --workdir "$keeprepo" >/dev/null
+assert_eq "default discard removes /tmp/<id>"       'gone'    "$([ -d "/tmp/$id" ] && echo kept || echo gone)"
+rm -rf "/tmp/$id"
+# Explicit false discards /tmp/<id> as well (symmetry with the cleanup=false case).
+id="$PREFIX-keep4"; rm -rf "/tmp/$id"; mkdir -p "/tmp/$id"; echo '{}' > "/tmp/$id/manifest.json"
+mkdir -p "$keeprepo/.panel-review/$id"; echo "$id" > "$keeprepo/.panel-review/$id/.panel-run"
+PANEL_REVIEW_KEEP_TMP=false "$SC/discard" --workdir "$keeprepo" >/dev/null
+assert_eq "KEEP_TMP=false discard removes /tmp/<id>" 'gone'   "$([ -d "/tmp/$id" ] && echo kept || echo gone)"
 rm -rf "/tmp/$id"
 
 section "protocol references the new deterministic helpers"
