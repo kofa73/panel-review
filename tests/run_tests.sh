@@ -244,6 +244,76 @@ assert_eq "gemini parsed _source=gemini" 'gemini' "$(jq -r '._source' "$TMP/seat
 "$SC/run_seat" --seat mistral --tag findings --prompt "$TMP/seat.prompt" --raw "$TMP/x" --parsed "$TMP/y" >/dev/null 2>&1; assert_exit "unknown seat -> usage exit 2" 2 "$?"
 
 # ---------------------------------------------------------------------------
+# await_seats — the barrier. Runs both CLI seats concurrently through run_seat in
+# one job, writes each seat's final status + a combined summary, then exits 0.
+# It reuses the seat mock CLIs above; we add a configurable-mode codex and a
+# slow/down agy so we can drive the down-seat and outer-timeout paths.
+await_mockbin="$TMP/awaitbin"; mkdir -p "$await_mockbin"
+# codex: MODE=good emits a block; MODE=noblock emits prose (down, status 4).
+cat > "$await_mockbin/codex" <<'EOF'
+#!/usr/bin/env bash
+out=""; prev=""; for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
+cat >/dev/null
+good='{"claim":"c","location":"a.c:1","category":"correctness","severity":"high","points":[{"assertion":"x","location":"a.c:1"}]}'
+case "${MOCK_CODEX:-good}" in
+  noblock) printf 'I will not answer.\n' > "$out" ;;
+  *)       printf '```findings\n%s\n```\n' "$good" > "$out" ;;
+esac
+EOF
+# agy: MODE=good emits a block; MODE=hang sleeps past the outer timeout.
+cat > "$await_mockbin/agy" <<'EOF'
+#!/usr/bin/env bash
+cat >/dev/null
+case "${MOCK_AGY:-good}" in
+  hang) sleep 30 ;;
+  *)    printf '```findings\n%s\n```\n' '{"claim":"g","location":"b.c:2","category":"correctness","severity":"high","points":[{"assertion":"y","location":"b.c:2"}]}' ;;
+esac
+EOF
+chmod +x "$await_mockbin/codex" "$await_mockbin/agy"
+await_home="$TMP/awaithome"; mkdir -p "$await_home"
+printf 'PROMPT\n' > "$TMP/await.prompt"; mkdir -p "$TMP/await.raw"
+# run await_seats with the given codex/agy mock modes + seat-timeout; returns its exit.
+run_await() { # <codex-mode> <agy-mode> <seat-timeout> <suffix> [extra args...]
+  MOCK_CODEX="$1" MOCK_AGY="$2" PATH="$await_mockbin:$PATH" HOME="$await_home" \
+  "$SC/await_seats" --id "await-$4" --tag findings --prompt "$TMP/await.prompt" --seat-timeout "$3" \
+    --seat codex  --raw "$TMP/await.raw/c.$4.txt" --parsed "$TMP/await.f.codex.$4.json"  --status "$TMP/await.st.codex.$4" \
+    --seat gemini --raw "$TMP/await.raw/g.$4.txt" --parsed "$TMP/await.f.gemini.$4.json" --status "$TMP/await.st.gemini.$4" \
+    --done "$TMP/await.done.$4" "${@:5}" 2>/dev/null; }
+
+section "await_seats — both seats engage; per-seat status + combined summary"
+run_await good good 0 ok; assert_exit "barrier exits 0" 0 "$?"
+assert_eq "codex status 0"        '0' "$(cat "$TMP/await.st.codex.ok")"
+assert_eq "gemini status 0"       '0' "$(cat "$TMP/await.st.gemini.ok")"
+assert_eq "codex parsed _source"  'codex'  "$(jq -r '._source' "$TMP/await.f.codex.ok.json")"
+assert_eq "gemini parsed _source" 'gemini' "$(jq -r '._source' "$TMP/await.f.gemini.ok.json")"
+assert_file_contains "done lists codex 0"  'codex 0'  "$TMP/await.done.ok"
+assert_file_contains "done lists gemini 0" 'gemini 0' "$TMP/await.done.ok"
+
+section "await_seats — a down seat is status 4, the other still engages"
+run_await noblock good 0 down; assert_exit "barrier still exits 0 with a down seat" 0 "$?"
+assert_eq "down codex -> status 4"      '4' "$(cat "$TMP/await.st.codex.down")"
+assert_eq "live gemini -> status 0"     '0' "$(cat "$TMP/await.st.gemini.down")"
+assert_file_contains "done lists codex 4" 'codex 4' "$TMP/await.done.down"
+
+section "await_seats — outer timeout reaps a hung seat (status 124), runs concurrently"
+t0=$(date +%s); run_await good hang 2 to; rc=$?; el=$(( $(date +%s) - t0 ))
+assert_exit "barrier exits 0 after reaping a hang" 0 "$rc"
+assert_eq "hung gemini -> status 124"   '124' "$(cat "$TMP/await.st.gemini.to")"
+assert_eq "fast codex still status 0"   '0'   "$(cat "$TMP/await.st.codex.to")"
+if [ "$el" -lt 15 ]; then ok "barrier returns near the timeout (~${el}s), not the 30s hang"; else bad "barrier waited too long (${el}s)"; fi
+
+section "await_seats — usage guards"
+PATH="$await_mockbin:$PATH" HOME="$await_home" "$SC/await_seats" --id 'bad/id' --tag findings --prompt "$TMP/await.prompt" \
+  --seat codex --raw "$TMP/r" --parsed "$TMP/p" --status "$TMP/s" --done "$TMP/d" >/dev/null 2>&1
+assert_exit "invalid id -> exit 2" 2 "$?"
+PATH="$await_mockbin:$PATH" HOME="$await_home" "$SC/await_seats" --id await-noseat --tag findings --prompt "$TMP/await.prompt" \
+  --done "$TMP/d" >/dev/null 2>&1
+assert_exit "no --seat block -> exit 2" 2 "$?"
+PATH="$await_mockbin:$PATH" HOME="$await_home" "$SC/await_seats" --id await-noraw --tag findings --prompt "$TMP/await.prompt" \
+  --seat codex --parsed "$TMP/p" --status "$TMP/s" --done "$TMP/d" >/dev/null 2>&1
+assert_exit "seat missing --raw -> exit 2" 2 "$?"
+
+# ---------------------------------------------------------------------------
 # run_agy invocation contract. agy's `--print` TAKES the prompt as its argument;
 # a bare `--print` + stdin desyncs parsing and silently drops --model and
 # --print-timeout (agy then runs the ~/.gemini default model at the 5m default
@@ -354,6 +424,7 @@ section "protocol references the new deterministic helpers"
 assert_file_contains "protocol uses birth_index"          'birth_index' "$root/skills/panel-review-for-agent/SKILL.md"
 assert_file_contains "protocol uses run_seat"             'run_seat'    "$root/skills/panel-review-for-agent/SKILL.md"
 assert_file_contains "protocol uses resolve_instructions" 'resolve_instructions' "$root/skills/panel-review-for-agent/SKILL.md"
+assert_file_contains "protocol waits via await_seats barrier" 'await_seats' "$root/skills/panel-review-for-agent/SKILL.md"
 
 # ---------------------------------------------------------------------------
 # Python suite — the coverage for the migrated stateful scripts (index, parse_block,

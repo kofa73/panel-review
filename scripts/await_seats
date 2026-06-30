@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+# await_seats — the BARRIER that collapses CLI-seat waiting into ONE event.
+#
+# WHY this script exists (the token blow-up it fixes):
+#   The referee is an LLM. Every time it is re-invoked it re-reads its whole
+#   (growing) conversation context — and once that context crosses ~200K tokens
+#   it bills at the long-context premium tier. The old protocol dispatched each
+#   CLI seat as its OWN background Bash job, so the referee was woken once per
+#   seat exit AND tended to fill the gaps with polling/narration turns ("is the
+#   seat still alive?"). A real run spent ~130 full-context turns mostly WAITING.
+#
+#   A wait on an async process is a shell concern, not a reasoning concern. This
+#   script runs the CLI seats (Codex, Gemini) concurrently inside a SINGLE
+#   background job, waits for all of them (each bounded by an outer per-seat
+#   timeout), writes each seat's final parse status plus one combined summary,
+#   and exits. The referee dispatches THIS, once, with run_in_background:true and
+#   does nothing until it completes — so the two CLI seats cost ONE wake instead
+#   of dozens of polling turns. (The Claude seat is a subagent, not a CLI, so it
+#   stays a separate background Agent call — hence two wakes per round, not one;
+#   collapsing further was rejected as not worth the blindness/MCP risk.)
+#
+# It is a thin orchestration layer over run_seat: each seat still goes through
+# run_seat (dispatch -> parse_block -> one-shot repair), so the seat contract,
+# flag pinning, and blindness are unchanged. await_seats adds only concurrency,
+# the outer timeout, and the combined-status summary.
+#
+# Usage:
+#   await_seats --id <id> --tag <findings|new_findings|stances> \
+#               --prompt <promptfile> [--seat-timeout <secs>] [--no-repair] \
+#               --seat <codex|gemini> --raw <f> --parsed <f> --status <f> [--label <l>] \
+#               [ --seat ... --raw ... --parsed ... --status ... [--label ...] ] ...
+#               --done <combined-summary-file>
+#
+#   --seat opens a new seat block; the --raw/--parsed/--status/--label that
+#   follow it apply to that seat until the next --seat. This mirrors run_seat's
+#   own per-seat files 1:1, so Round 0 and the debate rounds pass whatever paths
+#   they already use — no naming magic baked in here.
+#   --status <f>  receives that seat's FINAL parse status (0 engaged · 4 down ·
+#                 5 malformed-after-repair · 124 outer-timeout). The referee reads
+#                 engagement from these exactly as it did from run_seat's stdout.
+#   --done   <f>  one line per seat: "<seat> <status>" (status as above), so the
+#                 referee can surface timeouts/down seats in the verdict's Process
+#                 notes from a single file.
+#
+# --seat-timeout: outer wall bound PER SEAT (0 = none). run_agy self-bounds
+#   (~34m worst case across its two model attempts); run_codex does NOT, so a
+#   wedged Codex could otherwise hold the whole panel hostage. The default backstop
+#   is generous on purpose — above run_agy's legitimate worst case — so it only
+#   fires on a true hang, never guillotines a slow-but-progressing pass. Lower it
+#   (flag or PANEL_REVIEW_SEAT_TIMEOUT) for a tighter per-seat cap.
+#
+# Exit: 0 once every seat has finished (engaged, down, malformed, or timed out —
+#   none of which is an error here; the referee decides what a non-0 status
+#   means). Nonzero exit is reserved for a usage/setup error, so a backgrounded
+#   await_seats that exits 0 always means "all seats settled, statuses written".
+set -euo pipefail
+here="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=_panel_common.sh
+. "$here/_panel_common.sh"
+
+DEFAULT_SEAT_TIMEOUT=2400   # seconds; generous backstop above run_agy's ~34m worst case
+
+id=""; tag=""; prompt=""; no_repair=0; done_file=""
+seat_timeout="${PANEL_REVIEW_SEAT_TIMEOUT:-$DEFAULT_SEAT_TIMEOUT}"
+
+# Per-seat blocks, accumulated as parallel arrays indexed by seat order.
+seats=(); raws=(); parseds=(); statuses=(); labels=()
+cur=-1   # index of the seat block currently being filled (-1 = none open yet)
+
+need_arg() { [ -n "${2-}" ] || { echo "await_seats: $1 requires a value" >&2; exit 2; }; }
+in_seat()  { [ "$cur" -ge 0 ] || { echo "await_seats: $1 must follow a --seat" >&2; exit 2; }; }
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --id)           need_arg --id "${2-}"; id="$2"; shift 2 ;;
+    --tag)          need_arg --tag "${2-}"; tag="$2"; shift 2 ;;
+    --prompt)       need_arg --prompt "${2-}"; prompt="$2"; shift 2 ;;
+    --seat-timeout) need_arg --seat-timeout "${2-}"; seat_timeout="$2"; shift 2 ;;
+    --no-repair)    no_repair=1; shift ;;
+    --done)         need_arg --done "${2-}"; done_file="$2"; shift 2 ;;
+    --seat)
+      need_arg --seat "${2-}"
+      cur=$((cur+1)); seats[$cur]="$2"
+      raws[$cur]=""; parseds[$cur]=""; statuses[$cur]=""; labels[$cur]=""
+      shift 2 ;;
+    --raw)    in_seat --raw;    need_arg --raw "${2-}";    raws[$cur]="$2";    shift 2 ;;
+    --parsed) in_seat --parsed; need_arg --parsed "${2-}"; parseds[$cur]="$2"; shift 2 ;;
+    --status) in_seat --status; need_arg --status "${2-}"; statuses[$cur]="$2"; shift 2 ;;
+    --label)  in_seat --label;  need_arg --label "${2-}";  labels[$cur]="$2";  shift 2 ;;
+    *) echo "await_seats: unknown arg: $1" >&2; exit 2 ;;
+  esac
+done
+
+panel_require_id "$id"
+case "$tag" in findings|new_findings|stances) ;; *) echo "await_seats: --tag must be findings|new_findings|stances" >&2; exit 2 ;; esac
+[ -n "$prompt" ] && [ -f "$prompt" ] || { echo "await_seats: --prompt must name an existing file" >&2; exit 1; }
+[ -n "$done_file" ] || { echo "await_seats: --done required" >&2; exit 2; }
+[ "$cur" -ge 0 ] || { echo "await_seats: at least one --seat block required" >&2; exit 2; }
+case "$seat_timeout" in ''|*[!0-9]*) echo "await_seats: --seat-timeout must be a non-negative integer (seconds)" >&2; exit 2 ;; esac
+
+# Validate each seat block up front (fail fast, before any dispatch).
+for i in "${!seats[@]}"; do
+  case "${seats[$i]}" in codex|gemini) ;; *) echo "await_seats: seat must be codex|gemini (the Claude seat is a subagent), got '${seats[$i]}'" >&2; exit 2 ;; esac
+  [ -n "${raws[$i]}" ]    || { echo "await_seats: seat ${seats[$i]} missing --raw" >&2; exit 2; }
+  [ -n "${parseds[$i]}" ] || { echo "await_seats: seat ${seats[$i]} missing --parsed" >&2; exit 2; }
+  [ -n "${statuses[$i]}" ]|| { echo "await_seats: seat ${seats[$i]} missing --status" >&2; exit 2; }
+done
+
+# Run one seat through run_seat, captured under an optional outer `timeout`, and
+# write its final status to the seat's --status file. run_seat already prints the
+# parse status on stdout and (barring a usage error) exits 0, so we read the
+# status from its stdout. The outer `timeout` is the backstop run_codex lacks: on
+# a fire we get exit 124 here and record 124 (a hung seat reads as down to the
+# referee, but is distinguishable as a timeout in the summary). -k sends SIGKILL
+# 15s after SIGTERM so a seat ignoring TERM is still reaped.
+run_one() {
+  local seat="$1" raw="$2" parsed="$3" statusf="$4" label="$5"
+  local args=(--seat "$seat" --tag "$tag" --prompt "$prompt" --raw "$raw" --parsed "$parsed")
+  [ -n "$label" ] && args+=(--label "$label")
+  [ "$no_repair" -eq 1 ] && args+=(--no-repair)
+
+  local out rc
+  set +e
+  if [ "$seat_timeout" -gt 0 ]; then
+    out="$(timeout -k 15 "$seat_timeout" "$here/run_seat" "${args[@]}" 2>/dev/null)"; rc=$?
+  else
+    out="$("$here/run_seat" "${args[@]}" 2>/dev/null)"; rc=$?
+  fi
+  set -e
+
+  local status
+  if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+    status=124                       # outer timeout (124 = TERM deadline, 137 = the -k SIGKILL)
+  elif [ "$rc" -ne 0 ]; then
+    status=4                         # run_seat usage/setup failure -> treat the seat as down
+  else
+    # run_seat's last stdout line is the parse status (0/4/5).
+    status="$(printf '%s\n' "$out" | tail -n1)"
+    case "$status" in ''|*[!0-9]*) status=4 ;; esac
+  fi
+  printf '%s\n' "$status" > "$statusf"
+}
+
+# Dispatch every seat concurrently, collect PIDs, wait for all. Each seat writes
+# its own status file, so the barrier needs no IPC beyond the filesystem.
+pids=()
+for i in "${!seats[@]}"; do
+  run_one "${seats[$i]}" "${raws[$i]}" "${parseds[$i]}" "${statuses[$i]}" "${labels[$i]}" &
+  pids+=("$!")
+done
+for p in "${pids[@]}"; do wait "$p" || true; done
+
+# Combined summary: one "<seat> <status>" line per seat, in the order given.
+{
+  for i in "${!seats[@]}"; do
+    s="$(cat "${statuses[$i]}" 2>/dev/null || echo 4)"
+    printf '%s %s\n' "${seats[$i]}" "$s"
+  done
+} | panel_atomic_write "$done_file"
+
+exit 0

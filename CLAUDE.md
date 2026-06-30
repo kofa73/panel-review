@@ -96,6 +96,14 @@ round limit. Unanimity-or-human: no majority vote, no referee fact-checking insi
 - `run_seat` — dispatch/retry wrapper for the two **CLI** seats (Codex, Gemini): dispatch →
   `parse_block` → one-shot `repair.tmpl` retry on a malformed block; prints the final parse status.
   The Claude seat is a subagent, not a CLI, so the referee drives it directly (never via `run_seat`).
+- `await_seats` — the **barrier** that owns CLI-seat *waiting*. Runs every CLI seat concurrently
+  (each via `run_seat`) in ONE job, waits with a per-seat outer timeout, writes per-seat status + a
+  combined `--done` summary, exits. The referee dispatches it once with `run_in_background:true` so
+  the CLI seats cost a single re-invocation — never a polling loop. Waiting in LLM turns (each
+  re-reading the referee's whole context at the long-context premium tier) was the token blow-up this
+  replaces: a real run spent ~36M tokens (≈10× everything else combined) mostly narrating that a seat
+  was slow. The protocol forbids `date`/`ps`/`cat status.*`/narration turns between dispatch and the
+  barrier's one completion. The Claude seat stays a separate background Agent call (2 wakes/pass).
 - `birth_index` — the **only** builder of the Round-0 `index.json` from the referee's clustered
   finding-to-issue map; assigns birth state/flags/`evaluated_by` by the birth-unanimity rule (the
   referee still owns the clustering judgment). Output installs via `index put`.

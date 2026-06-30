@@ -121,5 +121,8 @@ prompt: |
   Return only the synthesized verdict in the documented Output format.
 ```
 
-Re-runs only missing seats/rounds; reopens nothing. Present the verdict per `start`'s Step 5 (verbatim,
-strip/act on `<<<PANEL-GATE…>>>` / `<<<PANEL-CONTINUABLE…>>>` control lines the same way).
+Re-runs only missing seats/rounds; reopens nothing. **Await its single return — do not poke it** (it
+waits for its own slow seats via the `await_seats` barrier and may run many minutes with no output;
+`SendMessage`-poking it only forces a wasteful full-context re-read — see `start`'s Step 4). Present
+the verdict per `start`'s Step 5 (verbatim, strip/act on `<<<PANEL-GATE…>>>` /
+`<<<PANEL-CONTINUABLE…>>>` control lines the same way).

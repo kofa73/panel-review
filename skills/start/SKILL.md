@@ -149,6 +149,14 @@ prompt: |
 The agent reconstructs all state from `/tmp/<id>/`, runs the loop, and cleans up after producing the
 verdict. Run from cwd = repo root.
 
+**Await its single return — do not poke it.** The referee waits for its own slow seats internally
+(one background `await_seats` barrier per pass), so it can legitimately run for many minutes with no
+intermediate output. Do **not** `SendMessage`-resume it, re-dispatch it, or otherwise nudge it on
+seat-completion notifications: every such poke makes the referee re-read its whole (long-context-tier)
+context for nothing — exactly the waste these scripts exist to avoid. Let it run; act only on the
+verdict it returns. (A genuine interruption — the human cancels — is recovered later via
+`panel-review:resume`, not by poking the live agent.)
+
 ## Step 5 — present the verdict (and the low-severity gate)
 
 **The pointer line is conditional.** The referee writes `/tmp/<ID>.md` best-effort and returns *only*

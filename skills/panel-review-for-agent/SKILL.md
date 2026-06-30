@@ -68,6 +68,7 @@ PR="${CLAUDE_PLUGIN_ROOT}/prompts"
 "$SC/run_codex" < prompt > raw 2> err        # Codex seat (pins --profile panel-review; sandbox BYPASSED so MCP/tilth + scratch work — repo_guard enforces integrity; auto-creates the profile)
 "$SC/run_agy"   < prompt > raw 2> err        # Gemini seat (pins model/timeout/stdin)
 "$SC/run_seat" --seat <codex|gemini> --tag <tag> --prompt <f> --raw <f> --parsed <f> [--label L] [--no-repair]  # dispatch a CLI seat + parse + one-shot repair; FINAL parse status on stdout
+"$SC/await_seats" --id <id> --tag <tag> --prompt <f> [--seat-timeout S] [--no-repair] --seat <s> --raw <f> --parsed <f> --status <f> [--label L] [ --seat ... ] --done <f>  # BARRIER: run ALL CLI seats concurrently (each via run_seat) in ONE job, write each seat's status + a combined --done summary, exit. Dispatch this ONCE with run_in_background:true (the only sanctioned wait) — never poll.
 "$SC/parse_block" <tag> <raw> [label]        # ```<tag> block -> validated JSONL; exit 4 = NO block (down), 5 = malformed (repair once)
 "$SC/parse_block" --diagnose <tag> <raw>     # WHY each item was rejected (reason + offending line); feeds repair.tmpl on exit 5
 "$SC/birth_index" --available "<seats>" --configured "<seats>" < issues.json   # clustered Round-0 issues -> full index.json (birth state/flags/coverage)
@@ -89,16 +90,22 @@ means the seat returned no block at all (down / malfunctioned), distinct from an
 block (ran, found nothing). **Run everything from cwd = `workdir` (repo root)** so seat
 working-tree reads, scratch paths, and `repo_guard` all resolve against the same tree.
 
-**CLI seats are long-running — dispatch them in the background, never foreground.** `run_codex` /
-`run_agy` (and `run_seat`, which wraps them) routinely take several minutes, and `run_agy` can run up
-to ~31 min (its wall timeout). The Bash **tool's** foreground timeout defaults to **2 min** and maxes
-at **10 min** — shorter than a seat's worst case — so a foreground dispatch *will* be killed
-mid-pass, and a killed pass leaves a 0-byte raw file that then reads as a **down seat** (false
-degrade). So launch **each** CLI seat as its **own** Bash call with `run_in_background: true` (one
-call per seat, not a single foreground `for`-loop): backgrounded commands run detached, survive across
-turns, run the seats concurrently, and re-invoke you when each exits — then read its raw/parsed/status
-files. A raised foreground `timeout` is only a fallback for a single seat you deliberately run inline,
-and even the 10-min max cannot cover `run_agy`'s worst case.
+**CLI seats are long-running — wait for them with ONE background barrier, never poll.** `run_codex` /
+`run_agy` routinely take several minutes, and `run_agy` can run up to ~31 min (its wall timeout). The
+Bash **tool's** foreground timeout defaults to **2 min** and maxes at **10 min** — shorter than a
+seat's worst case — so a foreground dispatch *will* be killed mid-pass, leaving a 0-byte raw that
+reads as a **down seat** (false degrade). And **a wait is a shell concern, not a reasoning concern**:
+every turn you take re-reads your whole context, so polling or narrating a slow seat is pure waste.
+
+So wait via a **single barrier**: `await_seats` runs **all** CLI seats concurrently (each through
+`run_seat`, so parse + one-shot repair are unchanged) inside **one** job, waits for every seat with a
+per-seat outer timeout, writes each seat's status + a combined `--done` summary, and exits. Dispatch
+it **once** with `run_in_background: true`; a backgrounded command runs detached, survives across
+turns, and re-invokes you exactly once — when it exits. Between dispatch and that re-invocation, **do
+nothing** (no `date`/`ps`/`cat status.*`/"still waiting" turns). The Claude seat is a subagent, not a
+CLI, so it cannot run inside `await_seats`; spawn it as its own **one** background Agent call — so a
+pass costs **two** wakes, not dozens. (A raised foreground `timeout` is only a last-resort fallback
+for a single seat you must run inline, and even the 10-min max cannot cover `run_agy`'s worst case.)
 
 ## The three seats
 
@@ -127,6 +134,20 @@ A "full panel" = every seat `preflight` reported available (either peer may be a
 
 `/tmp/<id>/index.json` is the **single source of truth**; cards are a regenerable cache. You keep
 **nothing** in your conversation that isn't reconstructable from `/tmp/<id>/`.
+
+**Keep your own context small — you re-read it on every turn.** Work from compact on-disk artifacts;
+**never** `cat`/`Read` a large blob into your context to "look at it":
+
+- **Never read the diff into your context.** The blind **seats** see the diff; you debate their
+  *findings*. `resolve_diff` writes `/tmp/$id/diff.txt` and `assemble` splices it into the seat prompt
+  on disk — you never need its bytes in conversation.
+- **Never read raw seat output (`/tmp/$id/raw/*`) into your context.** It is parsed by `parse_block` /
+  `sweep ingest-batch` into compact JSONL on disk; read a seat's *engagement status* (`status.*`) and
+  the validated stances/findings the scripts produce, not the verbatim transcript.
+- **Read only the slice a decision needs.** Per round, operate on `index get` output and the parsed
+  per-seat JSON for the open issues — not the whole accumulated card set or every round's raw. Let the
+  scripts (`decide_round`, `sweep`, `index`) do the bulk processing on disk and hand you back only what
+  needs judgment.
 
 Each issue record in the index:
 
@@ -219,23 +240,28 @@ reviewer-facing fields, so the origins never leak even if adjacent.
    "$SC/assemble" "$PR/blind_pass.tmpl" SCOPE=/tmp/$id/scope.txt INSTRUCTIONS=/tmp/$id/instructions.txt DIFF=/tmp/$id/diff.txt SCRATCH=/tmp/$id/scratch.txt > /tmp/$id/round0.prompt
    ```
 
-4. **Dispatch all three in parallel.** For the two **CLI seats** (Codex, Gemini) call `run_seat`:
-   it dispatches the seat, parses the `findings` block, and runs the **one-shot shape repair**
-   automatically (diagnose → `repair.tmpl` with the seat's OWN output → re-dispatch → re-parse),
-   printing the FINAL parse status. The **Claude seat** is a subagent, not a CLI, so spawn it and
-   parse/repair it by hand. Never append `|| true` — that would hide a down seat:
+4. **Dispatch all three in parallel — the CLI seats via the `await_seats` barrier, the Claude seat as
+   one background Agent call.** `await_seats` runs every CLI seat through `run_seat` (so the `findings`
+   parse + **one-shot shape repair** — diagnose → `repair.tmpl` with the seat's OWN output →
+   re-dispatch → re-parse — are unchanged), concurrently, in one job, and writes each seat's FINAL
+   parse status. Dispatch it as **one** `run_in_background: true` Bash call; spawn the Claude subagent
+   as **one** background Agent call. Then **stop** — take no turns until those two re-invoke you (no
+   `date`/`ps`/`cat status.*`/"still waiting" turns; see the long-running-seats rule above). Never
+   append `|| true` — that would hide a down seat:
 
    ```bash
-   # CLI seats: run_seat owns dispatch + parse + repair. Final status on stdout.
-   # Dispatch each as its OWN Bash call with run_in_background:true (NOT this foreground
-   # for-loop) — they run minutes-long and a foreground call is killed at the 2-min tool
-   # default, leaving a 0-byte raw that looks like a down seat. The command per seat:
-   "$SC/run_seat" --seat "$seat" --tag findings \
-     --prompt /tmp/$id/round0.prompt \
-     --raw "/tmp/$id/raw/round0.$seat.txt" --parsed "/tmp/$id/f.$seat.json" > "/tmp/$id/status.$seat"
-   # status.$seat: 0 = engaged, 4 = no block (down), 5 = malformed after repair
-   # Claude seat (subagent): spawn it, write its returned text to the raw file, then
-   # parse + repair manually — the same one-shot repair run_seat does for the CLI seats.
+   mkdir -p /tmp/$id/raw
+   # ONE background Bash call — all CLI seats at once. --done is the combined summary.
+   "$SC/await_seats" --id "$id" --tag findings --prompt /tmp/$id/round0.prompt \
+     --seat codex  --raw /tmp/$id/raw/round0.codex.txt  --parsed /tmp/$id/f.codex.json  --status /tmp/$id/status.codex \
+     --seat gemini --raw /tmp/$id/raw/round0.gemini.txt --parsed /tmp/$id/f.gemini.json --status /tmp/$id/status.gemini \
+     --done /tmp/$id/await.round0.txt
+   # (pass only the CLI seats preflight reported available). status.$seat: 0 engaged,
+   # 4 no block (down), 5 malformed after repair, 124 outer-timeout (down; noted as a
+   # timeout in --done for Process notes).
+   # Claude seat (subagent): ONE background Agent call. When it returns, write its text
+   # to the raw file, then parse + repair by hand — the same one-shot repair run_seat
+   # does for the CLI seats.
    "$SC/parse_block" findings "/tmp/$id/raw/round0.claude.txt" claude > /tmp/$id/f.claude.json
    echo "$?" > /tmp/$id/status.claude
    if [ "$(cat /tmp/$id/status.claude)" = 5 ]; then
@@ -249,7 +275,9 @@ reviewer-facing fields, so the origins never leak even if adjacent.
    ```
    Repairing exit 5 (a FORMAT slip, not a bad review) salvages complete findings that merely had the
    wrong shape and beats re-running the blind prompt; exit 4 (no block at all) is nothing to repair —
-   the seat stays down. The repair prompt carries only the seat's OWN output, so blindness holds.
+   the seat stays down. The repair prompt carries only the seat's OWN output, so blindness holds. A
+   `124` (the barrier's outer per-seat timeout) is a hung seat: it reads as **down** for engagement,
+   and the `--done` summary records the timeout so you surface it in the verdict's Process notes.
 
    Read the **final** status after the retry. Exit **0** ⇒ engaged (an empty file here ⇒ the seat
    ran and found nothing — counts as available). Exit **4** ⇒ the seat produced no findings block at
@@ -379,11 +407,19 @@ For `round = 1, 2, … max-rounds`, while any issue is `open`:
    seat raised none.
 
    ```bash
-   # Same as Round 0: each CLI seat is its OWN background Bash call (run_in_background:true),
-   # never a foreground dispatch — debate passes are just as long-running.
-   "$SC/run_seat" --seat "$seat" --tag new_findings --prompt /tmp/$id/debate.$round.prompt \
-     --raw /tmp/$id/raw/round$round.$seat.$batch.txt --parsed /tmp/$id/nf.$round.$seat.json   # CLI seats
+   # Same barrier as Round 0, per BATCH: ONE background await_seats call dispatches all
+   # CLI seats for this batch's prompt (--tag new_findings parses the new-findings block;
+   # `sweep ingest-batch` re-reads the SAME raw file for stances below). In the common
+   # single-batch case that is one barrier + one Claude Agent call = two wakes; an
+   # over-budget round adds one barrier per extra batch. Never poll between dispatch and
+   # the barrier's single re-invocation (see the long-running-seats rule).
+   "$SC/await_seats" --id "$id" --tag new_findings --prompt /tmp/$id/debate.$round.prompt \
+     --seat codex  --raw /tmp/$id/raw/round$round.codex.$batch.txt  --parsed /tmp/$id/nf.$round.codex.json  --status /tmp/$id/status.round$round.codex.$batch \
+     --seat gemini --raw /tmp/$id/raw/round$round.gemini.$batch.txt --parsed /tmp/$id/nf.$round.gemini.json --status /tmp/$id/status.round$round.gemini.$batch \
+     --done /tmp/$id/await.round$round.$batch.txt   # only the CLI seats engaged this round
    ```
+   Spawn the fresh Claude-seat subagent for this batch as its own background Agent call alongside the
+   barrier (it cannot run inside `await_seats`).
 
    ```bash
    "$SC/sweep" plan "$id" "$round" "$epoch" /tmp/$id/plan.$round.json
@@ -665,3 +701,6 @@ Never return raw seat output, card text, or per-round transcripts.
 - ✅ Cards carry **no** origins and **no** stance tally. Settle only on unanimity among ≥2
   engaged seats. Present every issue, including rejected and unresolved.
 - ✅ Degrade gracefully: one dead seat ≠ aborted review. Run everything from cwd = repo root.
+- ✅ Wait for CLI seats with ONE background `await_seats` barrier per pass (+ one background Agent
+  call for the Claude seat); take **no** turns polling (`date`/`ps`/`cat status.*`) or narrating the
+  wait (see the long-running-seats rule).
