@@ -89,7 +89,7 @@ prompt: |
   Return only the synthesized verdict in the documented Output format.
 ```
 
-**Await its single return — do not poke it** (it waits for its own slow seats via the `await_seats`
-barrier and may run many minutes with no output; `SendMessage`-poking it only forces a wasteful
-full-context re-read — see `start`'s Step 4). Present the verdict per `start`'s Step 5 (verbatim,
+**Await its single return — do not poke it** (it waits for its own slow seats via background helper
+Agents — the `panel-review-cli-barrier` plus the Claude seat — and may run many minutes with no
+output; `SendMessage`-poking it only forces a wasteful full-context re-read — see `start`'s Step 4). Present the verdict per `start`'s Step 5 (verbatim,
 strip/act on `<<<PANEL-GATE…>>>` / `<<<PANEL-CONTINUABLE…>>>` control lines the same way).

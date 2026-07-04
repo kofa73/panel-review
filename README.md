@@ -165,6 +165,46 @@ Three more behaviors worth knowing before you run it:
 The loop is bounded by a per-issue counter (`--issue-rounds`, default 2) and a global ceiling
 (`--max-rounds`, default 4), so it always terminates.
 
+### Slow seats and timeouts (optional)
+
+**You normally set nothing.** A review needs no timeout configuration: each CLI seat is allowed up to
+~40 min (`await_seats`' `--seat-timeout`, default 2400 s), and the CLI-seat barrier waits for them in
+short (< 2 min) polling chunks that stay under Claude Code's Bash-tool timeout *and* its
+background-subagent stall timeout by design, so nothing is truncated out of the box. (You do **not**
+need `BASH_DEFAULT_TIMEOUT_MS` / `BASH_MAX_TIMEOUT_MS`: the barrier never asks for a longer single
+Bash call, so raising the Bash ceiling has no effect here.)
+
+You only tune this if you deliberately let seats run **longer than ~40 min** — e.g. you raise the
+per-seat cap with `PANEL_REVIEW_SEAT_TIMEOUT=<seconds>`. Then two limits also have to move, or a slow
+seat is abandoned mid-run and the review silently degrades to the seats that did finish:
+
+1. **The barrier's poll budget** — raise the retry cap in `agents/panel-review-cli-barrier.md`
+   step 2 (currently 26) so `cap × ~100 s` comfortably exceeds your new per-seat cap.
+2. **Claude Code's background-subagent stall timeout** — raise `CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS`
+   (default `600000`, i.e. 10 min) so a background Agent that goes quiet through a long run is not
+   aborted as "stalled". Put it in the `env` block of a settings file — pick the file by who it
+   should apply to:
+
+   | File | Applies to |
+   | :--- | :--- |
+   | `~/.claude/settings.json` | you, in every project |
+   | `<reviewed-repo>/.claude/settings.json` | everyone working in that repo (checked in) |
+   | `<reviewed-repo>/.claude/settings.local.json` | just you, just that repo (gitignore it) |
+
+   Add exactly (match the value to your longest seat, in ms — e.g. 60 min):
+
+   ```json
+   {
+     "env": {
+       "CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS": "3600000"
+     }
+   }
+   ```
+
+   Claude Code reads `env` from the file at startup, so it applies however `claude` was launched;
+   restart the session after editing. A real shell environment variable of the same name wins over
+   the settings entry if both are set.
+
 ---
 
 ## How it works
@@ -291,7 +331,8 @@ malformed block, using its own prior output plus `parse_block --diagnose` output
 | `repo_guard` | Protect the **code under review**: `snapshot` records the tracked tree (a `git stash create` SHA + a sha256 manifest) at the start; `verify --restore` after each seat pass detects, reverts, and reports any tracked-file drift. Untracked scratch and the `.panel-review/` cache are left alone |
 | `run_agy` | The **only** way to call the Gemini seat — pins the model, a 15-min `--print-timeout` budget, and the flag-binding invocation (prompt on **stdin with no bare `--print`**, since agy's `--print` takes the prompt as its argument and would otherwise swallow `--model`); falls back from the primary Gemini model to a faster one if the primary fails or exhausts its `--print-timeout` (whose expiry prints `Error: timed out waiting for response`) |
 | `run_seat` | Dispatch one **CLI** seat (Codex or Gemini) for a tag, parse the block, and run the one-shot shape repair (diagnose → `repair.tmpl` with the seat's own output → re-dispatch) automatically; prints the final parse status. The Claude seat is a subagent, not a CLI, so it is driven by the referee directly. **CLI seats are long-running** (minutes; `run_agy` up to ~34 min across its two 15-min model attempts), longer than the Bash tool's foreground timeout (2 min default, 10 min max), so the seats run **in the background**, never foreground (a foreground dispatch is killed mid-pass and the empty raw file reads as a down seat) |
-| `await_seats` | **Barrier** over the CLI seats: runs them all concurrently (each through `run_seat`, so parse + repair are unchanged) inside **one** background job, waits for every seat with a configurable per-seat outer timeout (`--seat-timeout`, default 2400s — the backstop `run_codex` otherwise lacks), writes each seat's final status plus one combined `--done` summary, and exits. The referee dispatches it **once** with `run_in_background:true`, so the CLI seats cost a **single** re-invocation instead of a polling loop — the fix for the referee burning turns (each re-reading its whole long-context-tier context) while waiting. The Claude seat is a subagent, so it stays a separate background Agent call; a pass costs two wakes, not dozens |
+| `await_seats` | **Barrier** over the CLI seats: runs them all concurrently (each through `run_seat`, so parse + repair are unchanged) inside **one** job, waits for every seat with a configurable per-seat outer timeout (`--seat-timeout`, default 2400s — the backstop `run_codex` otherwise lacks), writes each seat's final status plus one combined `--done` summary, and exits. It is run by the **`panel-review-cli-barrier` Agent**, not backgrounded by the referee directly: a background **Bash** job does **not** re-invoke the sub-agent that launched it (its completion is routed to the root session and dropped, stalling the referee), whereas a background **Agent** reliably wakes its spawner. So a pass spawns two background Agents — the CLI barrier and the Claude seat — for two reliable wakes instead of the per-seat polling loop that made the referee burn turns re-reading its whole context |
+| `panel-review-cli-barrier` (agent) | Thin, non-reviewing helper subagent the referee spawns **background** each pass: it `bash`-runs the `await_seats` command the referee wrote — wrapped so `await_seats`' exit code is always written to a **completion sentinel** — then watches that sentinel (not the `--done` file, which exists only on a clean run) via bounded foreground waits in its own tiny context, and returns once `await_seats` has fully exited. Its return is the event that wakes the referee; the sentinel's exit code tells the referee whether the seats actually ran (`0`) or hit a setup error / wedged (nonzero / absent → CLI seats down for the pass, no false "settled" and no late writes). Exists solely because a background Agent — unlike a background Bash job — reliably re-invokes its spawning sub-agent |
 | `extract_block` / `parse_block` | Pull a `findings` / `stances` / `new_findings` block → validated JSONL; `parse_block` exit 4 = no block (down seat) vs empty-but-present, exit 5 = malformed (block present, zero valid). `parse_block --diagnose` reports *why* each item was rejected (reason + offending line) to drive a one-shot repair |
 | `birth_index` | Turn the referee's clustered Round-0 finding-to-issue map into the full `index.json` — assigns each issue's birth state, vetting flags, and `evaluated_by` coverage by the birth-unanimity rule (the deterministic half of clustering; the referee still owns the merge itself) |
 | `decide_round` / `decide_degraded_round` | Build normal (≥2 seats) and degraded (0–1 seat) debate payloads. Both update private `evaluated_by` coverage in the same atomic commit; the degraded path only emits terminal unresolved/contested states and eligible `fully_vetted` flags |

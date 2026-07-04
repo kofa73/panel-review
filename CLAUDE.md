@@ -54,6 +54,11 @@ Four participants, strict role separation:
 - **Claude seat** (`agents/panel-review-claude-seat.md`) — a cold, no-memory reviewer subagent,
   **spawned fresh each pass, never forked** (a fork would inherit the referee's context and destroy
   blindness). Codex and Gemini seats are external CLIs.
+- **CLI barrier** (`agents/panel-review-cli-barrier.md`) — a thin, non-reviewing helper subagent the
+  referee spawns **background** each pass to run `await_seats` (the Codex+Gemini wait) and return
+  when both seats settle. It exists because a background **Agent** reliably re-invokes the referee
+  on completion while a background **Bash** job does **not** (see `await_seats` under "Scripts that
+  own a concern"). It reviews nothing; it only starts the seats and waits.
 - **Wrapper scripts** (`scripts/`) — the referee never hand-rolls flags, writes, index math, or
   parsing; it calls these so operations are byte-exact. Prompt templates are in `prompts/`
   (`blind_pass.tmpl`, `debate.tmpl`, `repair.tmpl`); the Codex profile default is `assets/default-panel-review.config.toml`.
@@ -98,12 +103,17 @@ round limit. Unanimity-or-human: no majority vote, no referee fact-checking insi
   The Claude seat is a subagent, not a CLI, so the referee drives it directly (never via `run_seat`).
 - `await_seats` — the **barrier** that owns CLI-seat *waiting*. Runs every CLI seat concurrently
   (each via `run_seat`) in ONE job, waits with a per-seat outer timeout, writes per-seat status + a
-  combined `--done` summary, exits. The referee dispatches it once with `run_in_background:true` so
-  the CLI seats cost a single re-invocation — never a polling loop. Waiting in LLM turns (each
-  re-reading the referee's whole context at the long-context premium tier) was the token blow-up this
-  replaces: a real run spent ~36M tokens (≈10× everything else combined) mostly narrating that a seat
-  was slow. The protocol forbids `date`/`ps`/`cat status.*`/narration turns between dispatch and the
-  barrier's one completion. The Claude seat stays a separate background Agent call (2 wakes/pass).
+  combined `--done` summary, exits. It is run by the **`panel-review-cli-barrier` Agent**, not
+  backgrounded by the referee directly: a background **Bash** job does **not** re-invoke the
+  sub-agent that launched it (the harness marks the stopped sub-agent complete and routes the job's
+  completion to the root session, which drops it — the referee then stalls forever), whereas a
+  background **Agent** reliably wakes its spawning sub-agent. So the referee spawns two background
+  Agents per pass — the CLI barrier (runs `await_seats`, then waits on a completion **sentinel** —
+  its own exit-code wrapper, not the `--done` result file — via bounded foreground waits in its own
+  tiny context) and the Claude seat — for two reliable wakes, never a
+  dropped one. This replaces the per-seat-poll token blow-up (a real run spent ~36M tokens, ≈10×
+  everything else combined, mostly narrating that a seat was slow). The protocol forbids
+  `date`/`ps`/`cat status.*`/narration turns between dispatch and the Agents' wakes.
 - `birth_index` — the **only** builder of the Round-0 `index.json` from the referee's clustered
   finding-to-issue map; assigns birth state/flags/`evaluated_by` by the birth-unanimity rule (the
   referee still owns the clustering judgment). Output installs via `index put`.

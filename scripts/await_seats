@@ -3,21 +3,30 @@
 #
 # WHY this script exists (the token blow-up it fixes):
 #   The referee is an LLM. Every time it is re-invoked it re-reads its whole
-#   (growing) conversation context — and once that context crosses ~200K tokens
-#   it bills at the long-context premium tier. The old protocol dispatched each
-#   CLI seat as its OWN background Bash job, so the referee was woken once per
-#   seat exit AND tended to fill the gaps with polling/narration turns ("is the
-#   seat still alive?"). A real run spent ~130 full-context turns mostly WAITING.
+#   (growing) conversation context. The old protocol dispatched each CLI seat as
+#   its OWN background Bash job, so the referee was woken once per seat exit AND
+#   tended to fill the gaps with polling/narration turns ("is the seat still
+#   alive?"). A real run spent ~130 full-context turns mostly WAITING.
 #
 #   A wait on an async process is a shell concern, not a reasoning concern. This
-#   script runs the CLI seats (Codex, Gemini) concurrently inside a SINGLE
-#   background job, waits for all of them (each bounded by an outer per-seat
-#   timeout), writes each seat's final parse status plus one combined summary,
-#   and exits. The referee dispatches THIS, once, with run_in_background:true and
-#   does nothing until it completes — so the two CLI seats cost ONE wake instead
-#   of dozens of polling turns. (The Claude seat is a subagent, not a CLI, so it
-#   stays a separate background Agent call — hence two wakes per round, not one;
-#   collapsing further was rejected as not worth the blindness/MCP risk.)
+#   script runs the CLI seats (Codex, Gemini) concurrently inside a SINGLE job,
+#   waits for all of them (each bounded by an outer per-seat timeout), writes each
+#   seat's final parse status plus one combined summary, and exits.
+#
+# WHO runs it (NOT the referee directly — this is the subtle part):
+#   A backgrounded Bash job does NOT re-invoke the sub-agent that launched it. When
+#   a sub-agent (the referee) stops with a still-running background Bash job, the
+#   harness reports the sub-agent "complete" to its parent and the job's eventual
+#   completion notification is delivered to the ROOT session, where no protocol
+#   step handles it — so the referee stalls forever. (Only a background *Agent*
+#   reliably wakes its spawning sub-agent.) So the referee spawns the
+#   `panel-review-cli-barrier` Agent, which runs THIS script detached and waits on
+#   a completion sentinel — the barrier's exit-code wrapper around this script, not
+#   the --done result file (which appears only on a clean exit) — so a setup error
+#   surfaces at once instead of hanging the barrier's whole budget; the barrier
+#   Agent's return is the event that wakes the referee. Two background Agents per
+#   pass — the CLI barrier and the Claude seat — so two reliable wakes, never a
+#   dropped one.
 #
 # It is a thin orchestration layer over run_seat: each seat still goes through
 # run_seat (dispatch -> parse_block -> one-shot repair), so the seat contract,

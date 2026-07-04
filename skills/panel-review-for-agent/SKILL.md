@@ -68,7 +68,7 @@ PR="${CLAUDE_PLUGIN_ROOT}/prompts"
 "$SC/run_codex" < prompt > raw 2> err        # Codex seat (pins --profile panel-review; sandbox BYPASSED so MCP/tilth + scratch work — repo_guard enforces integrity; auto-creates the profile)
 "$SC/run_agy"   < prompt > raw 2> err        # Gemini seat (pins model/timeout/stdin)
 "$SC/run_seat" --seat <codex|gemini> --tag <tag> --prompt <f> --raw <f> --parsed <f> [--label L] [--no-repair]  # dispatch a CLI seat + parse + one-shot repair; FINAL parse status on stdout
-"$SC/await_seats" --id <id> --tag <tag> --prompt <f> [--seat-timeout S] [--no-repair] --seat <s> --raw <f> --parsed <f> --status <f> [--label L] [ --seat ... ] --done <f>  # BARRIER: run ALL CLI seats concurrently (each via run_seat) in ONE job, write each seat's status + a combined --done summary, exit. Dispatch this ONCE with run_in_background:true (the only sanctioned wait) — never poll.
+"$SC/await_seats" --id <id> --tag <tag> --prompt <f> [--seat-timeout S] [--no-repair] --seat <s> --raw <f> --parsed <f> --status <f> [--label L] [ --seat ... ] --done <f>  # BARRIER: run ALL CLI seats concurrently (each via run_seat) in ONE job, write each seat's status + a combined --done summary, exit. You never background this yourself — the panel-review-cli-barrier Agent runs it (see the long-running-seats rule); never poll.
 "$SC/parse_block" <tag> <raw> [label]        # ```<tag> block -> validated JSONL; exit 4 = NO block (down), 5 = malformed (repair once)
 "$SC/parse_block" --diagnose <tag> <raw>     # WHY each item was rejected (reason + offending line); feeds repair.tmpl on exit 5
 "$SC/birth_index" --available "<seats>" --configured "<seats>" < issues.json   # clustered Round-0 issues -> full index.json (birth state/flags/coverage)
@@ -90,22 +90,34 @@ means the seat returned no block at all (down / malfunctioned), distinct from an
 block (ran, found nothing). **Run everything from cwd = `workdir` (repo root)** so seat
 working-tree reads, scratch paths, and `repo_guard` all resolve against the same tree.
 
-**CLI seats are long-running — wait for them with ONE background barrier, never poll.** `run_codex` /
-`run_agy` routinely take several minutes, and `run_agy` can run up to ~31 min (its wall timeout). The
-Bash **tool's** foreground timeout defaults to **2 min** and maxes at **10 min** — shorter than a
-seat's worst case — so a foreground dispatch *will* be killed mid-pass, leaving a 0-byte raw that
-reads as a **down seat** (false degrade). And **a wait is a shell concern, not a reasoning concern**:
-every turn you take re-reads your whole context, so polling or narrating a slow seat is pure waste.
+**CLI seats are long-running — wait for them through background Agents, never poll, never background
+the barrier yourself.** `run_codex` / `run_agy` routinely take several minutes, and `run_agy` can run
+up to ~34 min (its wall timeout). The Bash **tool's** foreground timeout defaults to **2 min** and
+maxes at **10 min** — shorter than a seat's worst case — so a foreground dispatch *will* be killed
+mid-pass, leaving a 0-byte raw that reads as a **down seat** (false degrade). And **a wait is a shell
+concern, not a reasoning concern**: every turn you take re-reads your whole context, so polling or
+narrating a slow seat is pure waste.
 
-So wait via a **single barrier**: `await_seats` runs **all** CLI seats concurrently (each through
-`run_seat`, so parse + one-shot repair are unchanged) inside **one** job, waits for every seat with a
-per-seat outer timeout, writes each seat's status + a combined `--done` summary, and exits. Dispatch
-it **once** with `run_in_background: true`; a backgrounded command runs detached, survives across
-turns, and re-invokes you exactly once — when it exits. Between dispatch and that re-invocation, **do
-nothing** (no `date`/`ps`/`cat status.*`/"still waiting" turns). The Claude seat is a subagent, not a
-CLI, so it cannot run inside `await_seats`; spawn it as its own **one** background Agent call — so a
-pass costs **two** wakes, not dozens. (A raised foreground `timeout` is only a last-resort fallback
-for a single seat you must run inline, and even the 10-min max cannot cover `run_agy`'s worst case.)
+`await_seats` collapses the CLI wait into one event: it runs **all** CLI seats concurrently (each
+through `run_seat`, so parse + one-shot repair are unchanged) inside **one** job, waits for every seat
+with a per-seat outer timeout, writes each seat's status + a combined `--done` summary, and exits.
+**But you must not background `await_seats` directly.** A backgrounded **Bash** job does **not**
+re-invoke the sub-agent that launched it: when you (a sub-agent) stop with a pending background Bash
+job, the harness marks you complete to your parent and the job's completion is delivered to the root
+session, which has no step to handle it — so you stall forever. Only a background **Agent** reliably
+wakes its spawning sub-agent.
+
+So dispatch **two background Agents** per pass and then do nothing until they wake you:
+
+1. the **`panel-review-cli-barrier`** Agent — it runs `await_seats` detached and watches its
+   `--done` file, returning (and so waking you) only once every CLI seat has settled;
+2. the **`panel-review-claude-seat`** Agent — the Claude seat, which can't run inside `await_seats`.
+
+Each Agent completion re-invokes you exactly once, so a pass costs **two** wakes, not dozens. When a
+wake arrives, process only the seat(s) whose status is now on disk; if the other Agent is still
+running, **stop again and wait for its wake** — never poll (`date`/`ps`/`cat status.*`/"still
+waiting") between wakes. (A raised foreground `timeout` is only a last-resort fallback for a single
+seat you must run inline, and even the 10-min max cannot cover `run_agy`'s worst case.)
 
 ## The three seats
 
@@ -240,28 +252,54 @@ reviewer-facing fields, so the origins never leak even if adjacent.
    "$SC/assemble" "$PR/blind_pass.tmpl" SCOPE=/tmp/$id/scope.txt INSTRUCTIONS=/tmp/$id/instructions.txt DIFF=/tmp/$id/diff.txt SCRATCH=/tmp/$id/scratch.txt > /tmp/$id/round0.prompt
    ```
 
-4. **Dispatch all three in parallel — the CLI seats via the `await_seats` barrier, the Claude seat as
-   one background Agent call.** `await_seats` runs every CLI seat through `run_seat` (so the `findings`
-   parse + **one-shot shape repair** — diagnose → `repair.tmpl` with the seat's OWN output →
+4. **Dispatch all three in parallel — the two CLI seats via the `panel-review-cli-barrier` Agent, the
+   Claude seat as its own Agent.** `await_seats` runs every CLI seat through `run_seat` (so the
+   `findings` parse + **one-shot shape repair** — diagnose → `repair.tmpl` with the seat's OWN output →
    re-dispatch → re-parse — are unchanged), concurrently, in one job, and writes each seat's FINAL
-   parse status. Dispatch it as **one** `run_in_background: true` Bash call; spawn the Claude subagent
-   as **one** background Agent call. Then **stop** — take no turns until those two re-invoke you (no
-   `date`/`ps`/`cat status.*`/"still waiting" turns; see the long-running-seats rule above). Never
-   append `|| true` — that would hide a down seat:
+   parse status. Write that `await_seats` command to a one-line script, then spawn **two background
+   Agents**: the CLI barrier (runs the script, waits, wakes you) and the Claude seat. Do **not**
+   background `await_seats` yourself — a background Bash job won't re-invoke you (see the
+   long-running-seats rule). Then **stop** — take no turns until an Agent re-invokes you (no
+   `date`/`ps`/`cat status.*`/"still waiting" turns). Never append `|| true` — that would hide a down
+   seat:
 
    ```bash
    mkdir -p /tmp/$id/raw
-   # ONE background Bash call — all CLI seats at once. --done is the combined summary.
-   "$SC/await_seats" --id "$id" --tag findings --prompt /tmp/$id/round0.prompt \
-     --seat codex  --raw /tmp/$id/raw/round0.codex.txt  --parsed /tmp/$id/f.codex.json  --status /tmp/$id/status.codex \
-     --seat gemini --raw /tmp/$id/raw/round0.gemini.txt --parsed /tmp/$id/f.gemini.json --status /tmp/$id/status.gemini \
-     --done /tmp/$id/await.round0.txt
-   # (pass only the CLI seats preflight reported available). status.$seat: 0 engaged,
-   # 4 no block (down), 5 malformed after repair, 124 outer-timeout (down; noted as a
-   # timeout in --done for Process notes).
-   # Claude seat (subagent): ONE background Agent call. When it returns, write its text
-   # to the raw file, then parse + repair by hand — the same one-shot repair run_seat
-   # does for the CLI seats.
+   # Write the barrier command ONCE (include only the CLI seats preflight reported
+   # available). Paths are space-free, so no inner quoting is needed. await_seats
+   # writes --done LAST, after every per-seat --status — but --done is a RESULT file
+   # (it appears only on a clean exit); the barrier waits on the sentinel it wraps
+   # around await_seats, never on --done (see the barrier spawn + note below).
+   printf '%s\n' "$SC/await_seats --id $id --tag findings --prompt /tmp/$id/round0.prompt --seat codex --raw /tmp/$id/raw/round0.codex.txt --parsed /tmp/$id/f.codex.json --status /tmp/$id/status.codex --seat gemini --raw /tmp/$id/raw/round0.gemini.txt --parsed /tmp/$id/f.gemini.json --status /tmp/$id/status.gemini --done /tmp/$id/await.round0.txt" > /tmp/$id/cli_barrier.round0.sh
+   ```
+
+   Spawn the **CLI barrier** as one background Agent (it `bash`-runs the script above, waits on the
+   **sentinel** it wraps around `await_seats`, and returns — waking you — once every CLI seat has
+   settled):
+
+   ```
+   subagent_type: panel-review:panel-review-cli-barrier   (run_in_background: true)
+   prompt: |
+     workdir=<repo root absolute path>
+     command=/tmp/<id>/cli_barrier.round0.sh
+     done=/tmp/<id>/await.round0.txt
+     sentinel=/tmp/<id>/await.round0.sentinel
+   ```
+   The barrier waits on the **sentinel** (which it writes with `await_seats`' exit code), not the
+   done-file, so a setup error surfaces at once instead of hanging the barrier's whole budget. On its
+   return, read the `await_seats_rc` it prints: `0` ⇒ the done-file + per-seat `status.*` are complete,
+   proceed below. **Nonzero or `absent`** ⇒ `await_seats` never ran the seats this pass — treat **both**
+   CLI seats as **down**, record the barrier/setup failure in the verdict's Process notes, and do not
+   wait for `status.*` files that will never arrive.
+
+   Spawn the **Claude seat** as its own background Agent (fresh `panel-review:panel-review-claude-seat`,
+   **never a fork**). `status.$seat` (written by the barrier): 0 engaged, 4 no block (down), 5
+   malformed after repair, 124 outer-timeout (down; noted as a timeout in `--done` for Process notes).
+   On each wake, process only the seat(s) whose status is already on disk; if the other Agent is still
+   running, stop again and wait. When the Claude Agent returns, write its text to the raw file, then
+   parse + repair by hand — the same one-shot repair `run_seat` does for the CLI seats:
+
+   ```bash
    "$SC/parse_block" findings "/tmp/$id/raw/round0.claude.txt" claude > /tmp/$id/f.claude.json
    echo "$?" > /tmp/$id/status.claude
    if [ "$(cat /tmp/$id/status.claude)" = 5 ]; then
@@ -407,19 +445,21 @@ For `round = 1, 2, … max-rounds`, while any issue is `open`:
    seat raised none.
 
    ```bash
-   # Same barrier as Round 0, per BATCH: ONE background await_seats call dispatches all
-   # CLI seats for this batch's prompt (--tag new_findings parses the new-findings block;
-   # `sweep ingest-batch` re-reads the SAME raw file for stances below). In the common
-   # single-batch case that is one barrier + one Claude Agent call = two wakes; an
-   # over-budget round adds one barrier per extra batch. Never poll between dispatch and
-   # the barrier's single re-invocation (see the long-running-seats rule).
-   "$SC/await_seats" --id "$id" --tag new_findings --prompt /tmp/$id/debate.$round.prompt \
-     --seat codex  --raw /tmp/$id/raw/round$round.codex.$batch.txt  --parsed /tmp/$id/nf.$round.codex.json  --status /tmp/$id/status.round$round.codex.$batch \
-     --seat gemini --raw /tmp/$id/raw/round$round.gemini.$batch.txt --parsed /tmp/$id/nf.$round.gemini.json --status /tmp/$id/status.round$round.gemini.$batch \
-     --done /tmp/$id/await.round$round.$batch.txt   # only the CLI seats engaged this round
+   # Same barrier as Round 0, per BATCH: write the await_seats command for this batch's
+   # prompt to a script (--tag new_findings parses the new-findings block; `sweep
+   # ingest-batch` re-reads the SAME raw file for stances below), then run it via the
+   # cli-barrier Agent — never background await_seats yourself (it would not wake you).
+   printf '%s\n' "$SC/await_seats --id $id --tag new_findings --prompt /tmp/$id/debate.$round.prompt --seat codex --raw /tmp/$id/raw/round$round.codex.$batch.txt --parsed /tmp/$id/nf.$round.codex.json --status /tmp/$id/status.round$round.codex.$batch --seat gemini --raw /tmp/$id/raw/round$round.gemini.$batch.txt --parsed /tmp/$id/nf.$round.gemini.json --status /tmp/$id/status.round$round.gemini.$batch --done /tmp/$id/await.round$round.$batch.txt" > /tmp/$id/cli_barrier.round$round.$batch.sh
    ```
-   Spawn the fresh Claude-seat subagent for this batch as its own background Agent call alongside the
-   barrier (it cannot run inside `await_seats`).
+   Spawn the **CLI barrier** as one background `panel-review:panel-review-cli-barrier` Agent
+   (`command=/tmp/<id>/cli_barrier.round$round.$batch.sh`, `done=/tmp/<id>/await.round$round.$batch.txt`,
+   `sentinel=/tmp/<id>/await.round$round.$batch.sentinel`, `workdir=<repo root>`; on its return an
+   `await_seats_rc` that is nonzero or `absent` means the seats did not run this batch — treat those
+   CLI seats as down for the batch and note it in Process notes) and the **fresh Claude seat** as its
+   own background Agent alongside it (it
+   cannot run inside `await_seats`). In the common single-batch case that is one barrier + one Claude
+   Agent = two wakes; an over-budget round adds one barrier Agent per extra batch. Never poll between
+   dispatch and the Agents' wakes (see the long-running-seats rule).
 
    ```bash
    "$SC/sweep" plan "$id" "$round" "$epoch" /tmp/$id/plan.$round.json
@@ -701,6 +741,8 @@ Never return raw seat output, card text, or per-round transcripts.
 - ✅ Cards carry **no** origins and **no** stance tally. Settle only on unanimity among ≥2
   engaged seats. Present every issue, including rejected and unresolved.
 - ✅ Degrade gracefully: one dead seat ≠ aborted review. Run everything from cwd = repo root.
-- ✅ Wait for CLI seats with ONE background `await_seats` barrier per pass (+ one background Agent
-  call for the Claude seat); take **no** turns polling (`date`/`ps`/`cat status.*`) or narrating the
-  wait (see the long-running-seats rule).
+- ✅ Wait for CLI seats through the `panel-review-cli-barrier` **Agent** (which runs `await_seats`),
+  spawned background alongside the Claude-seat Agent — **never** background `await_seats` yourself (a
+  background Bash job does not re-invoke a sub-agent; only a background Agent does). Two Agent wakes
+  per pass; take **no** turns polling (`date`/`ps`/`cat status.*`) or narrating the wait (see the
+  long-running-seats rule).

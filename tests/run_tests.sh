@@ -90,6 +90,64 @@ assert_file_contains "debate template carries the scratch sentinel"     '{{SCRAT
 assert_file_contains "protocol passes SCRATCH to assemble" 'SCRATCH=/tmp/$id/scratch.txt' "$root/skills/panel-review-for-agent/SKILL.md"
 assert_file_contains "protocol snapshots the tracked tree" 'repo_guard" snapshot' "$root/skills/panel-review-for-agent/SKILL.md"
 assert_file_contains "protocol verifies + restores the tree" 'repo_guard" verify' "$root/skills/panel-review-for-agent/SKILL.md"
+
+# --- CLI-seat wait is a background Agent, never a backgrounded Bash job (the stalled-referee fix) ---
+# Root cause it guards: a background Bash job does NOT re-invoke the sub-agent that launched it, so a
+# referee that backgrounded await_seats stalled forever. The wait must go through an Agent.
+spk="$root/skills/panel-review-for-agent/SKILL.md"
+bar="$root/agents/panel-review-cli-barrier.md"
+assert_file_contains "cli-barrier agent exists with the right name" 'name: panel-review-cli-barrier' "$bar"
+assert_file_contains "cli-barrier agent is a non-reviewing wait barrier" 'wait barrier**, not a reviewer' "$bar"
+assert_file_contains "cli-barrier runs await_seats detached in the background" 'run_in_background: true' "$bar"
+assert_file_contains "cli-barrier waits via a bounded foreground loop" 'until [ -f' "$bar"
+# The step-2 wait is a foreground Bash tool call inside a BACKGROUND subagent, so each wait is bounded
+# by TWO timeouts: the Bash tool's 2-min default AND the ~10-min background-subagent stall abort
+# (CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS). The robust design keeps each wait SHORT (under the 2-min
+# default) and loops, rather than one long wait that depends on the model raising the tool `timeout`.
+assert_file_contains "cli-barrier waits in short chunks under the 2-min Bash default" 'timeout 100 bash -c' "$bar"
+assert_file_contains "cli-barrier accounts for the background-subagent stall abort" 'CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS' "$bar"
+# Regression: must NOT reintroduce the fragile long-wait-with-raised-tool-timeout design.
+if grep -Fq '570000' "$bar"; then bad "cli-barrier must not depend on raising the Bash tool timeout"; else ok "cli-barrier does not depend on a raised Bash tool timeout"; fi
+# Match the command FORM ('timeout 540 bash'), not a prose mention of the number, so the doc can
+# still cite `timeout 540` as the anti-pattern it explains against.
+if grep -Fq 'timeout 540 bash' "$bar"; then bad "cli-barrier must not use a >2-min wait the Bash default truncates"; else ok "cli-barrier uses no >2-min blocking wait"; fi
+assert_file_contains "protocol dispatches the cli-barrier Agent" 'panel-review:panel-review-cli-barrier' "$spk"
+assert_file_contains "protocol writes the Round-0 barrier command to a script" 'cli_barrier.round0.sh' "$spk"
+assert_file_contains "protocol explains why background Bash cannot wake a sub-agent" 'background Bash job does not re-invoke a sub-agent' "$spk"
+# Regression guard: the OLD broken instruction (referee backgrounds await_seats itself) must be gone.
+if grep -Fq 'ONE background Bash call' "$spk"; then bad "protocol must not background await_seats as a bash job"; else ok "protocol no longer backgrounds await_seats directly"; fi
+if grep -Eq 'await_seats.*run_in_background' "$spk"; then bad "protocol must not pair await_seats with run_in_background"; else ok "await_seats is not backgrounded by the referee"; fi
+
+# --- The barrier owns await_seats' terminal state via an exit-code SENTINEL (the false-degrade fix) ---
+# Root cause it guards: the barrier used to poll the --done file, which await_seats writes ONLY on a
+# clean exit. A setup/usage error left no done-file, so the barrier polled its whole ~43-min budget
+# and then falsely reported "seats did not finish" (a silent degraded review). It also could not tell
+# a crashed detached job from a slow one, and a late write could land after the referee moved on.
+assert_file_contains "cli-barrier takes a sentinel input path"                'sentinel=<path>' "$bar"
+assert_file_contains "cli-barrier captures await_seats' exit code into the sentinel" 'rc=$?; printf' "$bar"
+assert_file_contains "cli-barrier waits on the sentinel, not the done-file"   'until [ -f "<sentinel>"' "$bar"
+assert_file_contains "cli-barrier reports await_seats_rc so the referee can tell setup-error from clean" 'await_seats_rc=' "$bar"
+assert_file_contains "cli-barrier best-effort reaps a wedged job on budget exhaustion" 'pkill -f' "$bar"
+assert_file_contains "protocol passes the Round-0 sentinel path to the barrier" 'sentinel=/tmp/<id>/await.round0.sentinel' "$spk"
+assert_file_contains "protocol reads await_seats_rc and treats nonzero/absent as CLI seats down" 'await_seats_rc' "$spk"
+
+# --- Packaging: every plugin agent the protocol dispatches must be TRACKED in git ---
+# Root cause it guards: agents/panel-review-cli-barrier.md once existed on disk but was never
+# `git add`ed, so the tracked diff would ship without it and a fresh clone/install could not resolve
+# the first `subagent_type: panel-review:panel-review-cli-barrier` dispatch. `assert_file_contains`
+# checks bytes on disk and would NOT catch that; only git tracking does.
+section "packaging — every plugin agent file is tracked in git"
+for f in "$root"/agents/*.md; do
+  rel="agents/$(basename "$f")"
+  if [ -n "$(git -C "$root" ls-files "$rel")" ]; then ok "$rel is tracked in git"
+  else bad "$rel exists on disk but is NOT tracked in git" "a fresh clone/install would miss it; run: git add $rel"; fi
+done
+# And the inverse: every agent a skill dispatches via subagent_type must have a tracked file.
+for a in $(grep -rhoE 'subagent_type[": ]+panel-review:panel-review-[a-z0-9-]+' "$root/skills" | grep -oE 'panel-review-[a-z0-9-]+' | sort -u); do
+  if [ -n "$(git -C "$root" ls-files "agents/$a.md")" ]; then ok "dispatched agent $a.md is tracked in git"
+  else bad "skill dispatches subagent $a but agents/$a.md is not tracked in git" "the first dispatch in a fresh install would fail"; fi
+done
+
 assert_file_contains "Claude seat exposes read-only tilth tools" 'mcp__tilth__tilth_search' "$root/agents/panel-review-claude-seat.md"
 case "$(grep -F 'tools:' "$root/agents/panel-review-claude-seat.md")" in
   *mcp__tilth__tilth_write*) bad "Claude seat must NOT expose tilth write tool" ;;
@@ -312,6 +370,31 @@ assert_exit "no --seat block -> exit 2" 2 "$?"
 PATH="$await_mockbin:$PATH" HOME="$await_home" "$SC/await_seats" --id await-noraw --tag findings --prompt "$TMP/await.prompt" \
   --seat codex --parsed "$TMP/p" --status "$TMP/s" --done "$TMP/d" >/dev/null 2>&1
 assert_exit "seat missing --raw -> exit 2" 2 "$?"
+# The barrier CANNOT use the done-file as its completion signal: every setup/usage error above exits
+# nonzero and writes NO done-file, so an absent done-file is ambiguous between "still running" and
+# "crashed at startup". This is exactly why the barrier wraps await_seats in an exit-code sentinel.
+if [ -f "$TMP/d" ]; then bad "await_seats wrote a done-file despite a setup error"; else ok "await_seats writes no done-file on a setup error (barrier needs the sentinel)"; fi
+
+section "protocol wording — the barrier's wait signal is the sentinel, never --done"
+# The behavioral invariant above (no done-file on a setup error) is WHY the barrier must wait on the
+# exit-code sentinel, not on --done (a RESULT file that appears only on a clean exit). But the debate
+# protocol is prompt-driven: contradictory prose in the docs the referee/barrier actually read can
+# route execution back to the old done-file wait, which hangs the whole budget on a setup error and
+# then false-degrades the CLI seats. So guard those docs against the old "watches --done" / "--done
+# is the wait signal" wording. A correct line always names the sentinel, so lines that do are
+# excluded (they may still mention --done as a result file).
+wording_docs=(
+  "$root/skills/panel-review-for-agent/SKILL.md"
+  "$root/agents/panel-review-cli-barrier.md"
+  "$root/CLAUDE.md"
+  "$root/scripts/await_seats"
+)
+bad_wording=""
+for f in "${wording_docs[@]}"; do
+  grep -niE 'done is the wait signal' "$f" >/dev/null 2>&1 && bad_wording+=" ${f##*/}(wait-signal)"
+  grep -niE 'watch(e[sd]|ing)?[^.]*--done' "$f" 2>/dev/null | grep -qvi sentinel && bad_wording+=" ${f##*/}(watches-done)"
+done
+if [ -z "$bad_wording" ]; then ok "no protocol doc treats --done as the barrier's wait signal"; else bad "stale --done-as-wait-signal wording present" "$bad_wording"; fi
 
 # ---------------------------------------------------------------------------
 # run_agy invocation contract. agy's `--print` TAKES the prompt as its argument;

@@ -150,12 +150,13 @@ The agent reconstructs all state from `/tmp/<id>/`, runs the loop, and cleans up
 verdict. Run from cwd = repo root.
 
 **Await its single return — do not poke it.** The referee waits for its own slow seats internally
-(one background `await_seats` barrier per pass), so it can legitimately run for many minutes with no
-intermediate output. Do **not** `SendMessage`-resume it, re-dispatch it, or otherwise nudge it on
-seat-completion notifications: every such poke makes the referee re-read its whole (long-context-tier)
-context for nothing — exactly the waste these scripts exist to avoid. Let it run; act only on the
-verdict it returns. (A genuine interruption — the human cancels — is recovered later via
-`panel-review:resume`, not by poking the live agent.)
+(per pass it spawns background helper Agents — the `panel-review-cli-barrier` for the Codex+Gemini
+wait, plus the Claude seat — which wake it when they finish), so it can legitimately run for many
+minutes with no intermediate output. Do **not** `SendMessage`-resume it, re-dispatch it, or otherwise
+nudge it on any background-task notification: every such poke makes the referee re-read its whole
+(long-context-tier) context for nothing — exactly the waste these scripts exist to avoid. Let it run;
+act only on the verdict it returns. (A genuine interruption — the human cancels — is recovered later
+via `panel-review:resume`, not by poking the live agent.)
 
 ## Step 5 — present the verdict (and the low-severity gate)
 

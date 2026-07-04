@@ -70,7 +70,7 @@ chmod -x "$SCRIPTS_DST/_panel_common.sh"
 # silently take over. We already removed the user-level ones above; warn
 # about anything left (re-created since, or a project-level copy in cwd).
 shadow_found=0
-for agent in panel-review-referee panel-review-claude-seat; do
+for agent in panel-review-referee panel-review-claude-seat panel-review-cli-barrier; do
   if [ -f "$AGENTS_DST/$agent.md" ]; then
     echo "WARNING: $AGENTS_DST/$agent.md still exists and will shadow the plugin's $agent agent."
     shadow_found=1
