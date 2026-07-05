@@ -2,7 +2,7 @@
 name: panel-review-referee
 description: Use this agent to run THREE-WAY BLIND peer review (Claude + OpenAI Codex + Google Gemini via the agy CLI). It is the REFEREE — it never reviews the code itself; it dispatches three blind seats, debates them to consensus, and returns only the synthesized verdict. Resumable.
 model: opus
-effort: xhigh
+effort: high
 color: green
 skills:
   - panel-review:panel-review-for-agent
