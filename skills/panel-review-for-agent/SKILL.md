@@ -277,7 +277,7 @@ reviewer-facing fields, so the origins never leak even if adjacent.
    printf '%s\n' ".panel-review/$id/work" > /tmp/$id/scratch.txt
    echo "<one-line scope description>" > /tmp/$id/scope.txt   # or the question text for a question scope
    printf '%s findings\n' "$SC/check_draft" > /tmp/$id/check.findings.txt   # {{CHECK}}: the seat's pre-emit self-validator (abs path + tag)
-   "$SC/assemble" "$PR/blind_pass.tmpl" SCOPE=/tmp/$id/scope.txt INSTRUCTIONS=/tmp/$id/instructions.txt DIFF=/tmp/$id/diff.txt SCRATCH=/tmp/$id/scratch.txt CHECK=/tmp/$id/check.findings.txt > /tmp/$id/round0.prompt
+   "$SC/assemble" "$PR/blind_pass.tmpl" SCOPE=/tmp/$id/scope.txt INSTRUCTIONS=/tmp/$id/instructions.txt DIFF=/tmp/$id/diff.txt SCRATCH=/tmp/$id/scratch.txt CHECK=/tmp/$id/check.findings.txt TILTH=$PR/tilth_guide.txt > /tmp/$id/round0.prompt
    ```
 
 4. **Dispatch all three in parallel — the two CLI seats via the `panel-review-cli-barrier` Agent, the
@@ -459,7 +459,7 @@ For `round = 1, 2, … max-rounds`, while any issue is `open`:
    mkdir -p "$workdir/.panel-review/$id/work"
    [ -f /tmp/$id/scratch.txt ] || printf '%s\n' ".panel-review/$id/work" > /tmp/$id/scratch.txt
    printf '%s stances\n' "$SC/check_draft" > /tmp/$id/check.stances.txt   # {{CHECK}}: pre-emit self-validator for the stances block
-   "$SC/assemble" "$PR/debate.tmpl" CARDS=/tmp/$id/cards.$round.txt INSTRUCTIONS=/tmp/$id/instructions.txt SCRATCH=/tmp/$id/scratch.txt CHECK=/tmp/$id/check.stances.txt > /tmp/$id/debate.$round.prompt
+   "$SC/assemble" "$PR/debate.tmpl" CARDS=/tmp/$id/cards.$round.txt INSTRUCTIONS=/tmp/$id/instructions.txt SCRATCH=/tmp/$id/scratch.txt CHECK=/tmp/$id/check.stances.txt TILTH=$PR/tilth_guide.txt > /tmp/$id/debate.$round.prompt
    # run each seat/batch -> /tmp/$id/raw/round$round.<seat>.<batch>.txt
    ```
    Spawn a **fresh** `panel-review:panel-review-claude-seat` subagent for the Claude seat each round.

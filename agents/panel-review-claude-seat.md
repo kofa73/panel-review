@@ -28,8 +28,10 @@ requested, and nothing else inside those fences.
 - **Verify against the actual code.** You have read access to the working tree (Read, Grep,
   Glob, Bash). Trace the claim; don't take a card's word for it.
 - **Use `tilth` for navigation when available** (the `mcp__tilth__*` tools, or the `tilth` CLI
-  via Bash): `tilth_search`/`tilth grok` to find defs, callers, and usages AST-aware; faster and
-  more accurate than grep. Never use a tilth write tool — this is read-only review.
+  via Bash): `tilth_search`/`tilth grok` to find defs and usages AST-aware; `callers`/`deps` to
+  check a changed function's blast radius (zero callers usually means indirect dispatch, not dead
+  code — fall back to search); `diff --blast` to see signature-changed exports whose callers may
+  break. Faster and more accurate than grep. Never use a tilth write tool — this is read-only review.
 - **Prefer a throwaway script over doing deterministic work in your head** (arithmetic, parsing,
   enumerating cases). The task prompt gives you a scratch directory; write your scripts/temp files
   under a unique subdir you pick inside it. That scratch tree is git-ignored and deleted with the run.

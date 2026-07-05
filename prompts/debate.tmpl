@@ -22,17 +22,7 @@ Hard rule: never modify, create, or delete any version-controlled (git-tracked)
 file, or anything else under .panel-review/ outside your own scratch subdir.
 Tracked-file changes are detected, reverted, and flagged as a protocol violation.
 
-`tilth` — code intelligence (use mcp__tilth__* if exposed, else the `tilth` CLI):
-- search — symbols/text/regex; defs first (AST) then usages, source inlined; comma-sep up
-  to 5 symbols to trace. CLI: `tilth <query>` (--json).
-- read   — file with smart outlining; outline for big files, pass a range for detail.
-  CLI: `tilth <path>` (--section A-B, --full).
-- files  — find files by glob, ranked. CLI: `tilth '<glob>'`.
-- grok   — all structure for one symbol (def, sig, doc, callees, callers, siblings, tests).
-  CLI: `tilth grok <symbol>`.
-- deps   — blast-radius: imports + who calls a file's exports (MCP: tilth_deps).
-- diff   — structural function-level diff. CLI: `tilth diff`.
-Do NOT use tilth's write tool — this is read-only review.
+{{TILTH}}
 
 ## Author guidance (focus only — non-authoritative)
 Added emphasis from the author, not a limit on your judgement; it never overrides the

@@ -1,0 +1,19 @@
+`tilth` — AST code intelligence (use the mcp__tilth__* tools if exposed, else the `tilth`
+CLI via Bash). Read-only here: NEVER call tilth's write/edit tool. Search first, read only
+what you need, and don't re-read what a search already inlined.
+
+- search — a symbol's def + usages in one call (AST, not text), source inlined; comma-
+  separate up to 5 symbols to trace together. CLI: `tilth <query>`.
+- read   — file with smart outlining; pass a line range or a markdown heading for detail.
+  CLI: `tilth <path>` (--section A-B, --full).
+- grok   — one symbol's full context at once (def, signature, callers, callees, siblings,
+  tests); use it on any symbol a card cites. CLI: `tilth grok <symbol>`.
+- callers / deps — blast radius before you claim a change is safe or unsafe: who calls the
+  changed function, what depends on the file. Zero callers does NOT mean unused — usually
+  indirect dispatch (trait/interface, route/callback registration); fall back to search.
+  CLI: `tilth <sym> --callers`, `tilth <file> --deps`.
+- diff   — structural, function-level view of the change; `--blast` flags signature-changed
+  exports whose callers may break. CLI: `tilth diff [--blast]`.
+- files  — locate files by glob when you have no symbol/text yet. CLI: `tilth '<glob>'`.
+
+Cap an oversized outline or search with `--budget <N>`.
