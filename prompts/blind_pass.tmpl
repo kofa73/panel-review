@@ -54,6 +54,17 @@ means review the diff on its own terms.
    REJECTED. If the same bug pattern occurs at several sites (e.g. three call sites passing
    NULL), list each site as its own evidence point — they are separate evidence.
 
+   Prioritize by blast radius: spend effort on failures that are expensive, dangerous, or
+   hard to detect first. Actively probe these high-cost classes (not exhaustive — a checklist
+   to prime the search, not a limit):
+   - auth, permissions, tenant isolation, trust boundaries
+   - data loss, corruption, duplication, irreversible state changes
+   - rollback safety, retries, partial failure, idempotency gaps
+   - race conditions, ordering assumptions, stale state, re-entrancy
+   - empty-state, null, timeout, degraded-dependency behavior
+   - version skew, schema drift, migration hazards, compatibility regressions
+   - observability gaps that would hide a failure or slow recovery
+
 2. DEFENDER LENS: before raising an issue, check whether an existing test covers it, a
    codebase invariant/convention makes it impossible, or it is intentional per a
    comment/commit. If so, do not raise it.
@@ -69,6 +80,12 @@ prose summary. `low`/`style` are for genuine minor defects (a real but small pro
 ## Grounding
 Every finding must be defensible from the provided diff/context and the code you can read.
 Do not invent files, lines, or paths. Express uncertainty in the prose summary, not in fields.
+
+## Calibration
+Prefer one strong finding over several weak ones; do not dilute serious issues with filler.
+Before emitting, re-read each finding and drop it unless it is: adversarial (a defect, not a
+style note or a restatement of correct behavior), tied to a concrete code location, plausible
+under a real failure scenario, and actionable by an engineer fixing it.
 
 ## Output format (STRICT JSON — malformed lines are discarded)
 
