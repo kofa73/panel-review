@@ -98,3 +98,14 @@ Emit ONE fenced block tagged `findings`, JSONL, one candidate issue per line:
 `points` is the evidence FOR the issue (one located fact each). If you find no issues, emit
 an empty `findings` block. After the block, write 2-3 sentences on overall quality and your
 confidence.
+
+## Validate before you emit
+A malformed finding is **silently dropped** downstream — you are NOT re-prompted to fix it, so
+a bad item is a lost finding. Before emitting, write the JSONL you plan to put inside the fence
+to a scratch file and validate it by running the command below with that file path appended:
+
+{{CHECK}}
+
+Exit status 0 means every item is valid and you are safe to emit. A nonzero exit prints which
+items are malformed and why — fix those and re-run until it passes. (An empty draft is fine: it
+just means you found nothing.)

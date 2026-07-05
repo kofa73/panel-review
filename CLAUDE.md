@@ -107,6 +107,11 @@ round limit. Unanimity-or-human: no majority vote, no referee fact-checking insi
 - `run_seat` — dispatch/retry wrapper for the two **CLI** seats (Codex, Gemini): dispatch →
   `parse_block` → one-shot `repair.tmpl` retry on a malformed block; prints the final parse status.
   The Claude seat is a subagent, not a CLI, so the referee drives it directly (never via `run_seat`).
+- `check_draft` — the **seat-facing** pre-emit validator (spliced into the blind/debate prompts as
+  the `{{CHECK}}` sentinel; the referee never calls it). A thin wrapper over `parse_block --diagnose`
+  so there is no second schema to keep in sync — do not re-implement the finding/stance checks in it.
+  It closes `parse_block`'s silent-drop gap (individual malformed lines are discarded, not repaired,
+  unless the *whole* block is unparseable) by letting a seat catch bad items before it emits.
 - `await_seats` — the **barrier** that owns CLI-seat *waiting*. Runs every CLI seat concurrently
   (each via `run_seat`) in ONE job, waits with a per-seat outer timeout, writes per-seat status + a
   combined `--done` summary, exits. It is run by the **`panel-review-cli-barrier` Agent**, not

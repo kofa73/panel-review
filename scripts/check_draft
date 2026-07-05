@@ -1,0 +1,119 @@
+#!/usr/bin/env python3
+# check_draft — SEAT-FACING pre-emit validator. A reviewer seat runs this on the
+# JSONL it is ABOUT to put inside its ```findings / ```new_findings / ```stances
+# fence, BEFORE emitting, so it can fix malformed items while the content is still
+# in context. It shells out to the SAME validator the referee parses with
+# (`parse_block --diagnose`) rather than re-checking the schema itself, so there is
+# no second schema to drift: "valid here" == "kept by the pipeline".
+#
+# Why this exists: parse_block validates per-line and, unless the WHOLE block is
+# unparseable (its exit 5), it merely DISCARDS malformed lines with a stderr note
+# the seat never sees (parse_block still exits 0 as long as one line survived). So
+# a seat that emits 5 findings with 2 malformed silently loses those 2 and no
+# repair fires. This check surfaces the bad items at emission time instead — the
+# only point where the seat still holds the content needed to fix them.
+#
+# Usage:
+#   check_draft <findings|new_findings|stances> [file]
+#     Reads the draft from <file>, or from stdin if <file> is omitted.
+#   The draft may be the RAW JSONL (one JSON object per line) you plan to put
+#   inside the fence, OR an already-fenced ```<tag> block — either is accepted.
+#
+# Exit: 0 = all items valid, safe to emit · 1 = invalid item(s) found (per-item
+# reasons printed; fix them and re-check) · 2 = usage error.
+import sys
+import os
+import re
+import subprocess
+import tempfile
+
+TAGS = ("findings", "new_findings", "stances")
+
+
+def main():
+    args = sys.argv[1:]
+    if args and args[0] in ("-h", "--help"):
+        print("usage: check_draft <findings|new_findings|stances> [file]  "
+              "(reads the draft from stdin if no file is given)")
+        return 0
+    if not args:
+        print("usage: check_draft <findings|new_findings|stances> [file]", file=sys.stderr)
+        return 2
+
+    tag = args[0]
+    if tag not in TAGS:
+        print(f"check_draft: tag must be one of {', '.join(TAGS)}", file=sys.stderr)
+        return 2
+
+    if len(args) > 1:
+        path = args[1]
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                draft = f.read()
+        except OSError as e:
+            print(f"check_draft: cannot read {path}: {e}", file=sys.stderr)
+            return 2
+    else:
+        draft = sys.stdin.read()
+
+    # Wrap bare JSONL in a fence so extract_block (inside parse_block) can find it.
+    # If the draft already carries a code fence (a line starting with ```), pass it
+    # through untouched. A JSON object line begins with '{', so bare JSONL never
+    # trips the fence probe.
+    if re.search(r"(?m)^\s*```", draft):
+        doc = draft
+    else:
+        doc = f"```{tag}\n{draft}\n```\n"
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    parse_block = os.path.join(here, "parse_block")
+
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as tf:
+            tf.write(doc)
+            tmp = tf.name
+        res = subprocess.run(
+            [parse_block, "--diagnose", tag, tmp],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+    finally:
+        if tmp:
+            os.unlink(tmp)
+
+    rc = res.returncode
+    # parse_block --diagnose exit map: 0 = every item valid (or the block is empty)
+    # · 5 = at least one invalid item (per-item reasons on stdout) · 4 = no block
+    # for this tag · 1 = file missing (cannot happen — we just wrote it).
+    if rc == 0:
+        note = res.stderr.strip()
+        if note:
+            # note looks like: parse_block --diagnose 'findings': 5 item(s), 0 invalid
+            summary = note.split("': ", 1)[-1]
+            print(f"OK — {summary}. Safe to emit your ```{tag} block.")
+        else:
+            print(f"OK — empty {tag} block; valid only if you genuinely found nothing.")
+        return 0
+
+    if rc == 4:
+        print(f"check_draft: no ```{tag} block found in the draft (wrong tag, or no "
+              "content).", file=sys.stderr)
+        return 1
+
+    if rc == 5:
+        sys.stdout.write(res.stdout)  # per-item reasons + offending lines
+        sys.stdout.flush()            # keep the footer below the reasons under 2>&1
+        summary = res.stderr.strip().split("': ", 1)[-1] or "invalid item(s) found"
+        print(f"\nFAIL — {summary}. Fix the item(s) above, then re-check before "
+              f"emitting your ```{tag} block.", file=sys.stderr)
+        return 1
+
+    # Unexpected status from parse_block: surface it rather than swallow.
+    sys.stdout.write(res.stdout)
+    sys.stderr.write(res.stderr)
+    print(f"check_draft: unexpected parse_block status {rc}", file=sys.stderr)
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

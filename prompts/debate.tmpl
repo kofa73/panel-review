@@ -71,3 +71,15 @@ card), additionally emit a `new_findings` block in the same `findings` schema as
 `new_findings` entry must be a **defect** (a bug/risk/weakness that warrants a change) — never a
 confirmation that the code is correct or a restatement of intended behavior. If you have no new
 defect to add, omit the `new_findings` block entirely.
+
+## Validate before you emit
+A malformed stance is **silently dropped** downstream — you are NOT re-prompted to fix it, so a
+bad item means your position on that card is lost. Before emitting, write the JSONL you plan to
+put inside the fence to a scratch file and validate it by running the command below with that
+file path appended:
+
+{{CHECK}}
+
+Exit status 0 means every stance is valid and you are safe to emit; a nonzero exit prints which
+items are malformed and why — fix those and re-run until it passes. (For a `new_findings` block,
+run the same command with `new_findings` in place of `stances`.)

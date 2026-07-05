@@ -77,6 +77,7 @@ PR="${CLAUDE_PLUGIN_ROOT}/prompts"
 "$SC/await_seats" --id <id> --tag <tag> --prompt <f> [--seat-timeout S] [--no-repair] --seat <s> --raw <f> --parsed <f> --status <f> [--label L] [ --seat ... ] --done <f>  # BARRIER: run ALL CLI seats concurrently (each via run_seat) in ONE job, write each seat's status + a combined --done summary, exit. You never background this yourself — the panel-review-cli-barrier Agent runs it (see the long-running-seats rule); never poll.
 "$SC/parse_block" <tag> <raw> [label]        # ```<tag> block -> validated JSONL; exit 4 = NO block (down), 5 = malformed (repair once)
 "$SC/parse_block" --diagnose <tag> <raw>     # WHY each item was rejected (reason + offending line); feeds repair.tmpl on exit 5
+"$SC/check_draft" <tag> [file]               # SEAT-FACING pre-emit validator (thin wrapper over parse_block --diagnose); spliced into the seat prompt as {{CHECK}}, not called by the referee
 "$SC/birth_index" --available "<seats>" --configured "<seats>" < issues.json   # clustered Round-0 issues -> full index.json (birth state/flags/coverage)
 "$SC/index"   {get|put|issue|bump|state|flag|gate-status|commit-sweep} <id> ...   # ONLY writer of index.json
 "$SC/project_card" --id <id> --workdir <dir> [--index-rev N] < issue.json   # one issue record -> its card
@@ -275,7 +276,8 @@ reviewer-facing fields, so the origins never leak even if adjacent.
    mkdir -p "$workdir/.panel-review/$id/work"
    printf '%s\n' ".panel-review/$id/work" > /tmp/$id/scratch.txt
    echo "<one-line scope description>" > /tmp/$id/scope.txt   # or the question text for a question scope
-   "$SC/assemble" "$PR/blind_pass.tmpl" SCOPE=/tmp/$id/scope.txt INSTRUCTIONS=/tmp/$id/instructions.txt DIFF=/tmp/$id/diff.txt SCRATCH=/tmp/$id/scratch.txt > /tmp/$id/round0.prompt
+   printf '%s findings\n' "$SC/check_draft" > /tmp/$id/check.findings.txt   # {{CHECK}}: the seat's pre-emit self-validator (abs path + tag)
+   "$SC/assemble" "$PR/blind_pass.tmpl" SCOPE=/tmp/$id/scope.txt INSTRUCTIONS=/tmp/$id/instructions.txt DIFF=/tmp/$id/diff.txt SCRATCH=/tmp/$id/scratch.txt CHECK=/tmp/$id/check.findings.txt > /tmp/$id/round0.prompt
    ```
 
 4. **Dispatch all three in parallel — the two CLI seats via the `panel-review-cli-barrier` Agent, the
@@ -456,7 +458,8 @@ For `round = 1, 2, … max-rounds`, while any issue is `open`:
    # dir + its sentinel file (Round 0 step 3) — recreate both if a resume skipped Round 0.
    mkdir -p "$workdir/.panel-review/$id/work"
    [ -f /tmp/$id/scratch.txt ] || printf '%s\n' ".panel-review/$id/work" > /tmp/$id/scratch.txt
-   "$SC/assemble" "$PR/debate.tmpl" CARDS=/tmp/$id/cards.$round.txt INSTRUCTIONS=/tmp/$id/instructions.txt SCRATCH=/tmp/$id/scratch.txt > /tmp/$id/debate.$round.prompt
+   printf '%s stances\n' "$SC/check_draft" > /tmp/$id/check.stances.txt   # {{CHECK}}: pre-emit self-validator for the stances block
+   "$SC/assemble" "$PR/debate.tmpl" CARDS=/tmp/$id/cards.$round.txt INSTRUCTIONS=/tmp/$id/instructions.txt SCRATCH=/tmp/$id/scratch.txt CHECK=/tmp/$id/check.stances.txt > /tmp/$id/debate.$round.prompt
    # run each seat/batch -> /tmp/$id/raw/round$round.<seat>.<batch>.txt
    ```
    Spawn a **fresh** `panel-review:panel-review-claude-seat` subagent for the Claude seat each round.
