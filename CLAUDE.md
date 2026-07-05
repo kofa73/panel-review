@@ -166,3 +166,7 @@ same workdir are unsupported by design.
 - Per user instructions (`~/.claude/CLAUDE.md`): do not commit or push unless explicitly asked.
 </content>
 </invoke>
+
+# Important reference material
+Claude Code documentation: ~/github-repos-for-agents/claude-code-docs/
+Agent Skills standard: ~/github-repos-for-agents/agentskills/

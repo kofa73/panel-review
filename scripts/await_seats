@@ -69,6 +69,11 @@ here="$(cd "$(dirname "$0")" && pwd)"
 
 DEFAULT_SEAT_TIMEOUT=2400   # seconds; generous backstop above run_agy's ~34m worst case
 
+USAGE="usage: await_seats --id <id> --tag <findings|new_findings|stances> --prompt <f> [--seat-timeout <secs>] [--no-repair] --seat <codex|gemini> --raw <f> --parsed <f> --status <f> [--label <l>] [--seat ...] --done <f>  (see header comment for the full contract)"
+# USAGE reachable WITHOUT a valid ID: panel_require_id "" aborts with "invalid run
+# id", so answer help before the flag parse touches it (issues-2026-07-04 #1).
+case "${1-}" in -h|--help|help) echo "$USAGE"; exit 0 ;; esac
+
 id=""; tag=""; prompt=""; no_repair=0; done_file=""
 seat_timeout="${PANEL_REVIEW_SEAT_TIMEOUT:-$DEFAULT_SEAT_TIMEOUT}"
 

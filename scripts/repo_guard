@@ -29,7 +29,15 @@ here="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=_panel_common.sh
 . "$here/_panel_common.sh"
 
+USAGE="usage: repo_guard {snapshot|verify} --id <id> --workdir <dir> [--restore]"
 cmd="${1-}"; shift || true
+# USAGE must be reachable WITHOUT a valid ID: panel_require_id "" aborts with
+# "invalid run id", so help/unknown-verb must be answered before it (issues-2026-07-04 #1).
+case "$cmd" in
+  -h|--help|help) echo "$USAGE"; exit 0 ;;
+  snapshot|verify) : ;;
+  *) echo "$USAGE" >&2; exit 2 ;;
+esac
 id=""; workdir=""; restore=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -127,7 +135,8 @@ case "$cmd" in
     ;;
 
   *)
-    echo "usage: repo_guard {snapshot|verify} --id <id> --workdir <dir> [--restore]" >&2
+    # Unreachable: cmd was validated to snapshot|verify above. Defensive.
+    echo "$USAGE" >&2
     exit 2
     ;;
 esac

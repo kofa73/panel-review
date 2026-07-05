@@ -105,6 +105,16 @@ class TestSweep(unittest.TestCase):
         self.write_json(different, {"batches": [{"seat": "codex", "batch": "b1", "expected_ids": ["i1"]}]})
         self.assertEqual(self.run_sweep("plan", self.run_id, "1", "0", different).returncode, 1)
 
+    def test_usage_reachable_without_valid_id(self):
+        # Regression for issues-2026-07-04 #1: USAGE must be reachable WITHOUT a run
+        # id. If panel_require_id ran before dispatch, `sweep`/`sweep -h`/unknown verb
+        # died on "invalid run id: ''" and the interface was undiscoverable.
+        for args, code in [((), 2), (("-h",), 0), (("--help",), 0), (("bogus",), 2)]:
+            result = self.run_sweep(*args)
+            self.assertEqual(result.returncode, code, msg=f"sweep {args}")
+            self.assertIn("usage: sweep", result.stdout + result.stderr, msg=f"sweep {args}")
+            self.assertNotIn("invalid run id", result.stderr, msg=f"sweep {args}")
+
 
 if __name__ == "__main__":
     unittest.main()

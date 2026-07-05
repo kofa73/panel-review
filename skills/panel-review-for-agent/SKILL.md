@@ -53,6 +53,12 @@ All mechanics live in `scripts/` under the `panel-review` skill dir; prompt temp
 retype a template.** The scripts own flag pinning, atomic writes, the index math, and the
 byte-exact parsing.
 
+**To confirm a wrapper's interface, run it — don't read its source.** The id-gated wrappers
+(`sweep`, `index`, `repo_guard`, `await_seats`) print their usage on `-h`/`--help`, and `sweep`/
+`index` also print it (exit 2) for a missing or unknown subcommand — *without* needing a valid run
+id. The one-line signatures below plus the per-verb call sites in the flow are the authoritative
+reference; grepping a script for its flags wastes a full source-read into your context.
+
 ```bash
 # CLAUDE_PLUGIN_ROOT is substituted into this text at skill-load — it is NOT a
 # shell env var (it's empty in the shell). Keep the literals verbatim; don't
@@ -160,6 +166,13 @@ A "full panel" = every seat `preflight` reported available (either peer may be a
   per-seat JSON for the open issues — not the whole accumulated card set or every round's raw. Let the
   scripts (`decide_round`, `sweep`, `index`) do the bulk processing on disk and hand you back only what
   needs judgment.
+- **Don't hand-write `jq` over internal state files** (`stances.*`, `sweeps/*`, `index.json`) to
+  explain an anomaly. Their shapes are subtle — `stances.<round>.json` is **JSONL** (one object per
+  line, *not* a JSON array), the stance-object field is `id` (not `issue_id`), and applying `.[]` to
+  it throws `Cannot index string with string`. Use the sanctioned surfaces instead: `index get`/`index
+  issue`/`index gate-status` for state, `inspect_run` for a run overview, and the human-facing
+  `audit/round-<N>.md` trail for what changed each round. If you *must* touch a file directly, use the
+  schemas below — don't guess field names.
 
 Each issue record in the index:
 
@@ -180,6 +193,19 @@ A **point**: `{"location":"file:line"|["file:line",...]|"analysis","assertion":"
   settles while any seat was down, it stays false **permanently** and is labelled "not fully vetted".
 - `detail_contested` → existence accepted but a detail (severity/claim/location) never converged.
 - `card_rev`/`rounds_debated` are bumped by the `index`/`sweep` scripts — never hand-edit them.
+
+**Internal file schemas** (for the rare direct inspection the bullets above allow):
+
+- `index.json` — a JSON **object**: `{"issues":[<issue record above>...],"committed_rounds":[<int>...],
+  "round":<int>,"run_epoch":<int>}`. Only `index`/`sweep` write it.
+- `stances.<round>.json` — **JSONL**, one stance object per line (concatenated from each seat's
+  `*.stances.json` by `find … -exec cat`), produced by `parse_block stances`. Per line:
+  ```json
+  {"id":"i3","stance":"support|support_with_revision|reject","_source":"codex","fid":"codex-1","revision":{"severity":"…","category":"…","claim":"…"},"evidence":<point>,"new_evidence":<point>}
+  ```
+  `id`, `stance`, `_source`, `fid` are always present; `revision`/`evidence`/`new_evidence` are
+  optional. It is a stream of objects, **not** an array — read it line-by-line (`while read` /
+  `[json.loads(l) for l in f]`), the way `decide_round` does; `jq '.[]'` over it is wrong.
 
 **Origins are yours alone.** Keep origin seats, Round-0 agreement count, original raw wording, and
 per-round stances in `/tmp/<id>/origins/` (write them with any atomic means, e.g. `index`-style temp

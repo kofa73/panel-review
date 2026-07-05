@@ -346,8 +346,21 @@ def mutation_failure():
     return 1
 
 
+USAGE = "usage: index {get|put|issue|bump|state|flag|gate-status|commit-sweep|reopen} <ID> ..."
+KNOWN_CMDS = {"get", "issue", "gate-status", "put", "bump", "state", "flag", "commit-sweep", "reopen"}
+
+
 def main(argv):
     cmd = argv[1] if len(argv) > 1 else ""
+    # USAGE must be reachable WITHOUT a valid ID: panel_require_id("") aborts with
+    # "invalid run id: ''", so if it ran first, `index`/`index -h`/an unknown verb
+    # could never surface the interface (issues-2026-07-04 #1). Help/unknown first.
+    if cmd in {"-h", "--help", "help"}:
+        print(USAGE)
+        return 0
+    if cmd not in KNOWN_CMDS:
+        print(USAGE, file=sys.stderr)
+        return 2
     run_id = argv[2] if len(argv) > 2 else ""
     panel_require_id(run_id)
     path = f"/tmp/{run_id}/index.json"
@@ -374,7 +387,9 @@ def main(argv):
 
     mutations = {"put", "bump", "state", "flag", "commit-sweep", "reopen"}
     if cmd not in mutations:
-        print("usage: index {get|put|issue|bump|state|flag|gate-status|commit-sweep|reopen} <ID> ...", file=sys.stderr)
+        # Reached only for the read verbs handled above; defensive guard against
+        # the dispatch chain and KNOWN_CMDS/mutations sets drifting out of sync.
+        print(USAGE, file=sys.stderr)
         return 2
     os.makedirs(f"/tmp/{run_id}", exist_ok=True)
     with open(f"/tmp/{run_id}/.index.lock", "a+b") as lock:

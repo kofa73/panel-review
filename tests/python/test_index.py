@@ -184,6 +184,17 @@ class IndexTest(unittest.TestCase):
         self.assertEqual((updated["round"], updated["run_epoch"], updated["committed_rounds"]), (0, 3, []))
         self.assertEqual((item["state"], item["rounds_debated"], item["peer_reviewed"], item["fully_vetted"], item["detail_contested"], item["card_rev"]), ("open", 0, False, False, False, 8))
 
+    def test_usage_reachable_without_valid_id(self):
+        # Regression for issues-2026-07-04 #1: USAGE must reach the caller WITHOUT a
+        # valid run id (and without an existing index) — before panel_require_id and
+        # the "no index for <id>" check. An unknown verb must not report either.
+        for args, code in [((), 2), (("-h",), 0), (("--help",), 0), (("bogus",), 2)]:
+            result = self.run_index(*args)
+            self.assertEqual(result.returncode, code, msg=f"index {args}")
+            self.assertIn("usage: index", result.stdout + result.stderr, msg=f"index {args}")
+            self.assertNotIn("invalid run id", result.stderr, msg=f"index {args}")
+            self.assertNotIn("no index for", result.stderr, msg=f"index {args}")
+
 
 if __name__ == "__main__":
     unittest.main()

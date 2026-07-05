@@ -339,8 +339,21 @@ def cmd_commit(sd, idx, run_id, round_text, epoch):
     return 0
 
 
+KNOWN_CMDS = {"begin", "record", "plan", "ingest-batch", "drop-seat",
+              "resume-plan", "has", "done", "commit"}
+
+
 def main(argv):
     cmd = argv[1] if len(argv) > 1 else ""
+    # USAGE must be reachable WITHOUT a valid ID. panel_require_id("") aborts with
+    # "invalid run id: ''", so if it ran first, `sweep`, `sweep -h`, or any unknown
+    # verb could never print the interface — the referee's only recourse was to grep
+    # the source (issues-2026-07-04 #1). Dispatch help/unknown BEFORE requiring an ID.
+    if cmd in {"-h", "--help", "help"}:
+        print(USAGE)
+        return 0
+    if cmd not in KNOWN_CMDS:
+        return fail(USAGE, 2)
     run_id = argv[2] if len(argv) > 2 else ""
     panel_require_id(run_id)
     round_text = argv[3] if len(argv) > 3 else ""

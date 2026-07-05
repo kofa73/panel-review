@@ -174,6 +174,11 @@ rg="$TMP/guard-repo"; mkdir -p "$rg"
   git -c user.name=test -c user.email=test@example.invalid commit -qm init
 )
 gid="$PREFIX-guard"; rm -rf "/tmp/$gid"
+# issues-2026-07-04 #1: help/unknown verb reach usage WITHOUT a valid id.
+"$SC/repo_guard" -h > "$TMP/rg.help" 2>&1; assert_exit "repo_guard -h -> exit 0" 0 "$?"
+assert_file_contains "repo_guard -h prints usage" 'usage: repo_guard' "$TMP/rg.help"
+"$SC/repo_guard" bogus > "$TMP/rg.bad" 2>&1; assert_exit "repo_guard unknown verb -> exit 2" 2 "$?"
+grep -Fq 'invalid run id' "$TMP/rg.bad" && bad "repo_guard unknown verb leaked invalid-run-id" || ok "repo_guard unknown verb reaches usage before the id check"
 "$SC/repo_guard" snapshot --id "$gid" --workdir "$rg" >/dev/null 2>&1; assert_exit "snapshot clean tree -> 0" 0 "$?"
 "$SC/repo_guard" verify --id "$gid" --workdir "$rg" > "$TMP/guard.v1" 2>/dev/null; assert_exit "verify clean -> 0" 0 "$?"
 assert_eq "clean verify emits no drift" '' "$(cat "$TMP/guard.v1")"
@@ -361,6 +366,10 @@ assert_eq "fast codex still status 0"   '0'   "$(cat "$TMP/await.st.codex.to")"
 if [ "$el" -lt 15 ]; then ok "barrier returns near the timeout (~${el}s), not the 30s hang"; else bad "barrier waited too long (${el}s)"; fi
 
 section "await_seats — usage guards"
+# issues-2026-07-04 #1: -h prints usage WITHOUT a valid id (before panel_require_id).
+"$SC/await_seats" -h > "$TMP/await.help" 2>&1; assert_exit "await_seats -h -> exit 0" 0 "$?"
+assert_file_contains "await_seats -h prints usage" 'usage: await_seats' "$TMP/await.help"
+grep -Fq 'invalid run id' "$TMP/await.help" && bad "await_seats -h leaked invalid-run-id" || ok "await_seats -h reaches usage before the id check"
 PATH="$await_mockbin:$PATH" HOME="$await_home" "$SC/await_seats" --id 'bad/id' --tag findings --prompt "$TMP/await.prompt" \
   --seat codex --raw "$TMP/r" --parsed "$TMP/p" --status "$TMP/s" --done "$TMP/d" >/dev/null 2>&1
 assert_exit "invalid id -> exit 2" 2 "$?"
