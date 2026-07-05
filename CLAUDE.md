@@ -7,18 +7,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 `panel-review` is a **Claude Code plugin** (not an app) that runs a three-way **blind** code/design
 review: Claude, OpenAI Codex (GPT, via the `codex` CLI), and Google Gemini (via the `agy` CLI) each
 review the same scope independently, then re-argue each issue until they agree or hand it to the
-human. There is no compiled artifact — the deliverable is the plugin tree itself (bash wrappers,
-Markdown skills/agents, prompt templates), installed into the user's Claude config dir.
+human. There is no compiled artifact — the deliverable is the plugin tree itself (bash + Python
+wrappers, Markdown skills/agents, prompt templates), installed into the user's Claude config dir.
 
 `README.md` is the authoritative spec. When changing behavior, keep README.md in sync — it documents
 contracts that future readers and the referee protocol depend on.
 
 ## Install / "build" / run
 
-There is no build or lint framework. The scripts are bash; the skills/agents are Markdown. There
-**is** a regression suite: `./tests/run_tests.sh` (plain bash + `jq`, self-contained fixtures under
-`tests/fixtures/`) — run it after changing `parse_block`, `decide_round`, `merge_payload`, `index`'s
-`commit-sweep` validator, or the SKILL debate loop.
+There is no build or lint framework. The scripts are a mix of **bash and Python** (the debate-core
+scripts — `index`, `decide_round`, `decide_degraded_round`, `merge_payload`, `parse_block`, `sweep`
+— are Python; the rest are bash); the skills/agents are Markdown. `python3`, `jq` and `git` are all
+required dependencies. There **is** a regression suite: `./tests/run_tests.sh` (bash asserts for the
+still-bash scripts + protocol/template contracts, plus the Python `unittest` suite under
+`tests/python/` for the migrated scripts; self-contained fixtures under `tests/fixtures/`) — run it
+after changing `parse_block`, `decide_round`, `merge_payload`, `sweep`, `index`'s `commit-sweep`
+validator, or the SKILL debate loop.
 
 - **Install (the only "build" step):** `./install.sh` copies the whole tree into `~/.claude/skills/panel-review`
   (override target with `CLAUDE_DIR=/path ./install.sh`). It removes the old pre-plugin layout, sets
@@ -32,12 +36,13 @@ There is no build or lint framework. The scripts are bash; the skills/agents are
 - **Smoke-testing a script change:** run the wrapper directly, e.g.
   `scripts/preflight`, `scripts/resolve_diff <scope>`, `scripts/diff_hash < file`,
   `scripts/inspect_run --id <ID> --workdir "$PWD"`. They are standalone and require `jq` + `git`.
-- **Regression tests:** `./tests/run_tests.sh` (`VERBOSE=1` to list each PASS). Covers the debate
-  pipeline (`parse_block` incl. `--diagnose`, `decide_round` through real `commit-sweep`,
-  `merge_payload`, the empty-stances guard). Mints throwaway `/tmp/pr-test-*` ids and cleans up.
+- **Regression tests:** `./tests/run_tests.sh` (`VERBOSE=1` to list each PASS) runs the bash asserts
+  then the Python `unittest` suite. Covers the debate pipeline (`parse_block` incl. `--diagnose`,
+  `decide_round`/`decide_degraded_round` through real `commit-sweep`, `merge_payload`, `sweep`,
+  `index`, the empty-stances guard). Mints throwaway `/tmp/pr-test-*` ids and cleans up. Run a single
+  Python module directly with e.g. `python3 -m unittest tests.python.test_index -v` from the repo root.
 
-There is no single-test command because there are no automated tests; verify by exercising the
-scripts and by running an actual review.
+Beyond the suite, verify by exercising the scripts and by running an actual review.
 
 ## Architecture
 
@@ -61,7 +66,8 @@ Four participants, strict role separation:
   own a concern"). It reviews nothing; it only starts the seats and waits.
 - **Wrapper scripts** (`scripts/`) — the referee never hand-rolls flags, writes, index math, or
   parsing; it calls these so operations are byte-exact. Prompt templates are in `prompts/`
-  (`blind_pass.tmpl`, `debate.tmpl`, `repair.tmpl`); the Codex profile default is `assets/default-panel-review.config.toml`.
+  (`blind_pass.tmpl`, `debate.tmpl`, `repair.tmpl`) and are filled by `assemble` (whole-line literal
+  substitution, so diff/code content is never mangled); the Codex profile default is `assets/default-panel-review.config.toml`.
 
 **Issue lifecycle** (see README "How an issue moves"): each seat takes a `support` /
 `support_with_revision` / `reject` **stance**; an issue is `open` → `accepted` / `rejected` when all
@@ -120,12 +126,23 @@ round limit. Unanimity-or-human: no majority vote, no referee fact-checking insi
 - `resolve_instructions` — resolves `manifest.instructions` for the deterministic verbatim/none
   cases; returns the compose sentinel (exit 3) for `auto` (the only case the referee composes).
 - `resolve_diff` — the single place that turns a scope token into diff text; `diff_hash` hashes it.
+- `assemble` — the **only** builder of a reviewer prompt: maps each `{{KEY}}` sentinel line in a
+  template to a file's bytes verbatim (whole-line, literal). `extract_block` is its inverse — pulls
+  one fenced ` ```<tag> ` block out of a seat's raw output byte-exactly (`--present` distinguishes an
+  empty block from a missing one). Never re-implement the fence scan or substitution inline.
+- `reopen` — engine behind `panel-review:continue`: revives a **finished** run's leftover
+  (`unresolved`/`contested`) issues for another debate cycle via `index reopen` (bumps `run_epoch`,
+  clears `committed_rounds`) then clears `/tmp/<ID>/sweeps/`. Counterpart to `init_run`.
+- `write_card` — thin atomic-write CLI over `panel_atomic_write` for a single card (used where
+  `project_card`/`regen_cards` don't apply). `write_verdict_artifact` — writes the durable verdict to
+  the `/tmp/<ID>.md` sibling (best-effort; its failure must not block returning the verdict).
 - `init_run` / `resume_check` / `cleanup` / `discard` / `inspect_run` / `set_limits` — run lifecycle
   and the resume/diverged/stale classification. `PANEL_REVIEW_KEEP_TMP=true` makes `cleanup`/`discard`
   keep `/tmp/<id>/` (diagnostics) while still removing the workspace marker/cards/git-exclude.
-- `_panel_common.sh` — sourced (not executable) shared helpers: `panel_valid_id` (ID validation
-  guarding `rm -rf` paths), `panel_atomic_write` (temp + fsync + rename, `.bak` rotation), git-exclude
-  helpers.
+- `_panel_common.sh` (bash) / `panel_common.py` (Python) — the two parallel shared-helper libraries,
+  one per language, kept in sync: `panel_valid_id`/`panel_require_id` (ID validation guarding
+  `rm -rf` paths), `panel_atomic_write` (temp + fsync + rename, `.bak` rotation), git-exclude helpers.
+  A migrated (Python) script imports `panel_common.py`; a bash script sources `_panel_common.sh`.
 
 ### Persistence model
 
@@ -159,8 +176,9 @@ same workdir are unsupported by design.
 - `${CLAUDE_PLUGIN_ROOT}` in SKILL.md files is substituted at skill-load time; it is **not** a
   runtime shell env var (it is empty in the shell). Keep the literal verbatim — don't read it at
   runtime. Scripts find their own dir via `here="$(cd "$(dirname "$0")" && pwd)"`.
-- All scripts use `set -euo pipefail` and validate run IDs through `panel_require_id` before touching
-  any filesystem path. Never pipe a command that can fail into one that succeeds on empty input (the
+- Bash scripts use `set -euo pipefail`; both bash and Python scripts validate run IDs through
+  `panel_require_id` (from their respective common lib) before touching any filesystem path. Never
+  pipe a command that can fail into one that succeeds on empty input (the
   README/skills call this out repeatedly, e.g. `resolve_diff | diff_hash` — resolve to a file and
   check the exit code separately).
 - Per user instructions (`~/.claude/CLAUDE.md`): do not commit or push unless explicitly asked.

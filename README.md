@@ -341,9 +341,12 @@ malformed block, using its own prior output plus `parse_block --diagnose` output
 | `inspect_run` | Pure, read-only per-run inspector for `panel-review:status` — never repairs, never writes |
 | `discard` | The fault-tolerant traversal behind `panel-review:discard` — removes every session for the workdir |
 | `set_limits` | Writes a `--issue-rounds`/`--max-rounds` override back into a run's manifest, for `resume`/`continue` |
+| `reopen` | The engine behind `panel-review:continue` — revives a **finished** run's `unresolved`/`contested` leftovers for another debate cycle: `index reopen` bumps `run_epoch` and clears `committed_rounds`, then `/tmp/<ID>/sweeps/` is cleared so `resume` starts a clean debate at round 1. Counterpart to `init_run` |
 | `index` | The **only** writer of the canonical issue index (`/tmp/<id>/index.json`) — state, flags, private coverage, counters, `gate-status`, and the idempotent `commit-sweep` that applies a whole debate round atomically (and emits that round's human-readable `audit/round-<N>.md` trail as a side effect, best-effort) |
 | `project_card` / `regen_cards` | Render issue records → blind cards (no origins, no tally); rebuild all cards from the index on resume |
+| `write_card` | Atomic single-card write (temp + fsync + rename, `.bak` rotation) over `panel_atomic_write`, for the card writes `project_card`/`regen_cards` don't own |
 | `sweep` | Checkpointed debate sweeps — owns batch plans, parse/ID validation, checkpoint retention, dropped-seat cleanup, and resume plans; counters advance **only** on a committed sweep |
+| `write_verdict_artifact` | Write the durable verdict to the `/tmp/<ID>.md` sibling of `/tmp/<ID>/` (outside it, so `cleanup`/`discard` never delete it); best-effort — its failure must not block returning the verdict to the user |
 
 ---
 
