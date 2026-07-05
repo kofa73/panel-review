@@ -79,6 +79,27 @@ that guard plus the disposable container the panel runs in — not by per-seat s
 
 ---
 
+## Installing
+
+Two independent ways to install, pick one:
+
+- **`./install.sh`** (script-based). Copies `.claude-plugin/`, `skills/`, `agents/`, `scripts/`,
+  `prompts/`, `assets/` into `~/.claude/skills/panel-review` as a skills-directory plugin (override
+  target with `CLAUDE_DIR=/path ./install.sh`). Removes the old pre-plugin layout first. Run
+  `/reload-plugins` (or restart Claude Code) afterward.
+- **`/plugin marketplace add` + `/plugin install`** (Claude Code's plugin manager). This repo's
+  `.claude-plugin/marketplace.json` lists itself as a plugin whose `source` is `.` (the repo root),
+  so it doubles as its own local marketplace — no separate marketplace repo needed:
+
+      /plugin marketplace add /path/to/panel-review
+      /plugin install panel-review@panel-review
+
+  Claude Code copies the plugin into its own versioned cache (`~/.claude/plugins/cache`), separate
+  from `install.sh`'s target. `/plugin marketplace update panel-review` refreshes it after you pull
+  new commits.
+
+---
+
 ## Using it
 
 `panel-review` is a **plugin** with five explicit subcommands — each has one job, one
