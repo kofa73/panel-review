@@ -69,7 +69,10 @@ case "$pf" in *"WARNING: run 'codex login'"*) bad "logged-in Codex does not warn
 assert_eq "preflight calls codex login status" 'login status' "$(cat "$TMP/codex.log")"
 
 section "protocol and template contracts"
-assert_file_contains "template exposes category revision" '"category":"<opt>"' "$root/prompts/debate.tmpl"
+# The emit schema is single-sourced in prompts/schema/ (Concern E): the category
+# revision field now lives in the stances fragment, not inline in debate.tmpl.
+assert_file_contains "stances schema fragment exposes category revision" '"category"' "$root/prompts/schema/stances.txt"
+assert_file_contains "debate template splices the stances schema" '{{SCHEMA_STANCES}}' "$root/prompts/debate.tmpl"
 assert_file_contains "template describes selective rationale promotion" 'plus the `rationale` from a `reject`' "$root/prompts/debate.tmpl"
 assert_file_contains "protocol uses degraded decision script" 'decide_degraded_round' "$root/skills/panel-review-for-agent/SKILL.md"
 retained_line="$(grep -nF 'Build the retained stance input' "$root/skills/panel-review-for-agent/SKILL.md" | head -1 | cut -d: -f1)"
@@ -84,12 +87,73 @@ assert_file_contains "protocol delegates dropped-seat cleanup" 'sweep" drop-seat
 assert_file_contains "protocol reapplies the low-only gate" 'Low-severity stop gate (after each committed round)' "$root/skills/panel-review-for-agent/SKILL.md"
 assert_file_contains "README uses general constrained-seat wording" 'any seat running in a constrained/sandboxed workspace' "$root/README.md"
 assert_file_contains "README warns to run in an isolated environment (broad seat permissions)" 'isolated environment (Docker' "$root/README.md"
-assert_file_contains "CLAUDE.md uses general constrained-seat wording" 'constrained/sandboxed workspace' "$root/CLAUDE.md"
 assert_file_contains "blind_pass template carries the scratch sentinel" '{{SCRATCH}}' "$root/prompts/blind_pass.tmpl"
 assert_file_contains "debate template carries the scratch sentinel"     '{{SCRATCH}}' "$root/prompts/debate.tmpl"
 assert_file_contains "protocol passes SCRATCH to assemble" 'SCRATCH=/tmp/$id/scratch.txt' "$root/skills/panel-review-for-agent/SKILL.md"
 assert_file_contains "protocol snapshots the tracked tree" 'repo_guard" snapshot' "$root/skills/panel-review-for-agent/SKILL.md"
 assert_file_contains "protocol verifies + restores the tree" 'repo_guard" verify' "$root/skills/panel-review-for-agent/SKILL.md"
+
+# --- blind-pass robustness (design-notes/blind-pass-robustness.md) ---------------
+# Concern A: the diff body is EXTERNALIZED — blind_pass.tmpl references a file, it no
+# longer inlines the {{DIFF}} body, and the protocol builds/passes {{DIFFINFO}}.
+if grep -Fq -- '{{DIFF}}' "$root/prompts/blind_pass.tmpl"; then
+  bad "blind_pass no longer inlines the diff body" "still carries the {{DIFF}} sentinel"
+else
+  ok "blind_pass no longer inlines the diff body"
+fi
+assert_file_contains "blind_pass carries a diff REFERENCE sentinel" '{{DIFFINFO}}' "$root/prompts/blind_pass.tmpl"
+assert_file_contains "protocol builds the diff_info reference" 'diff_info.txt' "$root/skills/panel-review-for-agent/SKILL.md"
+assert_file_contains "protocol passes DIFFINFO to assemble" 'DIFFINFO=/tmp/$id/diff_info.txt' "$root/skills/panel-review-for-agent/SKILL.md"
+if grep -Fq -- 'DIFF=/tmp/$id/diff.txt' "$root/skills/panel-review-for-agent/SKILL.md"; then
+  bad "protocol drops the inline DIFF= assemble arg" "still passes DIFF=/tmp/\$id/diff.txt"
+else
+  ok "protocol drops the inline DIFF= assemble arg"
+fi
+# Concern B: absolute anchors — WORKDIR sentinel in both templates, absolute scratch,
+# an explicit agy tool-cwd directive, and absolute card paths in debate.
+assert_file_contains "blind_pass carries the review-root anchor" '{{WORKDIR}}' "$root/prompts/blind_pass.tmpl"
+assert_file_contains "debate carries the review-root anchor"     '{{WORKDIR}}' "$root/prompts/debate.tmpl"
+assert_file_contains "blind_pass directs agy to set the tool cwd" 'working-directory / `cwd` parameter' "$root/prompts/blind_pass.tmpl"
+assert_file_contains "debate directs agy to set the tool cwd"     'working-directory / `cwd` parameter' "$root/prompts/debate.tmpl"
+assert_file_contains "protocol writes an ABSOLUTE scratch anchor" '"$workdir/.panel-review/$id/work" > /tmp/$id/scratch.txt' "$root/skills/panel-review-for-agent/SKILL.md"
+assert_file_contains "protocol writes the review-root file" 'workdir.txt' "$root/skills/panel-review-for-agent/SKILL.md"
+assert_file_contains "protocol collects ABSOLUTE card paths" '<workdir>/.panel-review/<id>/issue-<oid>.md' "$root/skills/panel-review-for-agent/SKILL.md"
+# Concern C: the output contract is hoisted ABOVE the Files/Diff section in blind_pass.
+of_line="$(grep -nF '## Output format' "$root/prompts/blind_pass.tmpl" | head -1 | cut -d: -f1)"
+fd_line="$(grep -nF '## Files / Diff' "$root/prompts/blind_pass.tmpl" | head -1 | cut -d: -f1)"
+if [ -n "$of_line" ] && [ -n "$fd_line" ] && [ "$of_line" -lt "$fd_line" ]; then
+  ok "blind_pass hoists the output contract above the diff"
+else
+  bad "blind_pass output-contract ordering" "Output format line=$of_line Files/Diff line=$fd_line"
+fi
+# Concern E: single-sourced schema — sentinels in the templates, fragments exist and
+# VALIDATE through parse_block (parser-behavior drift check, not string equality).
+assert_file_contains "blind_pass splices the findings schema" '{{SCHEMA_FINDINGS}}' "$root/prompts/blind_pass.tmpl"
+assert_file_contains "debate splices the new-findings schema"  '{{SCHEMA_FINDINGS}}' "$root/prompts/debate.tmpl"
+assert_file_contains "repair splices the exact target schema"  '{{SCHEMA}}' "$root/prompts/repair.tmpl"
+for frag in findings stances; do
+  [ -f "$root/prompts/schema/$frag.txt" ] && ok "schema fragment $frag.txt exists" || bad "schema fragment $frag.txt exists"
+done
+printf '```findings\n%s\n```\n' "$(cat "$root/prompts/schema/findings.txt")" > "$TMP/frag.findings.txt"
+"$SC/parse_block" findings "$TMP/frag.findings.txt" x >/dev/null 2>&1
+assert_exit "findings schema fragment validates through parse_block" 0 "$?"
+printf '```stances\n%s\n```\n' "$(cat "$root/prompts/schema/stances.txt")" > "$TMP/frag.stances.txt"
+"$SC/parse_block" stances "$TMP/frag.stances.txt" x >/dev/null 2>&1
+assert_exit "stances schema fragment validates through parse_block" 0 "$?"
+# field-shuffled variant: an unknown revision subfield is normalized away, not rejected.
+printf '```stances\n%s\n```\n' '{"id":"i1","stance":"support_with_revision","revision":{"bogus_field":"x","severity":"high"}}' > "$TMP/frag.shuffled.txt"
+shuf_out="$("$SC/parse_block" stances "$TMP/frag.shuffled.txt" x 2>/dev/null)"
+assert_exit "field-shuffled stance still validates (normalized)" 0 "$?"
+case "$shuf_out" in *bogus_field*) bad "unknown revision subfield normalized away" "leaked: $shuf_out";; *) ok "unknown revision subfield normalized away";; esac
+# Concern F: new_findings is required-EMPTYABLE — an explicit `[]` (or empty) block is
+# valid (exit 0), NOT malformed, so a seat with nothing new is not falsely repaired.
+printf '```new_findings\n[]\n```\n' > "$TMP/nf.empty-array.txt"
+"$SC/parse_block" new_findings "$TMP/nf.empty-array.txt" x >/dev/null 2>&1
+assert_exit "empty-array new_findings block is valid (F)" 0 "$?"
+assert_file_contains "debate asks to ALWAYS emit new_findings" 'ALWAYS emit this block' "$root/prompts/debate.tmpl"
+assert_file_contains "protocol treats new_findings as required-emptyable" 'required-emptyable' "$root/skills/panel-review-for-agent/SKILL.md"
+# Concern D: repair.tmpl carries the extract-first-else-empty anti-hallucination wording.
+assert_file_contains "repair uses extract-first-else-empty wording" 'your previous response genuinely contained no' "$root/prompts/repair.tmpl"
 
 # --- CLI-seat wait is a background Agent, never a backgrounded Bash job (the stalled-referee fix) ---
 # Root cause it guards: a background Bash job does NOT re-invoke the sub-agent that launched it, so a
@@ -249,11 +313,26 @@ cat >/dev/null    # drain the prompt
 n=0; [ -f "${MOCK_COUNT:-/dev/null}" ] && n="$(cat "$MOCK_COUNT")"; n=$((n+1)); echo "$n" > "$MOCK_COUNT"
 good='{"claim":"c","location":"a.c:1","category":"correctness","severity":"high","points":[{"assertion":"x","location":"a.c:1"}]}'
 bad='{"location":"a.c:1","category":"correctness","severity":"high","points":[{"assertion":"x","location":"a.c:1"}]}'
+stance='{"id":"i1","stance":"support","rationale":"the indexing lacks a bound check"}'
+# A genuine, completed prose review with NO fenced block (well over the 200
+# non-whitespace-char salvage floor). This is the exit-4-but-salvageable case.
+prose='This review examined the changed functions in detail. The parsing routine does not validate its input length before indexing, so a short buffer triggers an out-of-bounds read at line forty-two. The retry path also swallows the error code and continues, masking the failure from callers downstream, which is a real correctness defect.'
 case "$MOCK_MODE" in
   good)               printf '```%s\n%s\n```\n' "$MOCK_TAG" "$good" > "$out" ;;
   malformed_then_good) if [ "$n" -eq 1 ]; then printf '```%s\n%s\n```\n' "$MOCK_TAG" "$bad" > "$out"; else printf '```%s\n%s\n```\n' "$MOCK_TAG" "$good" > "$out"; fi ;;
   always_malformed)   printf '```%s\n%s\n```\n' "$MOCK_TAG" "$bad" > "$out" ;;
   noblock)            printf 'I will not answer.\n' > "$out" ;;
+  # exit-4 salvage: a fence-less completed review, then a well-formed block on repair.
+  noblock_then_good)  if [ "$n" -eq 1 ]; then printf '%s\n' "$prose" > "$out"; else printf '```%s\n%s\n```\n' "$MOCK_TAG" "$good" > "$out"; fi ;;
+  # completed review but the seat never fences it, even on repair -> stays down (4).
+  noblock_long)       printf '%s\n' "$prose" > "$out" ;;
+  # a fired agy --print-timeout: prose that ENDS with the wrapper-failure tail.
+  timeout_tail)       { printf '%s\n' "$prose"; printf 'Error: timed out waiting for response'; } > "$out" ;;
+  # empty output: a down seat with nothing to salvage.
+  emptyout)           : > "$out" ;;
+  # debate shared raw: a valid `stances` block PLUS a malformed `new_findings` block;
+  # on repair only the new_findings block comes back. The stances block must survive.
+  stances_plus_bad_nf) if [ "$n" -eq 1 ]; then printf '```stances\n%s\n```\n```new_findings\n%s\n```\n' "$stance" "$bad" > "$out"; else printf '```new_findings\n%s\n```\n' "$good" > "$out"; fi ;;
 esac
 EOF
 chmod +x "$seat_mockbin/codex"
@@ -305,6 +384,39 @@ st="$(timeout 30 env MOCK_MODE=good MOCK_TAG=findings PATH="$seat_mockbin:$PATH"
 assert_eq "gemini seat -> status 0"      '0' "$st"
 assert_eq "gemini parsed _source=gemini" 'gemini' "$(jq -r '._source' "$TMP/seat.parsed.gem")"
 "$SC/run_seat" --seat mistral --tag findings --prompt "$TMP/seat.prompt" --raw "$TMP/x" --parsed "$TMP/y" >/dev/null 2>&1; assert_exit "unknown seat -> usage exit 2" 2 "$?"
+
+section "run_seat — exit-4 salvage: a fence-less completed review is reformatted (Concern D)"
+st="$(run_seat_codex noblock_then_good findings s1)"
+assert_eq "fence-less completed review salvaged -> status 0" '0' "$st"
+assert_eq "salvage cost exactly one repair (2 dispatches)"   '2' "$(cat "$TMP/seat.count.s1")"
+assert_eq "salvaged content parsed"                          'c' "$(jq -r '.claim' "$TMP/seat.parsed.s1")"
+
+section "run_seat — exit-4 salvage attempted, seat still gives no block -> down (4)"
+st="$(run_seat_codex noblock_long findings s2)"
+assert_eq "still no block after repair -> status 4" '4' "$st"
+assert_eq "repair was attempted once (2 dispatches)" '2' "$(cat "$TMP/seat.count.s2")"
+
+section "run_seat — no-fence NEGATIVE gates: error/timeout/empty stubs are NOT repaired (Concern D hazard 3)"
+st="$(run_seat_codex timeout_tail findings s3)"
+assert_eq "wrapper-timeout tail -> not salvaged (status 4)" '4' "$st"
+assert_eq "timeout stub never re-dispatched (1 call)"       '1' "$(cat "$TMP/seat.count.s3")"
+st="$(run_seat_codex emptyout findings s4)"
+assert_eq "empty output -> not salvaged (status 4)"   '4' "$st"
+assert_eq "empty stub never re-dispatched (1 call)"   '1' "$(cat "$TMP/seat.count.s4")"
+# the short "I will not answer." refusal is below the substance floor -> also no repair
+st="$(run_seat_codex noblock findings s5)"
+assert_eq "short refusal -> not salvaged (status 4)"  '4' "$st"
+assert_eq "short refusal never re-dispatched (1 call)" '1' "$(cat "$TMP/seat.count.s5")"
+
+section "run_seat — debate repair preserves the shared raw's stances block (Concern D hazard 1 / overwrite fix)"
+st="$(run_seat_codex stances_plus_bad_nf new_findings s6)"
+assert_eq "malformed new_findings repaired -> status 0" '0' "$st"
+assert_eq "repaired new_findings content parsed"        'c' "$(jq -r '.claim' "$TMP/seat.parsed.s6")"
+# the whole point: the sibling stances block that `sweep ingest-batch` re-reads must survive.
+grep -Fq '```stances' "$TMP/seat.raw.s6"; assert_exit "stances fence survives the new_findings repair" 0 "$?"
+st_out="$("$SC/parse_block" stances "$TMP/seat.raw.s6" codex 2>/dev/null)"; st_rc=$?
+assert_exit "stances still parse from the rebuilt raw" 0 "$st_rc"
+assert_eq "surviving stance is intact" 'i1' "$(printf '%s\n' "$st_out" | head -1 | jq -r '.id')"
 
 # ---------------------------------------------------------------------------
 # await_seats — the barrier. Runs both CLI seats concurrently through run_seat in
@@ -395,7 +507,7 @@ section "protocol wording — the barrier's wait signal is the sentinel, never -
 wording_docs=(
   "$root/skills/panel-review-for-agent/SKILL.md"
   "$root/agents/panel-review-cli-barrier.md"
-  "$root/CLAUDE.md"
+  "$root/AGENTS.md"
   "$root/scripts/await_seats"
 )
 bad_wording=""

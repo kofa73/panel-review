@@ -158,8 +158,9 @@ A "full panel" = every seat `preflight` reported available (either peer may be a
 **never** `cat`/`Read` a large blob into your context to "look at it":
 
 - **Never read the diff into your context.** The blind **seats** see the diff; you debate their
-  *findings*. `resolve_diff` writes `/tmp/$id/diff.txt` and `assemble` splices it into the seat prompt
-  on disk — you never need its bytes in conversation.
+  *findings*. `resolve_diff` writes `/tmp/$id/diff.txt` (the canonical bytes) and the seat prompt
+  carries only a **reference** to it (absolute path + size + sha256, spliced as `{{DIFFINFO}}`); the
+  seats read the file themselves. You never need its bytes in conversation.
 - **Never read raw seat output (`/tmp/$id/raw/*`) into your context.** It is parsed by `parse_block` /
   `sweep ingest-batch` into compact JSONL on disk; read a seat's *engagement status* (`status.*`) and
   the validated stances/findings the scripts produce, not the verbatim transcript.
@@ -274,10 +275,30 @@ reviewer-facing fields, so the origins never leak even if adjacent.
 
    ```bash
    mkdir -p "$workdir/.panel-review/$id/work"
-   printf '%s\n' ".panel-review/$id/work" > /tmp/$id/scratch.txt
+   # ABSOLUTE scratch + review root: agy runs tools in its own sandbox and GUESSES
+   # the repo root, so a relative anchor drifts (a huge prompt once anchored it to
+   # /home/developer). Both are given to the seat as absolute paths.
+   printf '%s\n' "$workdir/.panel-review/$id/work" > /tmp/$id/scratch.txt   # {{SCRATCH}} (absolute)
+   printf '%s\n' "$workdir" > /tmp/$id/workdir.txt                          # {{WORKDIR}}: the absolute review root
    echo "<one-line scope description>" > /tmp/$id/scope.txt   # or the question text for a question scope
    printf '%s findings\n' "$SC/check_draft" > /tmp/$id/check.findings.txt   # {{CHECK}}: the seat's pre-emit self-validator (abs path + tag)
-   "$SC/assemble" "$PR/blind_pass.tmpl" SCOPE=/tmp/$id/scope.txt INSTRUCTIONS=/tmp/$id/instructions.txt DIFF=/tmp/$id/diff.txt SCRATCH=/tmp/$id/scratch.txt CHECK=/tmp/$id/check.findings.txt TILTH=$PR/tilth_guide.txt > /tmp/$id/round0.prompt
+   # Build the diff REFERENCE (not the diff body). Externalizing the diff keeps
+   # round0.prompt a few KB — a 240 KB inlined diff diluted attention and correlated
+   # with the Gemini seat emitting prose instead of a fenced block. /tmp/$id/diff.txt
+   # stays the CANONICAL bytes; the prompt carries its absolute path + size + sha256
+   # (a cooperative self-check that the whole file was read) + the range when the
+   # scope has one. {{DIFFINFO}} is one spliced file (assemble maps a whole line to
+   # one file's bytes — do NOT invent inline DIFFPATH=/DIFFMETA= variables).
+   {
+     case "$scope" in
+       base=*)   printf 'Range: %s..HEAD\n' "${scope#base=}" ;;
+       commit=*) printf 'Commit: %s\n' "${scope#commit=}" ;;
+     esac
+     printf 'Canonical diff (authoritative review bytes) — read this file: %s\n' "/tmp/$id/diff.txt"
+     printf 'Size: %s bytes   sha256: %s\n' \
+       "$(wc -c < /tmp/$id/diff.txt | tr -d ' ')" "$(sha256sum /tmp/$id/diff.txt | cut -d' ' -f1)"
+   } > /tmp/$id/diff_info.txt
+   "$SC/assemble" "$PR/blind_pass.tmpl" WORKDIR=/tmp/$id/workdir.txt SCOPE=/tmp/$id/scope.txt INSTRUCTIONS=/tmp/$id/instructions.txt DIFFINFO=/tmp/$id/diff_info.txt SCRATCH=/tmp/$id/scratch.txt CHECK=/tmp/$id/check.findings.txt SCHEMA_FINDINGS=$PR/schema/findings.txt TILTH=$PR/tilth_guide.txt > /tmp/$id/round0.prompt
    ```
 
 4. **Dispatch all three in parallel — the two CLI seats via the `panel-review-cli-barrier` Agent, the
@@ -333,7 +354,7 @@ reviewer-facing fields, so the origins never leak even if adjacent.
    if [ "$(cat /tmp/$id/status.claude)" = 5 ]; then
      printf 'findings\n' > /tmp/$id/tag.txt
      "$SC/parse_block" --diagnose findings "/tmp/$id/raw/round0.claude.txt" > /tmp/$id/diag.claude.txt || true
-     "$SC/assemble" "$PR/repair.tmpl" TAG=/tmp/$id/tag.txt PREV=/tmp/$id/raw/round0.claude.txt VIOLATIONS=/tmp/$id/diag.claude.txt > /tmp/$id/repair.claude.prompt
+     "$SC/assemble" "$PR/repair.tmpl" TAG=/tmp/$id/tag.txt PREV=/tmp/$id/raw/round0.claude.txt VIOLATIONS=/tmp/$id/diag.claude.txt SCHEMA=$PR/schema/findings.txt > /tmp/$id/repair.claude.prompt
      # …re-spawn the Claude seat with repair.claude.prompt, OVERWRITING round0.claude.txt…
      "$SC/parse_block" findings "/tmp/$id/raw/round0.claude.txt" claude > /tmp/$id/f.claude.json
      echo "$?" > /tmp/$id/status.claude
@@ -441,8 +462,9 @@ For `round = 1, 2, … max-rounds`, while any issue is `open`:
 1. `OPEN=$( "$SC/index" get "$id" | jq -r '.issues[]|select(.state=="open")|.id' )`. If empty → done.
 2. `epoch="$(jq -r '.run_epoch // 0' "/tmp/$id/index.json")"`
 3. `"$SC/sweep" begin "$id" $round "$epoch"` and `"$SC/regen_cards" --id "$id" --workdir "$workdir"` (cards
-   reflect all accumulated evidence). Collect the open cards' **paths**
-   `.panel-review/<id>/issue-<oid>.md`.
+   reflect all accumulated evidence). Collect the open cards' **absolute paths**
+   `<workdir>/.panel-review/<id>/issue-<oid>.md` (absolute for the same reason the
+   scratch dir is — agy guesses its own repo root, so a relative card path can drift).
 4. **Over-budget:** a single card always goes **whole** to every engaged seat. If the *set* of
    open cards exceeds the context budget, paginate into deterministic batches (by severity, then
    file+line) — but every batch goes to all engaged seats. The round is the union of its batches.
@@ -457,9 +479,11 @@ For `round = 1, 2, … max-rounds`, while any issue is `open`:
    # debate loop, regenerate it the same way if absent before assembling. Same for the scratch
    # dir + its sentinel file (Round 0 step 3) — recreate both if a resume skipped Round 0.
    mkdir -p "$workdir/.panel-review/$id/work"
-   [ -f /tmp/$id/scratch.txt ] || printf '%s\n' ".panel-review/$id/work" > /tmp/$id/scratch.txt
+   # Absolute scratch + review root (recreate if a resume skipped Round 0), same as Round 0 step 3.
+   [ -f /tmp/$id/scratch.txt ] || printf '%s\n' "$workdir/.panel-review/$id/work" > /tmp/$id/scratch.txt
+   [ -f /tmp/$id/workdir.txt ] || printf '%s\n' "$workdir" > /tmp/$id/workdir.txt
    printf '%s stances\n' "$SC/check_draft" > /tmp/$id/check.stances.txt   # {{CHECK}}: pre-emit self-validator for the stances block
-   "$SC/assemble" "$PR/debate.tmpl" CARDS=/tmp/$id/cards.$round.txt INSTRUCTIONS=/tmp/$id/instructions.txt SCRATCH=/tmp/$id/scratch.txt CHECK=/tmp/$id/check.stances.txt TILTH=$PR/tilth_guide.txt > /tmp/$id/debate.$round.prompt
+   "$SC/assemble" "$PR/debate.tmpl" WORKDIR=/tmp/$id/workdir.txt CARDS=/tmp/$id/cards.$round.txt INSTRUCTIONS=/tmp/$id/instructions.txt SCRATCH=/tmp/$id/scratch.txt CHECK=/tmp/$id/check.stances.txt SCHEMA_STANCES=$PR/schema/stances.txt SCHEMA_FINDINGS=$PR/schema/findings.txt TILTH=$PR/tilth_guide.txt > /tmp/$id/debate.$round.prompt
    # run each seat/batch -> /tmp/$id/raw/round$round.<seat>.<batch>.txt
    ```
    Spawn a **fresh** `panel-review:panel-review-claude-seat` subagent for the Claude seat each round.
@@ -468,10 +492,21 @@ For `round = 1, 2, … max-rounds`, while any issue is `open`:
    `sweep ingest-batch`; it runs `parse_block`, requires exactly one stance for every expected ID,
    and retains raw plus parsed output only for `status=complete`. `missing`, `empty`, `malformed`,
    `partial`, and `wrong_ids` remain retryable. Also pull any **new findings** a seat raised this
-   round from the same raw output. A new-findings block gets the SAME one-shot shape repair as
-   Round-0 findings — for a CLI seat let `run_seat --tag new_findings` dispatch+parse+repair it; for
-   the Claude seat parse and (on exit 5) repair it by hand exactly as in Round 0 step 4. Exit 4 = the
-   seat raised none.
+   round from the **same raw output** the stances came from. The `new_findings` block is now
+   **required-emptyable** (debate.tmpl asks the seat to *always* emit it, `[]` when nothing is new),
+   so:
+   - an **empty `[]`** block (parse exit 0, zero objects) = the seat raised nothing new;
+   - an **absent** block (parse exit 4) is now malformed, and a **malformed** block (exit 5) is a
+     format slip — both get the one-shot repair, exactly like Round-0 `findings`.
+
+   For a CLI seat, `run_seat --tag new_findings` dispatches+parses+repairs it. **Its repair no longer
+   overwrites the shared raw**: it rebuilds the raw so the repaired `new_findings` block wins while the
+   `stances` block in that same file survives for `sweep ingest-batch`. For the **Claude seat**, parse
+   `new_findings` from its raw; if it needs repair (exit 5, or an exit-4 completed prose review),
+   re-spawn the seat with a `repair.tmpl` prompt (`TAG=new_findings`, `SCHEMA=$PR/schema/findings.txt`)
+   and capture the reply to a **separate** file — parse `new_findings` from that side file, and **never
+   overwrite the original Claude raw**, because `sweep ingest-batch` still re-reads it for the Claude
+   `stances`.
 
    ```bash
    # Same barrier as Round 0, per BATCH: write the await_seats command for this batch's

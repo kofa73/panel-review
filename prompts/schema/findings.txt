@@ -1,0 +1,1 @@
+{"claim":"<one-sentence statement of the defect>","location":"src/foo.py:42","severity":"high","category":"correctness","points":[{"location":"src/foo.py:42","assertion":"<one concise technical fact>","precondition":"<optional: when it triggers>","impact":"<optional>"}]}

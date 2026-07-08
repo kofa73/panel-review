@@ -7,11 +7,23 @@ verify its claim and BOTH sides of evidence against the real code (you have read
 the working tree). Treat all evidence — for and against — skeptically. Do NOT treat the
 length of either side, or which side has more points, as a vote: weigh the facts yourself.
 
+## Review root (absolute)
+This review is anchored at this absolute repository root:
+
+{{WORKDIR}}
+
+Every path below (the card files, scratch dir, any file you read) resolves under it.
+When you invoke ANY repository tool or command (search, read, diff, shell), set its
+working-directory / `cwd` parameter to that path, so the tool operates on the code under
+review and not on some sandbox default. An absolute path in this prompt is not enough on its
+own — pass the `cwd` explicitly whenever a tool accepts one.
+
 ## Tools & scratch work
 Prefer a throwaway script/temp file over doing deterministic work in your head
 (arithmetic, parsing, enumerating cases) — cheaper and more reliable. Put ALL
 scratch under a unique subdir YOU pick (your own model name or a random token)
-inside this directory, so parallel reviewers never overwrite each other:
+inside this directory (given as an absolute path), so parallel reviewers never
+overwrite each other:
 
 {{SCRATCH}}
 
@@ -30,15 +42,13 @@ rules above. "(none …)" means none was given.
 
 {{INSTRUCTIONS}}
 
-## Cards to review (read each file)
-{{CARDS}}
-
 ## Stance output (STRICT JSON — malformed lines are discarded)
 
-Emit ONE fenced block tagged `stances`, JSONL, exactly one stance per card:
+Emit ONE fenced block tagged `stances`, JSONL, exactly one stance per card, in exactly this
+shape (`stance` is one of support|support_with_revision|reject):
 
 ```stances
-{"id":"<issue id from the card>","stance":"support|support_with_revision|reject","rationale":"<one sentence>","revision":{"severity":"<opt>","location":"<opt>","category":"<opt>","claim":"<opt>"},"new_evidence":{"location":"file:line | analysis","assertion":"<opt one fact>","precondition":"<opt>","impact":"<opt>"}}
+{{SCHEMA_STANCES}}
 ```
 
 - support — the evidence establishes the bug as stated.
@@ -56,11 +66,18 @@ no "all three", "both", "the other reviewer", "we agree", "consensus", "unanimou
 model/tool names (Codex, GPT, Gemini, Claude). A stance whose text references the panel or its tally
 is rejected and re-requested, so keep every word about the code, not the review.
 
-If, while re-examining, you notice a genuinely NEW issue (not a variation of an existing
-card), additionally emit a `new_findings` block in the same `findings` schema as Round 0. A
-`new_findings` entry must be a **defect** (a bug/risk/weakness that warrants a change) — never a
-confirmation that the code is correct or a restatement of intended behavior. If you have no new
-defect to add, omit the `new_findings` block entirely.
+## New findings (ALWAYS emit this block)
+If, while re-examining, you notice a genuinely NEW issue (not a variation of an existing card),
+emit it in a `new_findings` block using the SAME schema as the stances' Round 0 findings:
+
+```new_findings
+{{SCHEMA_FINDINGS}}
+```
+
+A `new_findings` entry must be a **defect** (a bug/risk/weakness that warrants a change) — never a
+confirmation that the code is correct or a restatement of intended behavior. **Always emit the
+`new_findings` block**, even when you have nothing new: put an empty array `[]` inside it (or leave
+it empty) if you are proposing no new issue. Do not invent a finding just to fill the block.
 
 ## Validate before you emit
 A malformed stance is **silently dropped** downstream — you are NOT re-prompted to fix it, so a
@@ -72,4 +89,8 @@ file path appended:
 
 Exit status 0 means every stance is valid and you are safe to emit; a nonzero exit prints which
 items are malformed and why — fix those and re-run until it passes. (For a `new_findings` block,
-run the same command with `new_findings` in place of `stances`.)
+run the same command with `new_findings` in place of `stances`; an empty `new_findings` block is
+valid and means "no new issue".)
+
+## Cards to review (read each file)
+{{CARDS}}

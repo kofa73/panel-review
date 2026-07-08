@@ -36,6 +36,47 @@ class TestParseBlock(unittest.TestCase):
             self.assertEqual(res.returncode, 0)
             self.assertTrue(res.stdout.strip())
 
+    def test_empty_array_block_is_valid_not_malformed(self):
+        # Concern F: an explicit `[]` block is a legitimate "nothing" (required-
+        # emptyable new_findings), NOT malformed. It must exit 0 in BOTH normal and
+        # diagnose mode so a seat that validated `[]` via check_draft is not then
+        # falsely repaired by run_seat. Regression: it used to exit 5 in normal mode.
+        for tag in ("findings", "new_findings"):
+            with tempfile.TemporaryDirectory() as d:
+                p = os.path.join(d, "arr.txt")
+                with open(p, "w") as f:
+                    f.write(f"```{tag}\n[]\n```\n")
+                res = self.run_script([tag, p, "codex"])
+                self.assertEqual(res.returncode, 0, f"normal mode, tag={tag}")
+                self.assertEqual(res.stdout, "")
+                res = self.run_script(["--diagnose", tag, p])
+                self.assertEqual(res.returncode, 0, f"diagnose mode, tag={tag}")
+
+    def test_content_present_but_all_unparseable_still_exit_5(self):
+        # The exit-5 reservation: content present but nothing valid survives.
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "junk.txt")
+            with open(p, "w") as f:
+                f.write("```findings\n{not json}\n```\n")
+            res = self.run_script(["findings", p, "codex"])
+            self.assertEqual(res.returncode, 5)
+
+    def test_schema_fragments_validate(self):
+        # Concern E (parser-behavior drift check): the single-sourced schema fragments
+        # spliced into every prompt must PARSE, or the example we show seats is one the
+        # pipeline would reject. Assert parser behavior, not literal field-set equality.
+        prompts = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'prompts', 'schema'))
+        for tag in ("findings", "stances"):
+            with open(os.path.join(prompts, f"{tag}.txt"), encoding="utf-8") as f:
+                line = f.read().strip()
+            with tempfile.TemporaryDirectory() as d:
+                p = os.path.join(d, "frag.txt")
+                with open(p, "w") as fh:
+                    fh.write(f"```{tag}\n{line}\n```\n")
+                res = self.run_script([tag, p, "x"])
+                self.assertEqual(res.returncode, 0, f"{tag} fragment must validate; got {res.stderr}")
+                self.assertTrue(res.stdout.strip(), f"{tag} fragment produced no parsed object")
+
     def test_flat_shape_findings(self):
         # round0.claude.flat.txt -> exit 5
         fixture = os.path.join(self.fixtures_dir, 'round0.claude.flat.txt')

@@ -249,7 +249,13 @@ def main():
     if bad > 0:
         print(f"parse_block: skipped {bad} malformed line(s) in '{tag}'", file=sys.stderr)
 
-    if n == 0:
+    # n == 0 with bad == 0 means the block decoded cleanly to ZERO items — an explicit
+    # empty array `[]` (or empty stream). That is a legitimate "nothing" (a required-
+    # emptyable `new_findings`, or a seat that found nothing), NOT a malformed block, so
+    # it must exit 0 to match `--diagnose`/check_draft (which already treats `[]` as
+    # valid). Exit 5 is reserved for content that was present but wholly unparseable
+    # (bad > 0, nothing valid survived).
+    if n == 0 and bad > 0:
         print("parse_block: block present with non-whitespace content but zero valid objects parsed", file=sys.stderr)
         sys.exit(5)
 
