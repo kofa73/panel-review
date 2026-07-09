@@ -1,48 +1,42 @@
 #!/usr/bin/env bash
-# run_seat — dispatch one EXTERNAL CLI seat (Codex or Gemini) for one tag, parse
-# its block, and run the one-shot shape REPAIR automatically. Wraps the whole
-# dispatch→parse→(diagnose→repair→re-dispatch→re-parse) sequence the referee used
-# to drive by hand for every seat, in every round (SKILL Round 0 step 4, debate
-# step 8). The Claude seat is NOT here: it is a fresh subagent the referee spawns
-# via the Agent tool, not a CLI — only the two CLI seats are scriptable.
+# run_seat — dispatch ONE external CLI seat (Codex or Gemini) for one tag and parse
+# its block. It wraps the byte-exact dispatch→parse the referee would otherwise
+# hand-roll for every seat, in every round (SKILL Round 0 step 4, debate step 6):
+# pick the right CLI wrapper, feed it the prompt, capture its verbatim output, and
+# run parse_block. The Claude seat is NOT here: it is a fresh subagent the referee
+# spawns via the Agent tool, not a CLI — only the two CLI seats are scriptable.
+#
+# It does NOT repair. Salvaging a slipped block (a malformed fence, or a real review
+# the seat forgot to fence) is the REFEREE's job now, not a script's: the seat that
+# wrote the block is gone after it exits, so any "repair" re-dispatch is a fresh,
+# cold model instance whose only input is the raw file on disk — the exact same
+# input the referee has, and the referee is the mind that must consume the findings
+# anyway. So there is no informational reason to route the fix through a redundant
+# extra seat, and deciding "is this a real review or a down-seat stub?" is an LLM
+# judgment, not a grep heuristic. On a non-engaged status the referee reads that one
+# seat's raw and rewrites it well-formed (see SKILL "Salvage"); this script just
+# reports what parse_block found.
 #
 # Usage:
 #   run_seat --seat <codex|gemini> --tag <findings|new_findings|stances> \
-#            --prompt <promptfile> --raw <rawfile> --parsed <parsedfile> \
-#            [--label <label>] [--no-repair]
+#            --prompt <promptfile> --raw <rawfile> --parsed <parsedfile> [--label <label>]
 #
 #   --prompt   the assembled prompt for this pass (stdin to the CLI).
-#   --raw      where the seat's verbatim response is written. On a repair retry the
-#              raw is REBUILT, not blindly overwritten: the repaired <tag> block is
-#              prepended (it wins — extract_block takes the first matching fence) and
-#              every OTHER block already in the raw is preserved. This matters in
-#              debate, where `stances` shares this raw and `sweep ingest-batch`
-#              re-reads it — a naive overwrite would destroy the valid stances.
+#   --raw      where the seat's verbatim response is written (never overwritten here —
+#              in debate, `stances` and `new_findings` share this one raw and `sweep
+#              ingest-batch` re-reads it, so run_seat leaves it exactly as the seat
+#              produced it).
 #   --parsed   where the validated JSONL is written (parse_block output, _source-tagged).
 #   --label    _source tag for parse_block (default: the seat name).
-#   --no-repair  skip the repair retry (one plain dispatch+parse).
 #
-# Repair fires in two cases, at most once:
-#  - parse exit 5 (malformed block present): a format slip, not a bad review — re-ask
-#    the seat to fix just the JSON shape. Any tag.
-#  - parse exit 4 (NO fence) for a REQUIRED block (findings/new_findings) that is a
-#    COMPLETED prose review (completed_review gate: CLI rc 0, no wrapper-failure tail,
-#    enough prose): the seat wrote a real review but forgot to fence it — reformat it
-#    rather than eject the whole participant. An error/timeout/refusal stub is NOT
-#    repaired (that would only pressure it to fabricate). stances is never salvaged
-#    here (its shared-raw batch flow is `sweep`'s, not run_seat's).
-# An empty-but-present block (exit 0) is a clean "found nothing". The repair prompt
-# carries ONLY this seat's own output, so blindness holds.
-#
-# Output: the FINAL parse_block status on stdout (0 engaged · 4 no block/down ·
-# 5 still malformed after repair). The script's own exit is 0 unless a usage/setup
-# error occurred (2 usage, 1 missing file) — so the caller reads engagement from
-# stdout, never conflated with the wrapper's own failure.
+# Output: the parse_block status on stdout (0 engaged · 4 no block/down · 5 malformed).
+# The script's own exit is 0 unless a usage/setup error occurred (2 usage, 1 missing
+# file) — so the caller reads engagement from stdout, never conflated with the
+# wrapper's own failure.
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
-PR="$here/../prompts"
 
-seat=""; tag=""; prompt=""; raw=""; parsed=""; label=""; repair=1
+seat=""; tag=""; prompt=""; raw=""; parsed=""; label=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --seat)      seat="${2-}"; shift 2 ;;
@@ -51,7 +45,6 @@ while [ "$#" -gt 0 ]; do
     --raw)       raw="${2-}"; shift 2 ;;
     --parsed)    parsed="${2-}"; shift 2 ;;
     --label)     label="${2-}"; shift 2 ;;
-    --no-repair) repair=0; shift ;;
     *) echo "run_seat: unknown arg: $1" >&2; exit 2 ;;
   esac
 done
@@ -66,123 +59,18 @@ case "$tag" in findings|new_findings|stances) ;; *) echo "run_seat: --tag must b
 [ -n "$parsed" ] || { echo "run_seat: --parsed required" >&2; exit 2; }
 [ -n "$label" ] || label="$seat"
 
-# The findings/new_findings tags share the findings schema; stances has its own.
-# The exact schema fragment is spliced into repair.tmpl's {{SCHEMA}} so the reformat
-# prompt shows the precise target shape (single-sourced from prompts/schema/).
-case "$tag" in
-  stances) schema="$PR/schema/stances.txt" ;;
-  *)       schema="$PR/schema/findings.txt" ;;
-esac
-
-# Dispatch the seat, capturing its output to the given file and never aborting on a
+# Dispatch the seat, capturing its output to the raw file and never aborting on a
 # seat failure (a down seat = empty/partial output = parse_block exit 4; we degrade,
-# not crash). The CLI's own exit status lands in $seat_rc (honored by the no-fence
-# repair gate below — an errored/timed-out seat must not be asked for findings). The
-# CLI wrapper's own stderr passes through to ours for logging.
-seat_rc=0
-dispatch() {
-  local out="$1"
-  set +e
-  "$cli" < "$prompt" > "$out"
-  seat_rc=$?
-  set -e
-}
+# not crash). The CLI wrapper's own stderr passes through to ours for logging.
+set +e
+"$cli" < "$prompt" > "$raw"
+set -e
 
-parse() { # -> sets `status` to the parse_block exit; writes validated JSONL to $parsed
-  set +e
-  "$here/parse_block" "$tag" "$raw" "$label" > "$parsed"
-  status=$?
-  set -e
-}
-
-# Salvage gate for the no-fence case (parse exit 4). A no-block result is usually a
-# down/refusing seat, but it can also be a COMPLETE prose review the seat simply
-# forgot to fence — the exact loss we want to recover. Only route it through repair
-# when it is a genuine, finished review and NOT an error/timeout/refusal stub:
-#  - the CLI exited 0 (an errored/timed-out wrapper signals non-zero),
-#  - its output does not END with a known wrapper-failure tail (a fired agy
-#    --print-timeout ends with this exact line, anchored to the final bytes; a review
-#    that merely quotes the phrase mid-content is unaffected), and
-#  - it carries enough prose to plausibly contain findings.
-# These are cheap accident-domain checks, not substance-scoring; asking an error stub
-# to "emit the schema" would only pressure it to fabricate.
-MIN_REVIEW_CHARS=200
-completed_review() {
-  [ "$seat_rc" -eq 0 ] || return 1
-  local chars
-  chars="$(tr -d '[:space:]' < "$raw" | wc -c | tr -d ' ')"
-  [ "${chars:-0}" -ge "$MIN_REVIEW_CHARS" ] || return 1
-  if tail -c 160 "$raw" 2>/dev/null | tr -d '\n' \
-       | grep -qE 'Error: timed out waiting for response[[:space:]]*$'; then
-    return 1
-  fi
-  return 0
-}
-
-dispatch "$raw"
-parse
-
-# Decide whether the one-shot repair fires, and why.
-#  - exit 5 (malformed block present): shape-only reformat, any tag — the classic case.
-#  - exit 4 (no fence at all) for a REQUIRED block (findings/new_findings): salvage
-#    only a completed prose review (see completed_review). stances is excluded here —
-#    its shared-raw batch flow is owned by `sweep`, not run_seat's salvage.
-do_repair=0
-reason_synth=""
-if [ "$repair" -eq 1 ]; then
-  if [ "$status" -eq 5 ]; then
-    do_repair=1
-  elif [ "$status" -eq 4 ]; then
-    case "$tag" in
-      findings|new_findings)
-        if completed_review; then
-          do_repair=1
-          # parse_block --diagnose emits NOTHING on stdout for exit 4, so the repair
-          # reason must be synthesized here to reach the prompt.
-          reason_synth="you produced a prose review with no \`$tag\` fenced block; extract the issues you already stated in your prose into the block below (emit an empty block only if your prose genuinely contained zero issues)."
-        fi
-        ;;
-    esac
-  fi
-fi
-
-if [ "$do_repair" -eq 1 ]; then
-  # Diagnose the exact violations (or use the synthesized no-fence reason) and hand
-  # the seat back its own output + those reasons via repair.tmpl. Shape-only fix,
-  # this seat's text only (blindness holds).
-  diag="$(mktemp "${TMPDIR:-/tmp}/run_seat_diag.XXXXXX")"
-  tagf="$(mktemp "${TMPDIR:-/tmp}/run_seat_tag.XXXXXX")"
-  rprompt="$(mktemp "${TMPDIR:-/tmp}/run_seat_repair.XXXXXX")"
-  orig="$(mktemp "${TMPDIR:-/tmp}/run_seat_orig.XXXXXX")"
-  repaired="$(mktemp "${TMPDIR:-/tmp}/run_seat_repaired.XXXXXX")"
-  trap 'rm -f "$diag" "$tagf" "$rprompt" "$orig" "$repaired"' EXIT
-  printf '%s\n' "$tag" > "$tagf"
-  cp "$raw" "$orig"          # preserve the ORIGINAL raw — it may hold sibling blocks
-  if [ -n "$reason_synth" ]; then
-    printf '%s\n' "$reason_synth" > "$diag"
-  else
-    "$here/parse_block" --diagnose "$tag" "$raw" > "$diag" 2>/dev/null || true
-  fi
-  "$here/assemble" "$PR/repair.tmpl" TAG="$tagf" PREV="$orig" VIOLATIONS="$diag" SCHEMA="$schema" > "$rprompt"
-  prompt="$rprompt"
-  dispatch "$repaired"       # repair output to a SIDE file, NOT $raw
-  # Overwrite fix (shared-raw hazard). Rebuild $raw so the repaired <tag> block WINS
-  # (parse_block/extract_block take the FIRST matching fence) while EVERY other block
-  # already in the raw survives — critical in debate, where `stances` lives in this
-  # SAME raw and `sweep ingest-batch` re-reads it, so a naive `> "$raw"` overwrite
-  # would destroy the already-valid stances. Only rebuild when the repair actually
-  # produced a <tag> fence; otherwise keep the original raw so the status still
-  # reflects a genuine failure (never a spurious empty "found nothing").
-  if "$here/extract_block" --present "$tag" "$repaired" >/dev/null 2>&1; then
-    { printf '```%s\n' "$tag"
-      "$here/extract_block" "$tag" "$repaired"
-      printf '```\n'
-      cat "$orig"
-    } > "$raw"
-  else
-    cat "$orig" > "$raw"
-  fi
-  parse
-fi
+# Parse the block; its exit status (0 engaged · 4 no block · 5 malformed) is the
+# engagement signal the caller reads from stdout.
+set +e
+"$here/parse_block" "$tag" "$raw" "$label" > "$parsed"
+status=$?
+set -e
 
 printf '%s\n' "$status"

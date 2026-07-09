@@ -14,7 +14,8 @@ takes **no scope, no instructions** — both come from the manifest. Run from th
 # CLAUDE_PLUGIN_ROOT is substituted into this text at skill-load — it is NOT a
 # shell env var (it's empty in the shell). Keep the literal verbatim; don't
 # build it dynamically or read $CLAUDE_PLUGIN_ROOT at runtime.
-SC="${CLAUDE_PLUGIN_ROOT}/scripts"
+ROOT="${CLAUDE_PLUGIN_ROOT}"; ROOT="${ROOT%/}"   # strip trailing slash so $SC has no //
+SC="$ROOT/scripts"
 ```
 
 ## Step 1 — parse `$ARGUMENTS` (category + limit overrides only)

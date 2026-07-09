@@ -64,10 +64,11 @@ them up. No real run is touched.
   full-panel→fully_vetted, divergence→detail_contested, partial/single→open),
   `evaluated_by` from raisers, and validation rejects (style severity, unknown
   raiser, duplicate id, empty evidence → exit 3); output installs via `index put`.
-- **run_seat**: dispatch + parse status (mock CLI on `PATH`); one-shot repair
-  salvages a malformed block; repair at most once then exit 5; `--no-repair`;
-  no-block seat is down (4); repair extends to `new_findings`; gemini routes
-  through `run_agy`; unknown seat → usage exit 2.
+- **run_seat**: dispatch + parse status (mock CLI on `PATH`), a single dispatch —
+  it no longer repairs (salvage is the referee's job); a malformed block is
+  reported (5) not repaired, `findings` or `new_findings`; a no-block seat is
+  down (4); gemini routes through `run_agy`; unknown seat and the retired
+  `--no-repair` flag → usage exit 2.
 - **resolve_instructions**: verbatim/none resolved (0), `auto` → sentinel (3),
   missing manifest → exit 1.
 - **cleanup / discard**: `PANEL_REVIEW_KEEP_TMP=true` preserves `/tmp/<id>` while

@@ -61,10 +61,16 @@ reference; grepping a script for its flags wastes a full source-read into your c
 
 ```bash
 # CLAUDE_PLUGIN_ROOT is substituted into this text at skill-load — it is NOT a
-# shell env var (it's empty in the shell). Keep the literals verbatim; don't
-# build them dynamically or read $CLAUDE_PLUGIN_ROOT at runtime.
-SC="${CLAUDE_PLUGIN_ROOT}/scripts"
-PR="${CLAUDE_PLUGIN_ROOT}/prompts"
+# shell env var (it's empty in the shell). Keep the ${CLAUDE_PLUGIN_ROOT} token
+# verbatim (the harness replaces that exact literal); don't build it dynamically
+# or read $CLAUDE_PLUGIN_ROOT at runtime.
+# The substituted value may carry a trailing slash (observed: the repo-as-plugin
+# dev layout yields "/path/panel-review/"). Strip it once into ROOT so every
+# "$SC/..."/"$PR/..." path is single-slashed — a "//" is path-equivalent but
+# leaks into seat-facing prompts and logs.
+ROOT="${CLAUDE_PLUGIN_ROOT}"; ROOT="${ROOT%/}"
+SC="$ROOT/scripts"
+PR="$ROOT/prompts"
 
 "$SC/preflight"                              # env check; tail "CODEX: yes|no"/"GEMINI: yes|no"; exit 1 = core unusable (needs jq, git, work-tree, ≥1 peer)
 "$SC/resolve_instructions" --id <id>         # manifest.instructions -> verbatim/none text (exit 0) OR compose sentinel (exit 3 = auto, you compose)
@@ -73,10 +79,10 @@ PR="${CLAUDE_PLUGIN_ROOT}/prompts"
 "$SC/repo_guard" verify   --id <id> --workdir <dir> --restore  # re-hash tracked files; auto-revert drift; nonzero + drift list = a seat touched the code
 "$SC/run_codex" < prompt > raw 2> err        # Codex seat (pins --profile panel-review; sandbox BYPASSED so MCP/tilth + scratch work — repo_guard enforces integrity; auto-creates the profile)
 "$SC/run_agy"   < prompt > raw 2> err        # Gemini seat (pins model/timeout/stdin)
-"$SC/run_seat" --seat <codex|gemini> --tag <tag> --prompt <f> --raw <f> --parsed <f> [--label L] [--no-repair]  # dispatch a CLI seat + parse + one-shot repair; FINAL parse status on stdout
-"$SC/await_seats" --id <id> --tag <tag> --prompt <f> [--seat-timeout S] [--no-repair] --seat <s> --raw <f> --parsed <f> --status <f> [--label L] [ --seat ... ] --done <f>  # BARRIER: run ALL CLI seats concurrently (each via run_seat) in ONE job, write each seat's status + a combined --done summary, exit. You never background this yourself — the panel-review-cli-barrier Agent runs it (see the long-running-seats rule); never poll.
-"$SC/parse_block" <tag> <raw> [label]        # ```<tag> block -> validated JSONL; exit 4 = NO block (down), 5 = malformed (repair once)
-"$SC/parse_block" --diagnose <tag> <raw>     # WHY each item was rejected (reason + offending line); feeds repair.tmpl on exit 5
+"$SC/run_seat" --seat <codex|gemini> --tag <tag> --prompt <f> --raw <f> --parsed <f> [--label L]  # dispatch a CLI seat + parse; parse status on stdout (no repair — you salvage a 4/5, see "Salvage")
+"$SC/await_seats" --id <id> --tag <tag> --prompt <f> [--seat-timeout S] --seat <s> --raw <f> --parsed <f> --status <f> [--label L] [ --seat ... ] --done <f>  # BARRIER: run ALL CLI seats concurrently (each via run_seat) in ONE job, write each seat's status + a combined --done summary, exit. You never background this yourself — the panel-review-cli-barrier Agent runs it (see the long-running-seats rule); never poll.
+"$SC/parse_block" <tag> <raw> [label]        # ```<tag> block -> validated JSONL; exit 4 = NO block (down), 5 = malformed (you salvage — "Salvage")
+"$SC/parse_block" --diagnose <tag> <raw>     # WHY each item was rejected (reason + offending line); use it to guide a salvage rewrite on exit 5
 "$SC/check_draft" <tag> [file]               # SEAT-FACING pre-emit validator (thin wrapper over parse_block --diagnose); spliced into the seat prompt as {{CHECK}}, not called by the referee
 "$SC/birth_index" --available "<seats>" --configured "<seats>" < issues.json   # clustered Round-0 issues -> full index.json (birth state/flags/coverage)
 "$SC/index"   {get|put|issue|bump|state|flag|gate-status|commit-sweep} <id> ...   # ONLY writer of index.json
@@ -106,7 +112,7 @@ concern, not a reasoning concern**: every turn you take re-reads your whole cont
 narrating a slow seat is pure waste.
 
 `await_seats` collapses the CLI wait into one event: it runs **all** CLI seats concurrently (each
-through `run_seat`, so parse + one-shot repair are unchanged) inside **one** job, waits for every seat
+through `run_seat`, so dispatch + parse are unchanged) inside **one** job, waits for every seat
 with a per-seat outer timeout, writes each seat's status + a combined `--done` summary, and exits.
 **But you must not background `await_seats` directly.** A backgrounded **Bash** job does **not**
 re-invoke the sub-agent that launched it: when you (a sub-agent) stop with a pending background Bash
@@ -219,6 +225,56 @@ reviewer-facing fields, so the origins never leak even if adjacent.
 
 ---
 
+## Salvage — recovering a slipped seat block (referee-owned)
+
+When a seat's block does not parse, **you** recover it — there is no script repair and no
+re-dispatch of a "repair seat." Rationale: the seat that wrote the block has exited, so any
+re-invocation is a fresh, cold model whose only input is the raw file on disk — the *same* input you
+have, and you are the mind that must consume the findings anyway. Routing the fix through a redundant
+extra seat buys nothing; and deciding *"is this a real review or a down-seat stub?"* is a judgment,
+not a grep heuristic. So on a non-engaged parse status you do it yourself. This is the **one**
+sanctioned exception to "never read raw seat output": read **only that one seat's** raw, and only when
+its parse failed. Blindness holds — you already see every finding, so reading one seat's own text
+leaks nothing.
+
+The parse status (from `parse_block`, or from `sweep ingest-batch`'s batch status in debate) tells you
+which case you are in:
+
+- **Status 5 — a block is present but malformed.** A review happened; the JSON shape merely slipped.
+  No stub-vs-review judgment is needed — fix the shape (below). This is the common case.
+- **Status 4 — no fenced block at all.** Ambiguous: either a **down-seat stub** (an error, a timeout,
+  a refusal, empty output) or a **complete prose review the seat forgot to fence**. Read the raw and
+  judge. If it is a stub → the seat is **down for this pass** (leave the status 4; record it in
+  Process notes; do NOT invent findings to fill a block — that only manufactures noise). If it is a
+  real review → recover it (below).
+
+**To recover** (both 4-with-a-review and 5): rewrite the raw as the *well-formed raw the seat should
+have produced* — write it to a **side file** (`<raw>.salvaged`, so the original prose survives for
+inspection), then re-run the same parse/ingest against the side file:
+
+- Re-home the substance the seat **already stated** into the correct fenced block(s) — do **not**
+  re-review, do **not** add, drop, or re-severity anything. The exact target shape is the single-source
+  schema fragment (`$PR/schema/findings.txt` for `findings`/`new_findings`, `$PR/schema/stances.txt`
+  for `stances`); `parse_block --diagnose <tag> <raw>` names each violation to fix. For `findings`/
+  `new_findings`, the evidence facts and any `precondition`/`impact` belong INSIDE a `points[]` entry
+  alongside its `assertion` and `location`, never at the top level.
+- Emit an **empty** block (`[]`/no lines) if and only if the seat genuinely raised nothing. Never
+  fabricate an item to fill it; never drop an item the seat actually stated. If one item truly cannot
+  be reconstructed from what the seat wrote, drop just that item rather than guessing.
+- **Debate carries two blocks in one raw** (`stances` + `new_findings`). Re-emit **both** coherently
+  so `sweep ingest-batch` gets a complete raw — you are repairing sweep's *input*, never bypassing its
+  validation (it still requires exactly one stance per expected ID). Point the re-ingest at the side
+  file. A genuine stub (no real stances) is not salvageable here — let the debate retry/drop-seat flow
+  handle it.
+
+```bash
+# Round 0 (findings): re-parse the salvaged side file.
+"$SC/parse_block" findings "/tmp/$id/raw/round0.$seat.txt.salvaged" "$seat" > /tmp/$id/f.$seat.json
+echo "$?" > /tmp/$id/status.$seat
+```
+
+---
+
 # Mode: fresh
 
 ## Round 0 — blind pass
@@ -302,10 +358,10 @@ reviewer-facing fields, so the origins never leak even if adjacent.
    ```
 
 4. **Dispatch all three in parallel — the two CLI seats via the `panel-review-cli-barrier` Agent, the
-   Claude seat as its own Agent.** `await_seats` runs every CLI seat through `run_seat` (so the
-   `findings` parse + **one-shot shape repair** — diagnose → `repair.tmpl` with the seat's OWN output →
-   re-dispatch → re-parse — are unchanged), concurrently, in one job, and writes each seat's FINAL
-   parse status. Write that `await_seats` command to a one-line script, then spawn **two background
+   Claude seat as its own Agent.** `await_seats` runs every CLI seat through `run_seat` (dispatch +
+   `findings` parse, **no repair** — a non-engaged status is yours to salvage, see "Salvage"),
+   concurrently, in one job, and writes each seat's parse status. Write that `await_seats` command to a
+   one-line script, then spawn **two background
    Agents**: the CLI barrier (runs the script, waits, wakes you) and the Claude seat. Do **not**
    background `await_seats` yourself — a background Bash job won't re-invoke you (see the
    long-running-seats rule). Then **stop** — take no turns until an Agent re-invokes you (no
@@ -343,28 +399,21 @@ reviewer-facing fields, so the origins never leak even if adjacent.
 
    Spawn the **Claude seat** as its own background Agent (fresh `panel-review:panel-review-claude-seat`,
    **never a fork**). `status.$seat` (written by the barrier): 0 engaged, 4 no block (down), 5
-   malformed after repair, 124 outer-timeout (down; noted as a timeout in `--done` for Process notes).
+   malformed, 124 outer-timeout (down; noted as a timeout in `--done` for Process notes).
    On each wake, process only the seat(s) whose status is already on disk; if the other Agent is still
    running, stop again and wait. When the Claude Agent returns, write its text to the raw file, then
-   parse + repair by hand — the same one-shot repair `run_seat` does for the CLI seats:
+   parse it — the Claude seat is not a CLI, so you parse it by hand exactly as `run_seat` parses the
+   CLI seats' raw:
 
    ```bash
    "$SC/parse_block" findings "/tmp/$id/raw/round0.claude.txt" claude > /tmp/$id/f.claude.json
    echo "$?" > /tmp/$id/status.claude
-   if [ "$(cat /tmp/$id/status.claude)" = 5 ]; then
-     printf 'findings\n' > /tmp/$id/tag.txt
-     "$SC/parse_block" --diagnose findings "/tmp/$id/raw/round0.claude.txt" > /tmp/$id/diag.claude.txt || true
-     "$SC/assemble" "$PR/repair.tmpl" TAG=/tmp/$id/tag.txt PREV=/tmp/$id/raw/round0.claude.txt VIOLATIONS=/tmp/$id/diag.claude.txt SCHEMA=$PR/schema/findings.txt > /tmp/$id/repair.claude.prompt
-     # …re-spawn the Claude seat with repair.claude.prompt, OVERWRITING round0.claude.txt…
-     "$SC/parse_block" findings "/tmp/$id/raw/round0.claude.txt" claude > /tmp/$id/f.claude.json
-     echo "$?" > /tmp/$id/status.claude
-   fi
    ```
-   Repairing exit 5 (a FORMAT slip, not a bad review) salvages complete findings that merely had the
-   wrong shape and beats re-running the blind prompt; exit 4 (no block at all) is nothing to repair —
-   the seat stays down. The repair prompt carries only the seat's OWN output, so blindness holds. A
-   `124` (the barrier's outer per-seat timeout) is a hung seat: it reads as **down** for engagement,
-   and the `--done` summary records the timeout so you surface it in the verdict's Process notes.
+   A status of **4** or **5** on any seat (Claude or CLI) is yours to **salvage** — read that one
+   seat's raw and recover it per "Salvage" above (status 5: fix the shape; status 4: judge
+   stub-vs-review, recover a real review, leave a genuine stub down). A `124` (the barrier's outer
+   per-seat timeout) is a hung seat: it reads as **down** for engagement, and the `--done` summary
+   records the timeout so you surface it in the verdict's Process notes.
 
    Read the **final** status after the retry. Exit **0** ⇒ engaged (an empty file here ⇒ the seat
    ran and found nothing — counts as available). Exit **4** ⇒ the seat produced no findings block at
@@ -497,16 +546,17 @@ For `round = 1, 2, … max-rounds`, while any issue is `open`:
    so:
    - an **empty `[]`** block (parse exit 0, zero objects) = the seat raised nothing new;
    - an **absent** block (parse exit 4) is now malformed, and a **malformed** block (exit 5) is a
-     format slip — both get the one-shot repair, exactly like Round-0 `findings`.
+     format slip — both are yours to **salvage** (see "Salvage"), exactly like Round-0 `findings`.
 
-   For a CLI seat, `run_seat --tag new_findings` dispatches+parses+repairs it. **Its repair no longer
-   overwrites the shared raw**: it rebuilds the raw so the repaired `new_findings` block wins while the
-   `stances` block in that same file survives for `sweep ingest-batch`. For the **Claude seat**, parse
-   `new_findings` from its raw; if it needs repair (exit 5, or an exit-4 completed prose review),
-   re-spawn the seat with a `repair.tmpl` prompt (`TAG=new_findings`, `SCHEMA=$PR/schema/findings.txt`)
-   and capture the reply to a **separate** file — parse `new_findings` from that side file, and **never
-   overwrite the original Claude raw**, because `sweep ingest-batch` still re-reads it for the Claude
-   `stances`.
+   Debate salvage is where the two-blocks-in-one-raw case bites: `stances` and `new_findings` live in
+   the **same** raw, which both `run_seat --tag new_findings` and `sweep ingest-batch` read. If a
+   seat's raw fails to parse, do **not** re-dispatch a repair seat — read that one raw and rewrite it
+   well-formed to `<raw>.salvaged`, re-emitting **both** blocks coherently (a genuine stub with no real
+   stances is not salvageable — let step 8's retry/drop-seat handle it). Then re-run **both** reads
+   against the side file: parse `new_findings` from it, and point `sweep ingest-batch` at it for
+   `stances`. This holds uniformly for the CLI seats and the Claude seat — the referee-owned rewrite
+   replaces the old per-seat repair paths, and because you re-emit the whole raw at once there is no
+   "preserve the sibling block" splice to get wrong.
 
    ```bash
    # Same barrier as Round 0, per BATCH: write the await_seats command for this batch's
@@ -527,6 +577,8 @@ For `round = 1, 2, … max-rounds`, while any issue is `open`:
 
    ```bash
    "$SC/sweep" plan "$id" "$round" "$epoch" /tmp/$id/plan.$round.json
+   # Ingest the seat's raw. If ingest reports a non-complete status that a salvage
+   # recovers (see "Salvage"), re-run ingest-batch against the .salvaged side file.
    "$SC/sweep" ingest-batch "$id" "$round" "$epoch" "$seat" "$batch" \
      /tmp/$id/batch.$round.$seat.$batch.ids /tmp/$id/raw/round$round.$seat.$batch.txt
    ```
@@ -540,8 +592,9 @@ For `round = 1, 2, … max-rounds`, while any issue is `open`:
    Any drift is reverted from the snapshot and carried into the verdict's Process notes.
 7. **Engaged = COMPLETE this pass.** A seat is engaged only when all of its planned batches are
    `complete` in `"$SC/sweep" resume-plan "$id"`. A seat with any other batch status is not engaged.
-8. **Retry every non-complete batch once, THEN re-check engagement.** A malformed response gets the
-   existing diagnose/repair flow; missing, empty, partial, or wrong-ID output gets a fresh dispatch.
+8. **Retry every non-complete batch once, THEN re-check engagement.** A malformed batch first gets a
+   **salvage** attempt (see "Salvage": rewrite the raw well-formed, re-ingest the side file); missing,
+   empty, partial, wrong-ID, or an unsalvageable stub gets a fresh dispatch.
    If any batch still fails, run `"$SC/sweep" drop-seat "$id" "$round" "$seat"`; this discards all
    of that seat's checkpoints and marks it dropped in the recovery plan. Do not hand-delete files.
    Build the retained stance input with `find /tmp/$id/sweeps/round-$round -maxdepth 1 -name
@@ -572,14 +625,14 @@ For `round = 1, 2, … max-rounds`, while any issue is `open`:
    `--configured` is the panel from `preflight`; `--engaged` is the subset that engaged this round
    (step 7). `decide_round` **validates** the stances against `--engaged`: exactly one stance per
    (engaged seat, open issue), no unknown/duplicate `_source`, no omissions — a violation is a hard
-   error (exit 3) and means a seat block was incomplete/garbled, so **repair or re-dispatch that
+   error (exit 3) and means a seat block was incomplete/garbled, so **salvage or re-dispatch that
    seat** (don't hand-edit the stances). It also runs a **blindness scan** over the free text it
    promotes verbatim onto cards (`rationale`, `new_evidence`): a stance that names a seat, references
    the other reviewers, or states a tally is a hard error (**exit 5**, no payload). Re-dispatch that
    one seat asking it to restate the **same technical substance** with no reference to other
-   reviewers / their count / their agreement — a content reword, distinct from `repair.tmpl`'s
-   shape-only fix (the prompt carries only that seat's own output, so blindness holds) — then
-   re-parse and re-run `decide_round`. Cumulative per-issue `evaluated_by` is private index metadata:
+   reviewers / their count / their agreement — a content reword (a genuine re-review by the seat),
+   distinct from the shape-only **salvage** you do on a slipped block — then re-parse and re-run
+   `decide_round`. Cumulative per-issue `evaluated_by` is private index metadata:
    initialize it from Round-0 engaged seats, then `decide_round`/`decide_degraded_round` include the
    update in their payload and `index commit-sweep` persists it atomically. `decide_round`
    does **no judgment**: it never picks a winning value for the prose `claim` field, and a plain
@@ -600,15 +653,27 @@ For `round = 1, 2, … max-rounds`, while any issue is `open`:
      reopen it for peer review) or **add** a NEW `open` issue (`peer_reviewed=false`, `evidence_pro`
      = its points, empty contra) via `add_issues`. A new issue gets the birth-unanimity check
      **only** among seats that raised it in this same pass.
+   - **Addendum shape** (payload-shaped, so `merge_payload`/`commit-sweep` read the same keys). A
+     `revise` entry wraps the changed enum/prose fields under **`fields`** (a flat `claim` is
+     rejected — `merge_payload` exit 2); `set_state`/`set_flag` carry `id` (+ `flag`):
+
+     ```json
+     {"revise":[{"id":"i4","fields":{"claim":"<merged prose>"}}],
+      "set_state":[{"id":"i4","state":"open"}],
+      "set_flag":[{"id":"i4","flag":"detail_contested","value":true}]}
+     ```
    - **Merge, don't append.** `decide_round` may already carry a `set_state`/`revise` for an issue
      you are also touching (e.g. you reopen an issue it accepted, or add a `claim` where it set a
      `severity`). Appending a second entry makes `index commit-sweep` reject the whole round
      (duplicate state/revise target). Let `merge_payload` reconcile them (set_state: your addendum
-     wins → reopen; revise: fields deep-merged):
+     wins → reopen; revise: fields deep-merged). Guard the `mv` on merge success (`&&`) — a rejected
+     addendum leaves an empty temp, and an unconditional `mv` would clobber the good `decide_round`
+     payload with it and commit an empty round:
 
      ```bash
-     "$SC/merge_payload" /tmp/$id/payload.$round.json < /tmp/$id/addendum.$round.json > /tmp/$id/payload.merged.json
-     mv /tmp/$id/payload.merged.json /tmp/$id/payload.$round.json
+     "$SC/merge_payload" /tmp/$id/payload.$round.json < /tmp/$id/addendum.$round.json > /tmp/$id/payload.merged.json \
+       && mv /tmp/$id/payload.merged.json /tmp/$id/payload.$round.json
+     # nonzero exit ⇒ fix the addendum shape and retry; payload.$round.json is untouched
      ```
      (If you have no additions, skip the merge — the `decide_round` payload is already complete.)
 11. **Commit atomically.** The payload from steps 9–10 is complete — `decide_round` already folded in

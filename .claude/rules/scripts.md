@@ -32,7 +32,10 @@ byte-exact.
 - `merge_payload` — folds the referee's addendum (synthesized claims, `add_issues`, fold-reopen) into
   the `decide_round` payload with the per-key semantics `commit-sweep` needs (`set_state` replace,
   `revise` field-merge, `set_flag` dedup). The referee must **never append** a second
-  `set_state`/`revise` for one id — merge through here or `commit-sweep` rejects the round.
+  `set_state`/`revise` for one id — merge through here or `commit-sweep` rejects the round. A
+  mis-shaped addendum (e.g. a `revise` entry with a flat `claim` instead of the `fields` wrapper) is a
+  hard error (**exit 2** + message), not a traceback — so the SKILL's `> tmp && mv tmp payload` guard
+  leaves the good `decide_round` payload untouched instead of committing an empty round.
 - `project_card` / `regen_cards` — the **only** way to render issue records → blind cards.
 - `run_codex` / `run_agy` — the **only** way to call the Codex / Gemini seats; they pin the
   model/profile and the flags that let MCP/tilth run (`run_codex` bypasses the Codex sandbox, `run_agy`
@@ -41,9 +44,12 @@ byte-exact.
   `git stash create` SHA + sha256 manifest) at the start; `verify --restore` after each seat pass
   reverts and reports tracked-file drift. Guards tracked content only — leaves untracked scratch and
   the `.panel-review/` cache alone.
-- `run_seat` — dispatch/retry wrapper for the two **CLI** seats: dispatch → `parse_block` → one-shot
-  `repair.tmpl` retry on a malformed block; prints the final parse status. The Claude seat is a
-  subagent, not a CLI, so the referee drives it directly (never via `run_seat`).
+- `run_seat` — dispatch wrapper for the two **CLI** seats: dispatch → `parse_block`; prints the parse
+  status. **It does not repair.** Salvaging a slipped block (a malformed fence, or a real review the
+  seat forgot to fence) is referee-owned — the seat that wrote it has exited, so any re-dispatch is a
+  fresh cold model with the same on-disk input the referee has, and judging stub-vs-review is an LLM
+  call, not a grep heuristic (see SKILL "Salvage"). The Claude seat is a subagent, not a CLI, so the
+  referee drives it directly (never via `run_seat`).
 - `check_draft` — the **seat-facing** pre-emit validator (spliced into prompts as `{{CHECK}}`; the
   referee never calls it). Thin wrapper over `parse_block --diagnose` — don't re-implement the
   finding/stance checks. Lets a seat catch bad items before emitting (closes `parse_block`'s

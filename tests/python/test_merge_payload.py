@@ -140,6 +140,28 @@ class MergePayloadTest(unittest.TestCase):
                 self.assertEqual(result.returncode, code)
                 self.assertEqual(result.stderr, error)
 
+    def test_malformed_addendum_shapes_exit_2_not_traceback(self):
+        # A hand-built addendum with the wrong shape must yield exit 2 + an actionable
+        # message, never an uncaught KeyError. A flat `claim` (no `fields` wrapper) is the
+        # real slip that truncated a committed round; the others guard the sibling keys.
+        base = self.write_base({"bump": ["i4"]})
+        cases = [
+            ('{"revise":[{"id":"i4","claim":"x"}]}', 'addendum .revise entry missing "fields"'),
+            ('{"revise":[{"id":"i4","fields":[]}]}', 'addendum .revise entry "fields" is not an object'),
+            ('{"revise":[{"fields":{"claim":"x"}}]}', 'addendum .revise entry missing "id"'),
+            ('{"set_state":[{"state":"open"}]}', 'addendum .set_state entry missing "id"'),
+            ('{"set_flag":[{"id":"i4","value":true}]}', 'addendum .set_flag entry missing "flag"'),
+            ('{"revise":{"id":"i4"}}', "addendum .revise is not a list"),
+            ('{"set_flag":["nope"]}', "addendum .set_flag entry is not an object"),
+        ]
+        for addendum, fragment in cases:
+            with self.subTest(addendum=addendum):
+                result = self.run_merge(base, addendum)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn(fragment, result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
+                self.assertEqual(result.stdout, "")
+
 
 if __name__ == "__main__":
     unittest.main()

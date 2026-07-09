@@ -29,13 +29,14 @@
 #   dropped one.
 #
 # It is a thin orchestration layer over run_seat: each seat still goes through
-# run_seat (dispatch -> parse_block -> one-shot repair), so the seat contract,
-# flag pinning, and blindness are unchanged. await_seats adds only concurrency,
-# the outer timeout, and the combined-status summary.
+# run_seat (dispatch -> parse_block -> report status), so the seat contract, flag
+# pinning, and blindness are unchanged. await_seats adds only concurrency, the outer
+# timeout, and the combined-status summary. Neither script repairs a slipped block:
+# a non-engaged status (4/5) is handed to the referee, which owns salvage.
 #
 # Usage:
 #   await_seats --id <id> --tag <findings|new_findings|stances> \
-#               --prompt <promptfile> [--seat-timeout <secs>] [--no-repair] \
+#               --prompt <promptfile> [--seat-timeout <secs>] \
 #               --seat <codex|gemini> --raw <f> --parsed <f> --status <f> [--label <l>] \
 #               [ --seat ... --raw ... --parsed ... --status ... [--label ...] ] ...
 #               --done <combined-summary-file>
@@ -44,9 +45,9 @@
 #   follow it apply to that seat until the next --seat. This mirrors run_seat's
 #   own per-seat files 1:1, so Round 0 and the debate rounds pass whatever paths
 #   they already use — no naming magic baked in here.
-#   --status <f>  receives that seat's FINAL parse status (0 engaged · 4 down ·
-#                 5 malformed-after-repair · 124 outer-timeout). The referee reads
-#                 engagement from these exactly as it did from run_seat's stdout.
+#   --status <f>  receives that seat's parse status (0 engaged · 4 down · 5 malformed
+#                 · 124 outer-timeout). The referee reads engagement from these
+#                 exactly as it did from run_seat's stdout, and salvages any 4/5.
 #   --done   <f>  one line per seat: "<seat> <status>" (status as above), so the
 #                 referee can surface timeouts/down seats in the verdict's Process
 #                 notes from a single file.
@@ -69,12 +70,12 @@ here="$(cd "$(dirname "$0")" && pwd)"
 
 DEFAULT_SEAT_TIMEOUT=2400   # seconds; generous backstop above run_agy's ~34m worst case
 
-USAGE="usage: await_seats --id <id> --tag <findings|new_findings|stances> --prompt <f> [--seat-timeout <secs>] [--no-repair] --seat <codex|gemini> --raw <f> --parsed <f> --status <f> [--label <l>] [--seat ...] --done <f>  (see header comment for the full contract)"
+USAGE="usage: await_seats --id <id> --tag <findings|new_findings|stances> --prompt <f> [--seat-timeout <secs>] --seat <codex|gemini> --raw <f> --parsed <f> --status <f> [--label <l>] [--seat ...] --done <f>  (see header comment for the full contract)"
 # USAGE reachable WITHOUT a valid ID: panel_require_id "" aborts with "invalid run
 # id", so answer help before the flag parse touches it (issues-2026-07-04 #1).
 case "${1-}" in -h|--help|help) echo "$USAGE"; exit 0 ;; esac
 
-id=""; tag=""; prompt=""; no_repair=0; done_file=""
+id=""; tag=""; prompt=""; done_file=""
 seat_timeout="${PANEL_REVIEW_SEAT_TIMEOUT:-$DEFAULT_SEAT_TIMEOUT}"
 
 # Per-seat blocks, accumulated as parallel arrays indexed by seat order.
@@ -90,7 +91,6 @@ while [ "$#" -gt 0 ]; do
     --tag)          need_arg --tag "${2-}"; tag="$2"; shift 2 ;;
     --prompt)       need_arg --prompt "${2-}"; prompt="$2"; shift 2 ;;
     --seat-timeout) need_arg --seat-timeout "${2-}"; seat_timeout="$2"; shift 2 ;;
-    --no-repair)    no_repair=1; shift ;;
     --done)         need_arg --done "${2-}"; done_file="$2"; shift 2 ;;
     --seat)
       need_arg --seat "${2-}"
@@ -131,7 +131,6 @@ run_one() {
   local seat="$1" raw="$2" parsed="$3" statusf="$4" label="$5"
   local args=(--seat "$seat" --tag "$tag" --prompt "$prompt" --raw "$raw" --parsed "$parsed")
   [ -n "$label" ] && args+=(--label "$label")
-  [ "$no_repair" -eq 1 ] && args+=(--no-repair)
 
   local out rc
   set +e
