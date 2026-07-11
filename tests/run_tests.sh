@@ -573,6 +573,47 @@ PANEL_REVIEW_KEEP_TMP=false "$SC/discard" --workdir "$keeprepo" >/dev/null
 assert_eq "KEEP_TMP=false discard removes /tmp/<id>" 'gone'   "$([ -d "/tmp/$id" ] && echo kept || echo gone)"
 rm -rf "/tmp/$id"
 
+section "reopen — archives the finished epoch, then resets for the next cycle"
+# A finished run: i1 accepted (settled a prior round), i2 contested (the leftover).
+# reopen must (a) snapshot the whole finished record into epochs/epoch-<prev>/ before
+# the next cycle's round-N filenames clobber it, (b) reset the live index for a fresh
+# debate, (c) wipe+recreate sweeps. Regression for the continue data-loss/round-restart
+# investigation (issues-2026-07-11): night round-1 raws were overwritten with no .bak.
+rid="$PREFIX-reopen1"; rm -rf "/tmp/$rid" "/tmp/$rid.md" "/tmp/$rid.md.bak"
+mkdir -p "/tmp/$rid/raw" "/tmp/$rid/audit" "/tmp/$rid/sweeps/round-1"
+cat > "/tmp/$rid/index.json" <<'JSON'
+{"issues":[{"id":"i1","claim":"c","location":"f:1","category":"performance","severity":"medium","evidence_pro":[],"evidence_contra":[],"peer_reviewed":true,"fully_vetted":true,"detail_contested":false,"state":"accepted","rounds_debated":1,"card_rev":2},{"id":"i2","claim":"c","location":"f:2","category":"correctness","severity":"high","evidence_pro":[],"evidence_contra":[],"peer_reviewed":true,"fully_vetted":true,"detail_contested":false,"state":"contested","rounds_debated":2,"card_rev":5}],"round":2,"phase":"debate","committed_rounds":[1,2],"run_epoch":0,"evaluated_by":{"i1":["claude","codex","gemini"],"i2":["claude","codex","gemini"]}}
+JSON
+echo "NIGHT round1 claude raw" > "/tmp/$rid/raw/round1.claude.1.txt"
+echo "# round-1 audit" > "/tmp/$rid/audit/round-1.md"
+echo "sweep-round1-data" > "/tmp/$rid/sweeps/round-1/claude.1.out"
+echo "NIGHT VERDICT BODY" > "/tmp/$rid.md"
+"$SC/reopen" --id "$rid" --category contested >/dev/null 2>&1; assert_exit "reopen matched contested" 0 "$?"
+# live index reset for the new cycle
+assert_eq "reopen resets round to 0"          '0'    "$(jq -r '.round' "/tmp/$rid/index.json")"
+assert_eq "reopen bumps run_epoch"            '1'    "$(jq -r '.run_epoch' "/tmp/$rid/index.json")"
+assert_eq "reopen clears committed_rounds"    '[]'   "$(jq -c '.committed_rounds' "/tmp/$rid/index.json")"
+assert_eq "reopened leftover back to open"    'open' "$(jq -r '.issues[]|select(.id=="i2")|.state' "/tmp/$rid/index.json")"
+assert_eq "prior-epoch accepted issue kept"   'accepted' "$(jq -r '.issues[]|select(.id=="i1")|.state' "/tmp/$rid/index.json")"
+# archive preserves the finished record the next cycle would overwrite
+assert_file_contains "archive keeps round-1 raw"   'NIGHT round1 claude raw' "/tmp/$rid/epochs/epoch-0/raw/round1.claude.1.txt"
+assert_file_contains "archive keeps the verdict"   'NIGHT VERDICT BODY'      "/tmp/$rid/epochs/epoch-0/verdict.md"
+assert_file_contains "archive keeps the audit"     'round-1 audit'          "/tmp/$rid/epochs/epoch-0/audit/round-1.md"
+assert_eq "archived index is the finished (pre-reset) one" '2' "$(jq -r '.round' "/tmp/$rid/epochs/epoch-0/index.json")"
+assert_eq "archived index kept i2 contested"       'contested' "$(jq -r '.issues[]|select(.id=="i2")|.state' "/tmp/$rid/epochs/epoch-0/index.json")"
+assert_eq "sweeps wiped for the new cycle"         'gone' "$([ -e "/tmp/$rid/sweeps/round-1" ] && echo present || echo gone)"
+assert_eq "sweeps dir recreated"                   'yes'  "$([ -d "/tmp/$rid/sweeps" ] && echo yes || echo no)"
+
+# No leftover to reopen: exit 3, index untouched, NO spurious archive.
+rid2="$PREFIX-reopen2"; rm -rf "/tmp/$rid2"; mkdir -p "/tmp/$rid2"
+cat > "/tmp/$rid2/index.json" <<'JSON'
+{"issues":[{"id":"i1","claim":"c","location":"f:1","category":"performance","severity":"medium","evidence_pro":[],"evidence_contra":[],"peer_reviewed":true,"fully_vetted":true,"detail_contested":false,"state":"accepted","rounds_debated":1,"card_rev":2}],"round":1,"phase":"debate","committed_rounds":[1],"run_epoch":0,"evaluated_by":{"i1":["claude","codex"]}}
+JSON
+"$SC/reopen" --id "$rid2" --category both >/dev/null 2>&1; assert_exit "reopen with nothing to reopen exits 3" 3 "$?"
+assert_eq "no-match makes no archive"    'no' "$([ -d "/tmp/$rid2/epochs" ] && echo yes || echo no)"
+assert_eq "no-match leaves index untouched" '1|0' "$(jq -r '"\(.round)|\(.run_epoch)"' "/tmp/$rid2/index.json")"
+rm -rf "/tmp/$rid" "/tmp/$rid.md" "/tmp/$rid.md.bak" "/tmp/$rid2"
+
 section "protocol references the new deterministic helpers"
 assert_file_contains "protocol uses birth_index"          'birth_index' "$root/skills/panel-review-for-agent/SKILL.md"
 assert_file_contains "protocol uses run_seat"             'run_seat'    "$root/skills/panel-review-for-agent/SKILL.md"

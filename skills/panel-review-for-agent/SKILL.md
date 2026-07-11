@@ -748,6 +748,29 @@ merged `claim`, and clustering new findings — which it hands to you (step 10).
 
 You keep nothing in conversation; reconstruct everything from `/tmp/<id>/`.
 
+**Two dispatches land here, both handled by the one recovery below:** an **interrupted** run
+(`resume` after a crash mid-debate) or a **continued** run (`continue` re-debating a *finished* run's
+leftovers). For a continued run the launching command already ran `reopen` **in the main context,
+before spawning you**, so the index you inherit is a **freshly reopened** one — and this exact shape
+is NORMAL, not corruption:
+
+- `run_epoch` is **> 0** and `committed_rounds` is **`[]`** (reopen bumped the epoch and cleared the
+  committed list for the new cycle);
+- the reopened leftover issues are back to `state:open`, `rounds_debated:0`, flags cleared, while
+  issues that settled in an earlier epoch stay `accepted`/`rejected` (they were not reopened) — an
+  accepted issue with `rounds_debated≥1` sitting next to `committed_rounds:[]` is expected here, not a
+  contradiction;
+- `round` is `0`, so `sweep resume-plan` reports the next round as **1**: a continued run **restarts
+  round numbering at 1 within the new epoch** (rounds are per-epoch, never a global counter — do not
+  expect them to continue from the previous cycle's last number). The previous epoch's full record is
+  archived under `/tmp/$id/epochs/epoch-<n>/`.
+
+**Do not diagnose this as damage.** Never hand-compare `index.json` against `index.json.bak` (or their
+mtimes) to infer a "prior resume attempt" or "corrupted state": a reopen legitimately makes the live
+index diverge from its own just-rotated `.bak`, and that divergence *is* the transition above. Trust
+`sweep resume-plan` (it validates `run_epoch`) for what to recover; never reconstruct state from
+`.bak`. When `run_epoch > 0`, label the verdict a **continuation** (see the Rounds line in synthesis).
+
 1. Read `/tmp/$id/manifest.json` (scope, limits, `instructions` — the launching command adopted
    these from the manifest and confirmed via `resume_check` that the diff hash is unchanged; a
    diverged or stale run would not have dispatched you). If `/tmp/$id/instructions.txt` is absent (resume before Round 0
@@ -783,7 +806,7 @@ origins only here. Severity → headings: `critical`/`high` → **Critical**, `m
 ```markdown
 ## Panel Review — {scope}
 **Seats:** {seats that engaged — e.g. Claude + Codex (GPT) + Gemini}{" — {down seat(s)} unavailable" if any peer was down}
-**Rounds:** {N debate rounds} ({converged | ceiling reached})
+**Rounds:** {N debate rounds this cycle}{ — continuation (epoch {run_epoch}) if run_epoch>0} ({converged | ceiling reached})
 **Issues:** {X} total
 
 ### Security (if any — listed first, prominent)

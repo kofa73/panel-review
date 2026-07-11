@@ -10,6 +10,16 @@
 # like a Round-0-gated run (issues present, no committed sweeps) and mode=resume
 # starts a clean debate at round 1.
 #
+# Before that reset takes effect on disk, the finished epoch's whole record is
+# snapshotted into /tmp/<ID>/epochs/epoch-<prev>/. WHY: run_epoch guards the INDEX
+# against replay, but the per-round artifacts (raw seat transcripts, prompts,
+# sweeps, batch/plan/stances/payload files, the audit trail) are named
+# round<N>/round-<N> with NO epoch component, so the new cycle's round 1 overwrites
+# this cycle's round 1 in place. Only index.json/audit/the verdict sibling carry a
+# single .bak; the raws carry none. The archive keeps the previous cycle's full
+# transcript/verdict recoverable. It is a convenience for later inspection, not a
+# control (a continue is single-user and honest) — best-effort, never blocks reopen.
+#
 # Crash safety comes from the run_epoch counter, NOT from the order of these two
 # steps: `index reopen` bumps .run_epoch in the SAME atomic mutate that clears
 # committed_rounds. Any sweep dir left over from the previous cycle still carries
@@ -32,9 +42,33 @@ panel_require_id "$id"
 case "$category" in both|unresolved|contested) ;; *) echo "reopen: --category must be both|unresolved|contested" >&2; exit 2;; esac
 [ -s "/tmp/$id/index.json" ] || { echo "reopen: no index for $id" >&2; exit 1; }
 
+# The finishing epoch's number (read BEFORE the reset below bumps it) names its
+# archive dir. Default 0 for a pre-epoch index.
+prev_epoch="$(jq -r '.run_epoch // 0' "/tmp/$id/index.json" 2>/dev/null || echo 0)"
+
 # index.json mutation first (propagates exit 3 = nothing matched, leaving the run
 # untouched), bumping run_epoch atomically with clearing committed_rounds.
 "$here/index" reopen "$id" "$category"
+
+# Archive the finished epoch (see header). Runs only AFTER a successful `index
+# reopen` — so it snapshots a run that genuinely had leftovers (exit 3 aborts via
+# set -e above), and the finished pre-reset index is now in index.json.bak, which
+# `index reopen`'s atomic write just rotated it into. Everything else on disk is
+# still the finished epoch's (the sweeps wipe + new-cycle overwrites come later).
+# Wholly best-effort: any failure warns to stderr but must not block the reopen.
+arch="/tmp/$id/epochs/epoch-$prev_epoch"
+if rm -rf -- "$arch" && mkdir -p "$arch"; then
+  # Copy every top-level entry except the archive tree itself and the volatile lock.
+  find "/tmp/$id" -maxdepth 1 -mindepth 1 ! -name epochs ! -name '.index.lock' \
+    -exec cp -a -t "$arch" -- {} + 2>/dev/null || true
+  # Record the finished index cleanly from the pre-reset .bak (the copied index.json
+  # above is the just-reset one); and the durable verdict sibling, which lives
+  # OUTSIDE /tmp/$id/ and gets overwritten when the new cycle writes its verdict.
+  [ -s "/tmp/$id/index.json.bak" ] && cp -a -- "/tmp/$id/index.json.bak" "$arch/index.json" 2>/dev/null || true
+  [ -f "/tmp/$id.md" ] && cp -a -- "/tmp/$id.md" "$arch/verdict.md" 2>/dev/null || true
+else
+  echo "reopen: warning: could not create archive $arch; continuing without it" >&2
+fi
 
 # Drop stale debate checkpoints so resume starts the debate clean. /tmp/$id is
 # validated by panel_require_id above; only this subtree is removed. (run_epoch

@@ -371,7 +371,7 @@ fenced block).
 | `inspect_run` | Pure, read-only per-run inspector for `panel-review:status` — never repairs, never writes |
 | `discard` | The fault-tolerant traversal behind `panel-review:discard` — removes every session for the workdir |
 | `set_limits` | Writes a `--issue-rounds`/`--max-rounds` override back into a run's manifest, for `resume`/`continue` |
-| `reopen` | The engine behind `panel-review:continue` — revives a **finished** run's `unresolved`/`contested` leftovers for another debate cycle: `index reopen` bumps `run_epoch` and clears `committed_rounds`, then `/tmp/<ID>/sweeps/` is cleared so `resume` starts a clean debate at round 1. Counterpart to `init_run` |
+| `reopen` | The engine behind `panel-review:continue` — revives a **finished** run's `unresolved`/`contested` leftovers for another debate cycle: `index reopen` bumps `run_epoch` and clears `committed_rounds`, then `/tmp/<ID>/sweeps/` is cleared so `resume` starts a clean debate at round 1. Before that, it snapshots the finished cycle into `/tmp/<ID>/epochs/epoch-<n>/` (best-effort) so the next cycle's round-1 filenames don't destroy the previous cycle's transcripts/verdict. Counterpart to `init_run` |
 | `index` | The **only** writer of the canonical issue index (`/tmp/<id>/index.json`) — state, flags, private coverage, counters, `gate-status`, and the idempotent `commit-sweep` that applies a whole debate round atomically (and emits that round's human-readable `audit/round-<N>.md` trail as a side effect, best-effort) |
 | `project_card` / `regen_cards` | Render issue records → blind cards (no origins, no tally); rebuild all cards from the index on resume |
 | `write_card` | Atomic single-card write (temp + fsync + rename, `.bak` rotation) over `panel_atomic_write`, for the card writes `project_card`/`regen_cards` don't own |
@@ -401,6 +401,7 @@ derived, regenerable cache; state is never inferred from them.
 | `/tmp/<ID>/raw/` | each seat's verbatim response text, before parsing; **read back** — `parse_block` turns these into findings/stances, and resume reuses them (referee only) |
 | `/tmp/<ID>/origins/` | who raised each point, its original wording, and the per-round stances — the data the blind cards omit; **read back** by the referee to track review coverage and to attribute findings in the verdict (referee only) |
 | `/tmp/<ID>/audit/` | `round-<N>.md` — a human-readable trail of the issue-field changes applied in each debate round (state, flag, severity/claim/location revisions, evidence, new issues), written mechanically by `index commit-sweep`; **for inspection only — never read back by the process** |
+| `/tmp/<ID>/epochs/epoch-<n>/` | a snapshot of a finished debate cycle, taken by `reopen` when `panel-review:continue` starts the next cycle. Because per-round artifacts are named `round<N>`/`round-<N>` with **no epoch component**, the new cycle's round 1 overwrites the previous cycle's round 1 in place; this archive preserves the prior cycle's raws/prompts/sweeps/audit/index/verdict. **For inspection only — never read back by the process** |
 
 Writes are atomic (temp + `sync` + `rename`, prior version rotated to `.bak`). Init writes `/tmp`
 state first and the marker **last**, so a marker always implies valid state. A clean finish removes
@@ -420,7 +421,8 @@ in your conversation transcript. To give you a movable copy, the referee writes 
 `rm -rf /tmp/<ID>` in `cleanup`/`discard` never touches it. It is written **whenever a verdict is
 produced** (the low-severity gate, a finished-with-leftovers run, or a final finish), so every
 verdict you see has a matching file; a `continue` or a debated gate **overwrites** the same path
-(the prior copy rotates to `/tmp/<ID>.md.bak`). The file is self-contained: a YAML frontmatter header
+(the prior copy rotates to `/tmp/<ID>.md.bak`, and `continue` additionally snapshots it into that
+cycle's `/tmp/<ID>/epochs/epoch-<n>/`). The file is self-contained: a YAML frontmatter header
 (`id`, `scope`, `instructions`, `limits`, `seats`, `rounds`, `created`/`finished`, `diff_hash`)
 followed by the verdict markdown verbatim — the full diff is not embedded (it is large and
 reproducible from the scope; `diff_hash` is the reference). Writing it is **best-effort**: if it
