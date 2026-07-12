@@ -19,7 +19,7 @@ from panel_common import panel_atomic_write, panel_require_id
 
 NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 NUMBER_RE = re.compile(r"^[0-9]+$")
-USAGE = "usage: sweep {begin|record|plan|ingest-batch|drop-seat|resume-plan|has|done|commit} <ID> <round> ..."
+USAGE = "usage: sweep {begin|record|plan|plan-scaffold|ingest-batch|drop-seat|resume-plan|has|done|commit} <ID> <round> ..."
 
 
 def fail(message, code):
@@ -74,24 +74,40 @@ def write_atomic(path, data):
 
 
 def validate_plan(plan):
-    if type(plan) is not dict or type(plan.get("batches")) is not list or not plan["batches"]:
-        return False
+    if type(plan) is not dict:
+        return False, "plan must be an object"
+    for key in plan:
+        if key != "batches":
+            return False, f"plan: unknown key {key!r}"
+    if type(plan.get("batches")) is not list or not plan["batches"]:
+        return False, "plan: top-level 'batches' must be a non-empty list"
     pairs = set()
-    for batch in plan["batches"]:
+    for batch_number, batch in enumerate(plan["batches"]):
         if type(batch) is not dict:
-            return False
+            return False, f"batch[{batch_number}] must be an object"
+        for key in batch:
+            if key not in {"seat", "batch", "expected_ids"}:
+                hint = " (did you mean 'expected_ids'?)" if key == "ids" else ""
+                return False, f"batch[{batch_number}]: unknown key {key!r}{hint}"
         seat = batch.get("seat")
         name = batch.get("batch")
         expected = batch.get("expected_ids")
-        if type(seat) is not str or type(name) is not str or type(expected) is not list or not expected:
-            return False
-        if any(type(issue_id) is not str or not issue_id for issue_id in expected):
-            return False
+        if type(seat) is not str:
+            return False, f"batch[{batch_number}].seat must be a string"
+        if type(name) is not str:
+            return False, f"batch[{batch_number}].batch must be a string, got {type(name).__name__}"
+        if type(expected) is not list or not expected:
+            return False, f"batch[{batch_number}].expected_ids must be a non-empty list"
+        for issue_number, issue_id in enumerate(expected):
+            if type(issue_id) is not str or not issue_id:
+                return False, f"batch[{batch_number}].expected_ids[{issue_number}] must be a non-empty string"
+        if len(set(expected)) != len(expected):
+            return False, f"batch[{batch_number}].expected_ids contains duplicates"
         pair = (seat, name)
-        if pair in pairs or len(set(expected)) != len(expected):
-            return False
+        if pair in pairs:
+            return False, f"duplicate (seat,batch) pair: ({seat},{name})"
         pairs.add(pair)
-    return True
+    return True, ""
 
 
 def expected_ids(path):
@@ -172,9 +188,10 @@ def cmd_plan(sd, epoch, plan_path):
         with open(plan_path, encoding="utf-8") as handle:
             plan = json.load(handle)
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return fail("sweep plan: invalid batch plan", 2)
-    if not validate_plan(plan):
-        return fail("sweep plan: invalid batch plan", 2)
+        return fail("sweep plan: plan file is unreadable or not valid JSON", 2)
+    valid, reason = validate_plan(plan)
+    if not valid:
+        return fail(f"sweep plan: {reason}", 2)
     stored_path = os.path.join(sd, "plan.json")
     if os.path.isfile(stored_path):
         try:
@@ -189,6 +206,34 @@ def cmd_plan(sd, epoch, plan_path):
         stored["epoch"] = int(epoch)
         stored["dropped_seats"] = []
         write_atomic(stored_path, compact(stored) + "\n")
+    return 0
+
+
+def cmd_plan_scaffold(idx, seats):
+    if not seats:
+        return fail("sweep plan-scaffold: requires at least one seat", 2)
+    seen = set()
+    for seat in seats:
+        if not valid_name(seat):
+            return fail(f"sweep plan-scaffold: bad seat name: {seat}", 2)
+        if seat in seen:
+            return fail(f"sweep plan-scaffold: duplicate seat: {seat}", 2)
+        seen.add(seat)
+    try:
+        index = read_index(idx)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return fail("sweep plan-scaffold: index not found or invalid", 1)
+    issue_ids = sorted_ids([
+        issue.get("id") for issue in index.get("issues", [])
+        if type(issue) is dict and issue.get("state") == "open" and type(issue.get("id")) is str
+    ])
+    if not issue_ids:
+        return fail("sweep plan-scaffold: no open issues", 1)
+    plan = {"batches": [
+        {"seat": seat, "batch": "1", "expected_ids": issue_ids}
+        for seat in seats
+    ]}
+    print(compact(plan))
     return 0
 
 
@@ -339,7 +384,7 @@ def cmd_commit(sd, idx, run_id, round_text, epoch):
     return 0
 
 
-KNOWN_CMDS = {"begin", "record", "plan", "ingest-batch", "drop-seat",
+KNOWN_CMDS = {"begin", "record", "plan", "plan-scaffold", "ingest-batch", "drop-seat",
               "resume-plan", "has", "done", "commit"}
 
 
@@ -368,6 +413,8 @@ def main(argv):
         return cmd_record(sd, idx, argv[4] if len(argv) > 4 else "", argv[5] if len(argv) > 5 else "", argv[6] if len(argv) > 6 else "", argv[7] if len(argv) > 7 else "all")
     if cmd == "plan":
         return cmd_plan(sd, argv[4] if len(argv) > 4 else "", argv[5] if len(argv) > 5 else "")
+    if cmd == "plan-scaffold":
+        return cmd_plan_scaffold(idx, argv[4:])
     if cmd == "ingest-batch":
         return cmd_ingest_batch(sd, argv[4] if len(argv) > 4 else "", argv[5] if len(argv) > 5 else "", argv[6] if len(argv) > 6 else "", argv[7] if len(argv) > 7 else "", argv[8] if len(argv) > 8 else "")
     if cmd == "drop-seat":

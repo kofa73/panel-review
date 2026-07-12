@@ -89,7 +89,7 @@ PR="$ROOT/prompts"
 "$SC/project_card" --id <id> --workdir <dir> [--index-rev N] < issue.json   # one issue record -> its card
 "$SC/regen_cards"  --id <id> --workdir <dir>                                # rebuild ALL cards from the index
 "$SC/index"   commit-sweep <id> <round> <epoch>  # apply a WHOLE debate round atomically (payload JSON on stdin)
-"$SC/sweep"   {begin|plan|ingest-batch|drop-seat|resume-plan|has|done|commit} <id> <round> ...  # checkpointed seat/batch debate sweeps
+"$SC/sweep"   {begin|plan|plan-scaffold|ingest-batch|drop-seat|resume-plan|has|done|commit} <id> <round> ...  # checkpointed seat/batch debate sweeps; plan-scaffold takes the current panel as trailing seat args
 "$SC/decide_round" --id <id> --round N --configured "<seats>" --engaged "<seats>" --stances <f> [--advice <f>]  # normal Transitions table -> commit-sweep payload
 "$SC/decide_degraded_round" --id <id> --round N --configured "<seats>" --engaged "<zero-or-one-seat>" --stances <f>  # terminal non-voting payload
 "$SC/merge_payload" <base.json> < addendum.json   # fold referee additions into the payload (set_state replace, revise field-merge) — never append a 2nd entry for an id
@@ -514,13 +514,31 @@ For `round = 1, 2, … max-rounds`, while any issue is `open`:
    reflect all accumulated evidence). Collect the open cards' **absolute paths**
    `<workdir>/.panel-review/<id>/issue-<oid>.md` (absolute for the same reason the
    scratch dir is — agy guesses its own repo root, so a relative card path can drift).
-4. **Over-budget:** a single card always goes **whole** to every engaged seat. If the *set* of
+4. **Generate the common single-batch plan.** After `sweep begin`, have `sweep plan-scaffold` read
+   the open issue IDs and build one batch for every seat in the current panel. Save its stdout, then
+   do not hand-write the JSON. The trailing seats are the current panel from `preflight`, because
+   that panel is rechecked on resume and is not stored in `index.json`:
+
+   ```bash
+   # Full-panel example; omit any peer that the current preflight reported unavailable.
+   "$SC/sweep" plan-scaffold "$id" "$round" codex gemini claude > /tmp/$id/plan.$round.json
+   # Exact shape ("batch" is a quoted string):
+   # {"batches":[{"seat":"codex","batch":"1","expected_ids":["i3","i4","i5"]},...]}
+   ```
+
+5. **Over-budget:** a single card always goes **whole** to every engaged seat. If the *set* of
    open cards exceeds the context budget, paginate into deterministic batches (by severity, then
    file+line) — but every batch goes to all engaged seats. The round is the union of its batches.
    For each batch, write its exact, sorted issue-id set once to
-   `/tmp/$id/batch.$round.$batch.ids`; step 6 uses it to ensure a partially parsed response is not
+   `/tmp/$id/batch.$round.$batch.ids`; step 7 uses it to ensure a partially parsed response is not
    checkpointed as complete.
-5. **Assemble + dispatch** to each seat/batch not already recorded this round (`"$SC/sweep" has`):
+   The scaffold emits only the common single-batch plan. If pagination is actually needed, replace
+   the scaffolded file with the corresponding multi-batch shape. Then register the final plan once:
+
+   ```bash
+   "$SC/sweep" plan "$id" "$round" "$epoch" /tmp/$id/plan.$round.json
+   ```
+6. **Assemble + dispatch** to each seat/batch not already recorded this round (`"$SC/sweep" has`):
 
    ```bash
    printf '%s\n' "$OPEN_CARD_PATHS" > /tmp/$id/cards.$round.txt
@@ -536,8 +554,7 @@ For `round = 1, 2, … max-rounds`, while any issue is `open`:
    # run each seat/batch -> /tmp/$id/raw/round$round.<seat>.<batch>.txt
    ```
    Spawn a **fresh** `panel-review:panel-review-claude-seat` subagent for the Claude seat each round.
-6. **Register and ingest batches through `sweep`.** Before dispatch, write a plan with every
-   `{seat,batch,expected_ids}` and register it after `sweep begin`. After each response, use
+7. **Ingest batches through `sweep`.** The plan was registered in step 5. After each response, use
    `sweep ingest-batch`; it runs `parse_block`, requires exactly one stance for every expected ID,
    and retains raw plus parsed output only for `status=complete`. `missing`, `empty`, `malformed`,
    `partial`, and `wrong_ids` remain retryable. Also pull any **new findings** a seat raised this
@@ -576,7 +593,6 @@ For `round = 1, 2, … max-rounds`, while any issue is `open`:
    dispatch and the Agents' wakes (see the long-running-seats rule).
 
    ```bash
-   "$SC/sweep" plan "$id" "$round" "$epoch" /tmp/$id/plan.$round.json
    # Ingest the seat's raw. If ingest reports a non-complete status that a salvage
    # recovers (see "Salvage"), re-run ingest-batch against the .salvaged side file.
    "$SC/sweep" ingest-batch "$id" "$round" "$epoch" "$seat" "$batch" \
@@ -590,9 +606,9 @@ For `round = 1, 2, … max-rounds`, while any issue is `open`:
    "$SC/repo_guard" verify --id "$id" --workdir "$workdir" --restore >> /tmp/$id/origins/guard.debate.txt || true
    ```
    Any drift is reverted from the snapshot and carried into the verdict's Process notes.
-7. **Engaged = COMPLETE this pass.** A seat is engaged only when all of its planned batches are
+8. **Engaged = COMPLETE this pass.** A seat is engaged only when all of its planned batches are
    `complete` in `"$SC/sweep" resume-plan "$id"`. A seat with any other batch status is not engaged.
-8. **Retry every non-complete batch once, THEN re-check engagement.** A malformed batch first gets a
+9. **Retry every non-complete batch once, THEN re-check engagement.** A malformed batch first gets a
    **salvage** attempt (see "Salvage": rewrite the raw well-formed, re-ingest the side file); missing,
    empty, partial, wrong-ID, or an unsalvageable stub gets a fresh dispatch.
    If any batch still fails, run `"$SC/sweep" drop-seat "$id" "$round" "$seat"`; this discards all
@@ -607,7 +623,7 @@ For `round = 1, 2, … max-rounds`, while any issue is `open`:
    "$SC/decide_degraded_round" --id "$id" --round "$round" --configured "<full panel>" \
      --engaged "<zero or one complete seat>" --stances /tmp/$id/stances.$round.json > /tmp/$id/payload.$round.json
    ```
-9. **Decide each open issue's outcome — `decide_round` does the mechanical part.** It applies the
+10. **Decide each open issue's outcome — `decide_round` does the mechanical part.** It applies the
    Transitions table below (stance counting, `bump`, `peer_reviewed`/`fully_vetted`, enum-field
    convergence, **and the forced-terminal-at-limits rule**) to the open issues and emits ONE
    commit-sweep payload, carrying every `reject`/revision rationale and `new_evidence` as evidence
@@ -623,7 +639,7 @@ For `round = 1, 2, … max-rounds`, while any issue is `open`:
      --advice /tmp/$id/advice.$round.json > /tmp/$id/payload.$round.json
    ```
    `--configured` is the panel from `preflight`; `--engaged` is the subset that engaged this round
-   (step 7). `decide_round` **validates** the stances against `--engaged`: exactly one stance per
+   (step 8). `decide_round` **validates** the stances against `--engaged`: exactly one stance per
    (engaged seat, open issue), no unknown/duplicate `_source`, no omissions — a violation is a hard
    error (exit 3) and means a seat block was incomplete/garbled, so **salvage or re-dispatch that
    seat** (don't hand-edit the stances). It also runs a **blindness scan** over the free text it
@@ -638,10 +654,10 @@ For `round = 1, 2, … max-rounds`, while any issue is `open`:
    does **no judgment**: it never picks a winning value for the prose `claim` field, and a plain
    `support` is read as endorsing the issue *as stated* (so an enum change is adopted only when
    **every** supporting seat's effective value agrees). It never clusters new findings — that is
-   step 10. (It is the single builder of the round payload, the way `parse_block` is the single
-   parser; keeping the whole round in one uncommitted payload is what makes a crash before step 11
+   step 11. (It is the single builder of the round payload, the way `parse_block` is the single
+   parser; keeping the whole round in one uncommitted payload is what makes a crash before step 12
    leave round N **wholly unapplied**.)
-10. **Add the judgment `decide_round` can't — as an ADDENDUM, merged in, never appended.**
+11. **Add the judgment `decide_round` can't — as an ADDENDUM, merged in, never appended.**
    Build `/tmp/$id/addendum.$round.json` (a payload-shaped object) holding only your additions:
    - **Prose `claim` revisions** — read `/tmp/$id/advice.$round.json`. For each `prose_revisions`
      entry, your call: synthesize ONE merged `claim` → a `revise` for that id; or if the proposals
@@ -676,7 +692,7 @@ For `round = 1, 2, … max-rounds`, while any issue is `open`:
      # nonzero exit ⇒ fix the addendum shape and retry; payload.$round.json is untouched
      ```
      (If you have no additions, skip the merge — the `decide_round` payload is already complete.)
-11. **Commit atomically.** The payload from steps 9–10 is complete — `decide_round` already folded in
+12. **Commit atomically.** The payload from steps 10–11 is complete — `decide_round` already folded in
    the forced-terminal rule — so just apply the whole round in one shot:
 
    ```bash
@@ -687,7 +703,7 @@ For `round = 1, 2, … max-rounds`, while any issue is `open`:
    `.committed_rounds`): a re-run after a crash is a complete no-op — no double-bump, no duplicated
    issue or evidence. Transitions, counters, evidence, and terminal states all take effect **only
    here**, together.
-12. **Low-severity stop gate (after each committed round).** Once the round commits, query
+13. **Low-severity stop gate (after each committed round).** Once the round commits, query
     `"$SC/index" gate-status "$id"`. If `low_only` is true and the run was **not** invoked with
     `debate-low=true`, **stop the loop** rather than spend the remaining
     budget confirming low items — the same rationale as the Round-0 gate, reapplied so a later round

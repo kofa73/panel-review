@@ -27,8 +27,10 @@ byte-exact.
   They **validate** input (exactly one stance per engaged-seat × open-issue; no unknown/duplicate
   `_source`); a plain `support` endorses the issue *as stated* (enum change adopted only on full
   effective-value agreement).
-- `sweep` — owns batch plans, parsing/expected-ID checkpoint admission, dropped-seat cleanup, and
-  recovery plans. Don't reconstruct batch eligibility from raw files.
+- `sweep` — owns batch plans, including generating the common single-batch shape from open issue IDs
+  and the referee-supplied current panel; reports the exact rejected plan field, owns
+  parsing/expected-ID checkpoint admission, dropped-seat cleanup, and recovery plans. Don't
+  reconstruct batch eligibility from raw files or hand-write the common plan.
 - `merge_payload` — folds the referee's addendum (synthesized claims, `add_issues`, fold-reopen) into
   the `decide_round` payload with the per-key semantics `commit-sweep` needs (`set_state` replace,
   `revise` field-merge, `set_flag` dedup). The referee must **never append** a second

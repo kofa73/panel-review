@@ -54,7 +54,8 @@ them up. No real run is touched.
 - **sweep** (`test_sweep.py`): batch ingestion classification
   (missing/empty/malformed/partial/wrong_ids/complete); `has`/`resume-plan`;
   `drop-seat` exclusion; `done`/`commit` (incl. stale-epoch rejection); plan
-  validation.
+  validation with field-specific diagnostics; `plan-scaffold` validation and
+  scaffold-to-plan round trip.
 
 ## What the bash suite covers (`run_tests.sh`)
 

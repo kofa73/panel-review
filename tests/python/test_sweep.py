@@ -97,13 +97,81 @@ class TestSweep(unittest.TestCase):
 
     def test_plan_rejects_invalid_and_existing_difference(self):
         self.assertEqual(self.run_sweep("begin", self.run_id, "1", "0").returncode, 0)
-        invalid = self.tmp / "invalid.json"
-        self.write_json(invalid, {"batches": []})
-        self.assertEqual(self.run_sweep("plan", self.run_id, "1", "0", invalid).returncode, 2)
+        invalid_plans = [
+            ([], "plan must be an object"),
+            ({}, "plan: top-level 'batches' must be a non-empty list"),
+            ({"batches": []}, "plan: top-level 'batches' must be a non-empty list"),
+            ({"batches": ["bad"]}, "batch[0] must be an object"),
+            ({"batches": [{"seat": "codex", "batch": "1", "ids": ["i1"]}]},
+             "batch[0]: unknown key 'ids' (did you mean 'expected_ids'?)"),
+            ({"batches": [{"seat": "codex", "batch": "1", "expected_ids": ["i1"]}], "seats": ["codex"]},
+             "plan: unknown key 'seats'"),
+            ({"batches": [{"seat": "codex", "batch": 1, "expected_ids": ["i1"]}]},
+             "batch[0].batch must be a string, got int"),
+            ({"batches": [{"seat": 1, "batch": "1", "expected_ids": ["i1"]}]},
+             "batch[0].seat must be a string"),
+            ({"batches": [{"seat": "codex", "batch": "1", "expected_ids": "i1"}]},
+             "batch[0].expected_ids must be a non-empty list"),
+            ({"batches": [{"seat": "codex", "batch": "1", "expected_ids": []}]},
+             "batch[0].expected_ids must be a non-empty list"),
+            ({"batches": [{"seat": "codex", "batch": "1", "expected_ids": ["i1", 2]}]},
+             "batch[0].expected_ids[1] must be a non-empty string"),
+            ({"batches": [{"seat": "codex", "batch": "1", "expected_ids": ["i1", ""]}]},
+             "batch[0].expected_ids[1] must be a non-empty string"),
+            ({"batches": [{"seat": "codex", "batch": "1", "expected_ids": ["i1", "i1"]}]},
+             "batch[0].expected_ids contains duplicates"),
+            ({"batches": [
+                {"seat": "codex", "batch": "1", "expected_ids": ["i1"]},
+                {"seat": "codex", "batch": "1", "expected_ids": ["i2"]},
+            ]}, "duplicate (seat,batch) pair: (codex,1)"),
+        ]
+        for number, (plan, reason) in enumerate(invalid_plans):
+            with self.subTest(reason=reason):
+                invalid = self.tmp / f"invalid-{number}.json"
+                self.write_json(invalid, plan)
+                result = self.run_sweep("plan", self.run_id, "1", "0", invalid)
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(result.stderr, f"sweep plan: {reason}\n")
+
+        malformed = self.tmp / "malformed.json"
+        malformed.write_text("{", encoding="utf-8")
+        result = self.run_sweep("plan", self.run_id, "1", "0", malformed)
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(result.stderr, "sweep plan: plan file is unreadable or not valid JSON\n")
+
         self.assertEqual(self.run_sweep("plan", self.run_id, "1", "0", self.plan).returncode, 0)
         different = self.tmp / "different.json"
         self.write_json(different, {"batches": [{"seat": "codex", "batch": "b1", "expected_ids": ["i1"]}]})
         self.assertEqual(self.run_sweep("plan", self.run_id, "1", "0", different).returncode, 1)
+
+    def test_plan_scaffold_round_trip(self):
+        index = json.loads((self.run_dir / "index.json").read_text(encoding="utf-8"))
+        index["issues"][2]["state"] = "accepted"
+        index["issues"].reverse()
+        self.write_json(self.run_dir / "index.json", index)
+
+        scaffold = self.run_sweep("plan-scaffold", self.run_id, "1", "codex", "gemini", "claude")
+        self.assertEqual(scaffold.returncode, 0, msg=scaffold.stderr)
+        self.assertEqual(json.loads(scaffold.stdout), {"batches": [
+            {"seat": "codex", "batch": "1", "expected_ids": ["i1", "i2"]},
+            {"seat": "gemini", "batch": "1", "expected_ids": ["i1", "i2"]},
+            {"seat": "claude", "batch": "1", "expected_ids": ["i1", "i2"]},
+        ]})
+
+        scaffold_path = self.tmp / "scaffold.json"
+        scaffold_path.write_text(scaffold.stdout, encoding="utf-8")
+        self.assertEqual(self.run_sweep("begin", self.run_id, "1", "0").returncode, 0)
+        accepted = self.run_sweep("plan", self.run_id, "1", "0", scaffold_path)
+        self.assertEqual(accepted.returncode, 0, msg=accepted.stderr)
+
+    def test_plan_scaffold_rejects_bad_inputs(self):
+        no_seats = self.run_sweep("plan-scaffold", self.run_id, "1")
+        self.assertEqual(no_seats.returncode, 2)
+        self.assertEqual(no_seats.stderr, "sweep plan-scaffold: requires at least one seat\n")
+
+        duplicate = self.run_sweep("plan-scaffold", self.run_id, "1", "codex", "codex")
+        self.assertEqual(duplicate.returncode, 2)
+        self.assertEqual(duplicate.stderr, "sweep plan-scaffold: duplicate seat: codex\n")
 
     def test_usage_reachable_without_valid_id(self):
         # Regression for issues-2026-07-04 #1: USAGE must be reachable WITHOUT a run
