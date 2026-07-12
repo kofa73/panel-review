@@ -596,7 +596,7 @@ For `round = 1, 2, … max-rounds`, while any issue is `open`:
    # Ingest the seat's raw. If ingest reports a non-complete status that a salvage
    # recovers (see "Salvage"), re-run ingest-batch against the .salvaged side file.
    "$SC/sweep" ingest-batch "$id" "$round" "$epoch" "$seat" "$batch" \
-     /tmp/$id/batch.$round.$seat.$batch.ids /tmp/$id/raw/round$round.$seat.$batch.txt
+     /tmp/$id/batch.$round.$batch.ids /tmp/$id/raw/round$round.$seat.$batch.txt
    ```
    **Guard the tree** once every seat of the round has returned (same as Round 0 — append, don't
    overwrite, so earlier rounds' violations survive in the verdict):
