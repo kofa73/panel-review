@@ -27,7 +27,8 @@ Python; the rest bash); skills/agents are Markdown. `python3`, `jq`, `git` are r
     `~/.claude/plugins/cache`, independent of `install.sh`'s target — keep both working).
 - **Run a review** (from inside the repo under review, after install):
   `panel-review:start --base main` | `--uncommitted` | `--commit <SHA>` | `"<question>"`. Other verbs:
-  `:status` (read-only), `:resume`, `:continue [unresolved|contested]`, `:discard`. See README
+  `:status` (read-only), `:resume`, `:continue [unresolved|contested]`, `:result <ID>` (read-only),
+  `:discard`. See README
   "Using it" for flags (`--issue-rounds`, `--max-rounds`, `--debate-low`, `--instructions`).
 - **Tests:** `./tests/run_tests.sh` (`VERBOSE=1` lists each PASS) runs bash asserts then the Python
   `unittest` suite (`tests/python/`, fixtures in `tests/fixtures/`). Run it after changing
@@ -41,10 +42,10 @@ Python; the rest bash); skills/agents are Markdown. `python3`, `jq`, `git` are r
 
 Four participants, strict role separation (full per-script map in `.claude/rules/scripts.md`):
 
-- **Command skills** (`skills/{start,status,resume,continue,discard}/SKILL.md`) — run in the **main
+- **Command skills** (`skills/{start,status,resume,continue,result,discard}/SKILL.md`) — run in the **main
   conversation**; parse args, check preconditions, dispatch the referee. `start`/`resume`/`continue`/
   `discard` are `disable-model-invocation: true` (human-triggered only, so the model never auto-wipes a
-  session); `status` stays model-invocable.
+  session); the read-only `status` and `result` stay model-invocable.
 - **Referee** (`agents/panel-review-referee.md`) — a **separate context** that orchestrates but
   **never reviews code**. Its procedure lives in the preloaded skill
   `skills/panel-review-for-agent/SKILL.md` (`user-invocable: false`), the single source of truth for

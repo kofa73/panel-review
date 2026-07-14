@@ -8,10 +8,13 @@
 # rotates the old bytes to a .bak first, so one prior snapshot survives a
 # refresh).
 #
-# Usage: write_verdict_artifact --id ID < verdict.md
+# Usage: write_verdict_artifact --id ID [--final] < verdict.md
 #
 # Header fields scope/instructions/limits/diff_hash/created come from
-# /tmp/<ID>/manifest.json. seats/rounds are pulled from the verdict body's own
+# /tmp/<ID>/manifest.json. run_epoch and status come from the canonical index;
+# status is finished when no issue remains open. The main start skill uses
+# --final only after the user explicitly finishes at the low-only gate, where
+# open issues intentionally remain. seats/rounds are pulled from the verdict body's own
 # "**Seats:**"/"**Rounds:**" lines rather than passed again as separate args —
 # a second copy of the same fact would drift from the verdict text it
 # describes. Missing manifest is a hard error (exit 1): the caller should
@@ -22,10 +25,11 @@
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"; . "$here/_panel_common.sh"
 
-id=""
+id=""; final=false
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --id) id="$2"; shift 2;;
+    --final) final=true; shift;;
     *) echo "write_verdict_artifact: unknown arg: $1" >&2; exit 2;;
   esac
 done
@@ -44,6 +48,8 @@ yaml_scalar() { jq -cn --arg v "$1" '$v'; }
 
 man="/tmp/$id/manifest.json"
 [ -s "$man" ] || { echo "write_verdict_artifact: no manifest for $id" >&2; exit 1; }
+index="/tmp/$id/index.json"
+[ -s "$index" ] || { echo "write_verdict_artifact: no index for $id" >&2; exit 1; }
 
 scope=$(jq -r '.scope' "$man")
 instr=$(jq -r '.instructions // ""' "$man")
@@ -52,6 +58,27 @@ mx=$(jq -r '.limits.max_rounds' "$man")
 dh=$(jq -r '.diff_hash' "$man")
 created=$(jq -r '.created' "$man")
 finished="$(date '+%Y-%m-%d %H:%M:%S')"
+epoch="$(jq -er '
+  (.run_epoch // 0) as $epoch
+  | if (($epoch | type) == "number" and $epoch >= 0 and $epoch == ($epoch | floor))
+    then $epoch
+    else error("run_epoch must be a non-negative integer")
+    end
+' "$index")" || { echo "write_verdict_artifact: invalid run_epoch for $id" >&2; exit 1; }
+status="$(jq -er --argjson final "$final" '
+  if (.issues | type) != "array" then error("issues must be an array")
+  elif (.phase | IN("round0", "debate") | not) then error("index has an invalid phase")
+  elif any(.issues[]; (.state | IN("open", "accepted", "rejected", "contested", "unresolved", "merged") | not))
+    then error("issue has an invalid state")
+  elif .phase != "debate" then "incomplete"
+  elif $final and (([.issues[] | select(.state == "open")] | length) == 0
+    or any(.issues[]; .state == "open" and .severity != "low"))
+    then error("finalization requires a low-only gate")
+  elif $final then "finished"
+  elif any(.issues[]; .state == "open") then "incomplete"
+  else "finished"
+  end
+' "$index")" || { echo "write_verdict_artifact: invalid index for $id" >&2; exit 1; }
 
 body="$(cat)"
 # `|| true`: a missing Seats/Rounds line makes grep exit 1, which pipefail
@@ -65,6 +92,8 @@ dest="/tmp/$id.md"
 {
   printf '%s\n' "---"
   printf 'id: %s\n' "$id"
+  printf 'run_epoch: %s\n' "$epoch"
+  printf 'status: %s\n' "$status"
   printf 'scope: %s\n' "$(yaml_scalar "$scope")"
   printf 'instructions: %s\n' "$(yaml_scalar "${instr:-(none)}")"
   printf 'limits: issue-rounds=%s max-rounds=%s\n' "$iss" "$mx"

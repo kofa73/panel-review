@@ -6,7 +6,7 @@
 # prompts/, assets/) into the user's Claude config dir as a single
 # skills-directory plugin, loaded as panel-review@skills-dir. Commands are
 # namespaced panel-review:<verb> (panel-review:start, :status, :resume,
-# :continue, :discard).
+# :continue, :result, :discard).
 #
 # It REMOVES the old pre-plugin layout this repo used to install (loose
 # skills/agents, not a plugin) — both project- and user-level agents/
@@ -82,5 +82,5 @@ for agent in panel-review-referee panel-review-claude-seat panel-review-cli-barr
 done
 [ "$shadow_found" -eq 0 ] || echo "Remove the file(s) above so the plugin's agents aren't shadowed."
 
-echo "Done. Loaded as panel-review@skills-dir; commands are panel-review:start/status/resume/continue/discard."
+echo "Done. Loaded as panel-review@skills-dir; commands are panel-review:start/status/resume/continue/result/discard."
 echo "/reload-plugins (or restart) to pick up the changes."

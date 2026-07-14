@@ -102,7 +102,7 @@ Two independent ways to install, pick one:
 
 ## Using it
 
-`panel-review` is a **plugin** with five explicit subcommands — each has one job, one
+`panel-review` is a **plugin** with six explicit subcommands — each has one job, one
 precondition, one outcome. Intent is in the verb, so the tool never has to guess whether you mean
 to start fresh or pick up where you left off. Run them from the repo you want reviewed.
 
@@ -118,6 +118,7 @@ panel-review:start --uncommitted focus on the new locking           # steer the 
 panel-review:start --base main --instructions auto                  # let the referee derive context
 panel-review:resume                               # pick up an interrupted run
 panel-review:continue [unresolved|contested]      # re-debate a finished run's leftovers
+panel-review:result <ID>                          # retrieve a validated finished verdict by artifact ID
 panel-review:discard                              # delete the saved review (the reset)
 ```
 
@@ -243,14 +244,15 @@ seat is abandoned mid-run and the review silently degrades to the seats that did
 | `skills/status/SKILL.md` | skill | **Read-only.** Lists the saved session(s) + prereqs. | you, via `panel-review:status` (also model-invocable) |
 | `skills/resume/SKILL.md` | skill | Picks up an interrupted run (limit overrides only; scope/instructions adopted from the manifest). | you, via `panel-review:resume` |
 | `skills/continue/SKILL.md` | skill | Re-debates a finished run's `unresolved`/`contested` leftovers. | you, via `panel-review:continue` |
+| `skills/result/SKILL.md` | skill | **Read-only.** Validates and retrieves a finished durable verdict by exact artifact ID; never resumes or re-runs seats. | you, via `panel-review:result <ID>` (also model-invocable) |
 | `skills/discard/SKILL.md` | skill | Deletes all saved sessions for this workdir (the reset). | you, via `panel-review:discard` |
 | `skills/panel-review-for-agent/SKILL.md` | skill | **The referee protocol.** The full blind-debate procedure. Preloaded into the referee agent (`user-invocable: false`); hidden from the `/` menu. | the referee agent (preloaded) |
 | `agents/panel-review-referee.md` | agent | **The referee.** A separate context that runs the seats and never reviews code itself; it follows the referee-protocol skill. | `start`/`resume`/`continue` |
 | `agents/panel-review-claude-seat.md` | agent | **The Claude seat.** A cold, no-memory agent spawned fresh each pass. | the referee agent (never forked) |
 
 `start`/`resume`/`continue`/`discard` are `disable-model-invocation: true` — only you trigger them
-(critical for `discard`, so the model never autonomously wipes a session). `status` is read-only and
-left model-invocable.
+(critical for `discard`, so the model never autonomously wipes a session). `status` and `result` are
+read-only and left model-invocable.
 
 ### End-to-end flow
 
@@ -376,7 +378,8 @@ fenced block).
 | `project_card` / `regen_cards` | Render issue records → blind cards (no origins, no tally); rebuild all cards from the index on resume |
 | `write_card` | Atomic single-card write (temp + fsync + rename, `.bak` rotation) over `panel_atomic_write`, for the card writes `project_card`/`regen_cards` don't own |
 | `sweep` | Checkpointed debate sweeps — owns batch plans (including `plan-scaffold`, which emits one correctly shaped batch per supplied current-panel seat from the open issue IDs), targeted plan-schema diagnostics, parse/ID validation, checkpoint retention, dropped-seat cleanup, and resume plans; counters advance **only** on a committed sweep |
-| `write_verdict_artifact` | Write the durable verdict to the `/tmp/<ID>.md` sibling of `/tmp/<ID>/` (outside it, so `cleanup`/`discard` never delete it); best-effort — its failure must not block returning the verdict to the user |
+| `write_verdict_artifact` | Write the durable verdict to the `/tmp/<ID>.md` sibling of `/tmp/<ID>/` (outside it, so `cleanup`/`discard` never delete it), stamped with the continuation epoch and `finished` only when the canonical index has no open issue or the user explicitly finishes at the low-only gate; best-effort — its failure must not block returning the verdict to the user |
+| `read_verdict_artifact` | Validate a durable artifact's ID, finished status, metadata, and optional expected scope/diff hash/continuation epoch, then emit only its verdict body; used for failed-final-response recovery and `panel-review:result <ID>` |
 
 ---
 
@@ -423,11 +426,21 @@ produced** (the low-severity gate, a finished-with-leftovers run, or a final fin
 verdict you see has a matching file; a `continue` or a debated gate **overwrites** the same path
 (the prior copy rotates to `/tmp/<ID>.md.bak`, and `continue` additionally snapshots it into that
 cycle's `/tmp/<ID>/epochs/epoch-<n>/`). The file is self-contained: a YAML frontmatter header
-(`id`, `scope`, `instructions`, `limits`, `seats`, `rounds`, `created`/`finished`, `diff_hash`)
+(`id`, `run_epoch`, `status`, `scope`, `instructions`, `limits`, `seats`, `rounds`,
+`created`/`finished`, `diff_hash`)
 followed by the verdict markdown verbatim — the full diff is not embedded (it is large and
 reproducible from the scope; `diff_hash` is the reference). Writing it is **best-effort**: if it
 fails (e.g. `/tmp` full), the verdict is still returned, just without the pointer line. **`/tmp` is
 cleared on reboot — move the file somewhere permanent to keep it.**
+
+If the referee persists a finished verdict but its final Agent response fails, `start`, `resume`,
+and `continue` call `read_verdict_artifact` with the run's expected ID, scope, diff hash, and
+continuation epoch. They
+present the recovered body only if all checks pass; an artifact's existence alone is not treated as
+completion. If a hard session/quota limit leaves no main-conversation turn for that recovery, reset
+the quota and run `panel-review:result <ID>`. This read-only command validates `/tmp/<ID>.md` and
+prints its verdict body without depending on the normally removed workspace marker or re-running
+any seat.
 
 ### Continuing a finished review
 
@@ -463,14 +476,14 @@ If the run turns out not to be finished-with-leftovers (still mid-debate), `cont
   location with the same mechanism; when unsure, don't merge.
 - **Unanimity or the human.** No majority rule, no referee fact-checking inside the loop. The loop
   only filters clear false positives; everything else is presented for you to decide.
-- **Explicit verbs, no intent-guessing.** `start`/`resume`/`continue`/`discard`/`status` each have one
+- **Explicit verbs, no intent-guessing.** `start`/`resume`/`continue`/`discard`/`status`/`result` each have one
   job and one precondition; the tool never infers fresh-vs-resume from on-disk state. The only
   remaining `AskUserQuestion` is the low-severity gate (debate the all-low Round-0 set, or finish).
   `diverged`/`ambiguous` are deterministic exits, not prompts.
 - **Skills only — no command file.** The referee-protocol skill is `user-invocable: false`
   (preloadable into the referee agent, hidden from the `/` menu). The four side-effecting command
   skills (`start`/`resume`/`continue`/`discard`) are `disable-model-invocation: true`, so only you
-  trigger them; `status` is read-only and stays model-invocable.
+  trigger them; `status` and `result` are read-only and stay model-invocable.
 - **Degrade gracefully.** Any seat whose call fails (CLI missing, error exit, or no parseable block)
   is treated as down; with ≥2 seats still engaged the review continues and says so. Codex and Gemini
   are both optional peers — Claude plus at least one peer is the minimum to start.

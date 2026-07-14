@@ -12,6 +12,7 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[2]
 INDEX = ROOT / "scripts" / "index"
+DECIDE_DEGRADED_ROUND = ROOT / "scripts" / "decide_degraded_round"
 sys.path.insert(0, str(ROOT / "scripts"))
 import panel_common  # noqa: E402
 
@@ -102,6 +103,63 @@ class IndexTest(unittest.TestCase):
         self.assertEqual(data["evaluated_by"]["i1"], ["codex", "claude"])
         self.assertEqual(self.commit(payload).returncode, 0)
         self.assertEqual(self.read_index()["issues"][0]["rounds_debated"], 1)
+
+    def test_commit_new_issue_allows_same_transaction_coverage(self):
+        new_issue = issue("i3")
+        result = self.commit({"add_issues": [new_issue], "evaluated_by": {"i3": ["codex"]}})
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = self.read_index()
+        self.assertEqual([item["id"] for item in data["issues"]], ["i1", "i2", "i3"])
+        self.assertEqual(data["evaluated_by"]["i3"], ["codex"])
+
+    def test_commit_new_unanimous_issue_starts_accepted_with_coverage(self):
+        new_issue = issue("i3", state="accepted", peer=True, vetted=True)
+        raisers = ["claude", "codex", "gemini"]
+        result = self.commit({"add_issues": [new_issue], "evaluated_by": {"i3": raisers}})
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = self.read_index()
+        added = next(item for item in data["issues"] if item["id"] == "i3")
+        self.assertEqual(added["state"], "accepted")
+        self.assertTrue(added["peer_reviewed"])
+        self.assertTrue(added["fully_vetted"])
+        self.assertEqual(data["evaluated_by"]["i3"], raisers)
+
+    def test_commit_unknown_coverage_id_reports_reason_and_keeps_index_intact(self):
+        original = self.index_path.read_bytes()
+        result = self.commit({"evaluated_by": {"missing": ["codex"]}})
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("evaluated_by target IDs do not exist", result.stderr)
+        self.assertEqual(self.index_path.read_bytes(), original)
+
+    def test_new_issue_keeps_birth_coverage_through_degraded_next_round(self):
+        self.write_index({"issues": [], "round": 0, "run_epoch": 0, "committed_rounds": [], "evaluated_by": {}})
+        added = issue("i1")
+        first = self.commit({"add_issues": [added], "evaluated_by": {"i1": ["codex"]}})
+        self.assertEqual(first.returncode, 0, first.stderr)
+
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8") as stances:
+            stances.write(json.dumps({"_source": "gemini", "id": "i1", "stance": "support"}) + "\n")
+            stances.flush()
+            decided = subprocess.run(
+                [
+                    str(DECIDE_DEGRADED_ROUND),
+                    "--id", self.run_id,
+                    "--round", "2",
+                    "--configured", "codex gemini",
+                    "--engaged", "gemini",
+                    "--stances", stances.name,
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        self.assertEqual(decided.returncode, 0, decided.stderr)
+        second = self.commit(json.loads(decided.stdout), round_number=2)
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertEqual(self.read_index()["evaluated_by"]["i1"], ["codex", "gemini"])
 
     def test_commit_writes_audit_trail(self):
         audit_file = self.run_dir / "audit" / "round-1.md"

@@ -78,7 +78,12 @@ byte-exact.
   then clears `/tmp/<ID>/sweeps/`. Counterpart to `init_run`.
 - `write_card` / `write_verdict_artifact` — atomic-write CLIs over `panel_atomic_write`: one card;
   the durable verdict to the `/tmp/<ID>.md` sibling (best-effort — its failure must not block the
-  verdict).
+  verdict). The verdict writer stamps the continuation epoch and whether the canonical index was
+  finished or incomplete; `start -- Finish here` uses its explicit `--final` mode before cleanup.
+- `read_verdict_artifact` — validates the durable artifact's ID, finished status, metadata, and
+  optional expected scope/diff hash/continuation epoch, then emits only its verdict body.
+  `start`/`resume`/`continue` use it after a failed final Agent response;
+  `panel-review:result <ID>` uses it after cleanup.
 - `init_run` / `resume_check` / `cleanup` / `discard` / `inspect_run` / `set_limits` — run lifecycle
   and resume/diverged/stale classification. `PANEL_REVIEW_KEEP_TMP=true` makes `cleanup`/`discard` keep
   `/tmp/<id>/` (diagnostics) while still removing the workspace marker/cards/git-exclude.

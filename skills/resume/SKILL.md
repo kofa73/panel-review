@@ -108,6 +108,12 @@ referee picks them up:
 "$SC/set_limits" --id "$id" --issue-rounds "$ISS" --max-rounds "$MAX"
 ```
 
+In all cases, capture the current continuation epoch for failed-response artifact validation:
+
+```bash
+EPOCH="$(jq -r '.run_epoch // 0' "/tmp/$id/index.json")"
+```
+
 Spawn the `panel-review:panel-review-referee` subagent (Agent tool):
 
 ```
@@ -127,4 +133,7 @@ waits for its own slow seats via background helper Agents — the `panel-review-
 Claude seat — and may run many minutes with no output; `SendMessage`-poking it only forces a wasteful
 full-context re-read — see `start`'s Step 4). Present
 the verdict per `start`'s Step 5 (verbatim, strip/act on `<<<PANEL-GATE…>>>` /
-`<<<PANEL-CONTINUABLE…>>>` control lines the same way).
+`<<<PANEL-CONTINUABLE…>>>` control lines the same way). If the Agent ends unsuccessfully, apply
+`start`'s validated finished-artifact recovery using `--id "$id" --scope "$scope" --diff-hash
+"$DH" --run-epoch "$EPOCH"`; otherwise retain the interrupted-run behavior. Never parse the
+artifact frontmatter in the main model.

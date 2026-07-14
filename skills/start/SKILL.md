@@ -159,6 +159,30 @@ nudge it on any background-task notification: every such poke makes the referee 
 act only on the verdict it returns. (A genuine interruption — the human cancels — is recovered later
 via `panel-review:resume`, not by poking the live agent.)
 
+### Failed final Agent response — recover only a validated finished artifact
+
+Apply this after **every** referee Agent call in this command, including the gate-time `mode=resume`
+call in Step 5. If the Agent ends unsuccessfully but the main conversation receives another model
+turn, do not infer success from `/tmp/<ID>.md` existing and do not parse its YAML yourself. Ask the
+deterministic reader to validate the artifact against the run minted above:
+
+```bash
+if RECOVERED="$("$SC/read_verdict_artifact" --id "$ID" --scope "$scope" --diff-hash "$DH" --run-epoch 0)"; then
+  # RECOVERED is only the verdict body from a validated, finished artifact.
+  true
+else
+  # No validated finished artifact: retain the ordinary interrupted-run behavior.
+  false
+fi
+```
+
+On success, present `RECOVERED` verbatim as the verdict, then report that the referee's final Agent
+response failed only after the completed verdict was persisted and recovered. If the Agent failure
+specifically reports session/quota exhaustion, say that the referee exhausted its session after
+persistence. Apply the normal conditional artifact pointer line below. On reader failure, surface
+the Agent failure normally and leave the run for `panel-review:resume`; never return an unvalidated
+artifact.
+
 ## Step 5 — present the verdict (and the low-severity gate)
 
 **The pointer line is conditional.** The referee writes `/tmp/<ID>.md` best-effort and returns *only*
@@ -192,8 +216,15 @@ First check whether the agent's return ends with a control line of the form:
        It reuses Round 0 (no seat re-run) and runs the debate loop. Present its returned verdict
        verbatim, then the `/tmp/<ID>.md` pointer line **again** (only if the file exists) — it has been
        refreshed with the debated result, overwriting the gate-time snapshot.
-     - **Finish here** → the verdict and its pointer are already shown and the file is unchanged, so
-       don't repeat the pointer; just tear the run down: `"$SC/cleanup" --id "<ID>" --workdir "$PWD"`.
+     - **Finish here** → the verdict and its pointer are already shown, so don't repeat the pointer.
+       Before cleanup, finalize the gate artifact from the referee's canonical verdict body; this
+       makes `panel-review:result <ID>` retrieve the user-finished review while pre-decision gate
+       snapshots remain ineligible for failed-Agent recovery. Finalization is best-effort like the
+       original artifact write, then tear the run down:
+       ```bash
+       "$SC/write_verdict_artifact" --id "$ID" --final < "/tmp/$ID/verdict.new.md" >/dev/null || true
+       "$SC/cleanup" --id "$ID" --workdir "$PWD"
+       ```
        Done.
 
 - **`<<<PANEL-CONTINUABLE id=<ID> unresolved=<n> contested=<m>>>>` present** → the run finished with

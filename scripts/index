@@ -175,14 +175,16 @@ def require_targets(index, payload):
     revise_ids = [change["id"] for change in payload.get("revise", [])]
     if len(set(revise_ids)) != len(revise_ids):
         raise TransactionError("duplicate revise for same ID")
-    targets = list(payload.get("bump", []))
-    targets += state_ids
-    targets += [change["id"] for change in payload.get("set_flag", [])]
-    targets += [change["id"] for change in payload.get("add_evidence", [])]
-    targets += revise_ids
-    targets += list(payload.get("evaluated_by", {}).keys())
-    if any(target not in existing for target in targets):
+    mutation_targets = list(payload.get("bump", []))
+    mutation_targets += state_ids
+    mutation_targets += [change["id"] for change in payload.get("set_flag", [])]
+    mutation_targets += [change["id"] for change in payload.get("add_evidence", [])]
+    mutation_targets += revise_ids
+    if any(target not in existing for target in mutation_targets):
         raise TransactionError("mutation target IDs do not exist or target a newly added issue")
+    coverage_targets = payload.get("evaluated_by", {}).keys()
+    if any(target not in existing and target not in added_ids for target in coverage_targets):
+        raise TransactionError("evaluated_by target IDs do not exist")
 
 
 class AuditTrail:
@@ -341,8 +343,9 @@ def write_index(path, index):
     panel_atomic_write(path, compact(index) + "\n")
 
 
-def mutation_failure():
-    print("index: mutate failed (filter rejected or bad JSON); index.json left intact", file=sys.stderr)
+def mutation_failure(reason=""):
+    detail = reason or "filter rejected or bad JSON"
+    print(f"index: mutate failed: {detail}; index.json left intact", file=sys.stderr)
     return 1
 
 
@@ -501,7 +504,9 @@ def main(argv):
                 if issue_invariant_violated(index):
                     raise TransactionError()
                 write_index(path, index)
-        except (KeyError, TypeError, ValueError, TransactionError, json.JSONDecodeError):
+        except TransactionError as error:
+            return mutation_failure(str(error))
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
             return mutation_failure()
     return 0
 

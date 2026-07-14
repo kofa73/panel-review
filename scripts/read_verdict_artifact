@@ -1,0 +1,170 @@
+#!/usr/bin/env python3
+"""Validate a finished durable verdict artifact and emit only its body."""
+
+import json
+import os
+import re
+import stat
+import sys
+
+from panel_common import panel_require_id
+
+
+USAGE = "usage: read_verdict_artifact --id ID [--scope SCOPE --diff-hash HASH --run-epoch N]"
+JSON_FIELDS = {"scope", "instructions", "seats", "rounds"}
+REQUIRED_FIELDS = {
+    "id",
+    "run_epoch",
+    "status",
+    "scope",
+    "instructions",
+    "limits",
+    "seats",
+    "rounds",
+    "created",
+    "finished",
+    "diff_hash",
+}
+
+
+class ArtifactError(Exception):
+    pass
+
+
+def parse_args(argv):
+    run_id = None
+    scope = None
+    diff_hash = None
+    run_epoch = None
+    index = 1
+    while index < len(argv):
+        arg = argv[index]
+        if arg in {"-h", "--help", "help"}:
+            print(USAGE)
+            raise SystemExit(0)
+        if arg not in {"--id", "--scope", "--diff-hash", "--run-epoch"} or index + 1 >= len(argv):
+            print(USAGE, file=sys.stderr)
+            raise SystemExit(2)
+        value = argv[index + 1]
+        if arg == "--id":
+            run_id = value
+        elif arg == "--scope":
+            scope = value
+        elif arg == "--diff-hash":
+            diff_hash = value
+        else:
+            run_epoch = value
+        index += 2
+    panel_require_id(run_id or "")
+    expected = (scope, diff_hash, run_epoch)
+    if any(value is not None for value in expected) and not all(value is not None for value in expected):
+        print(
+            "read_verdict_artifact: --scope, --diff-hash, and --run-epoch must be used together",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+    if run_epoch is not None and re.fullmatch(r"0|[1-9][0-9]*", run_epoch) is None:
+        print("read_verdict_artifact: --run-epoch must be a non-negative integer", file=sys.stderr)
+        raise SystemExit(2)
+    return run_id, scope, diff_hash, run_epoch
+
+
+def read_regular_file(path):
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError as error:
+        raise ArtifactError("artifact is missing or unreadable") from error
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ArtifactError("artifact is not a regular file")
+        chunks = []
+        while True:
+            chunk = os.read(fd, 1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        return b"".join(chunks)
+    finally:
+        os.close(fd)
+
+
+def parse_artifact(raw):
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ArtifactError("artifact is not valid UTF-8") from error
+    lines = text.splitlines(keepends=True)
+    if not lines or lines[0].rstrip("\r\n") != "---":
+        raise ArtifactError("artifact frontmatter is missing")
+    end = next((i for i, line in enumerate(lines[1:], 1) if line.rstrip("\r\n") == "---"), None)
+    if end is None:
+        raise ArtifactError("artifact frontmatter is unterminated")
+    fields = {}
+    for line in lines[1:end]:
+        stripped = line.rstrip("\r\n")
+        if ": " not in stripped:
+            raise ArtifactError("artifact frontmatter is malformed")
+        key, value = stripped.split(": ", 1)
+        if key in fields:
+            raise ArtifactError(f"artifact frontmatter repeats {key}")
+        fields[key] = value
+    missing = sorted(REQUIRED_FIELDS - fields.keys())
+    if missing:
+        raise ArtifactError(f"artifact frontmatter is missing {missing[0]}")
+    for key in JSON_FIELDS:
+        try:
+            fields[key] = json.loads(fields[key])
+        except (json.JSONDecodeError, TypeError) as error:
+            raise ArtifactError(f"artifact frontmatter has invalid {key}") from error
+        if not isinstance(fields[key], str):
+            raise ArtifactError(f"artifact frontmatter has invalid {key}")
+    body = "".join(lines[end + 1 :])
+    if body.startswith("\r\n"):
+        body = body[2:]
+    elif body.startswith("\n"):
+        body = body[1:]
+    if not body:
+        raise ArtifactError("artifact verdict body is empty")
+    return fields, body
+
+
+def validate(fields, run_id, expected_scope, expected_hash, expected_epoch):
+    if fields["id"] != run_id:
+        raise ArtifactError("artifact id does not match the requested run")
+    if fields["status"] != "finished":
+        raise ArtifactError("artifact is not a finished review")
+    if re.fullmatch(r"0|[1-9][0-9]*", fields["run_epoch"]) is None:
+        raise ArtifactError("artifact run_epoch is invalid")
+    limits = re.fullmatch(r"issue-rounds=([1-9][0-9]*) max-rounds=([1-9][0-9]*)", fields["limits"])
+    if limits is None or int(limits.group(1)) > int(limits.group(2)):
+        raise ArtifactError("artifact limits are invalid")
+    timestamp = r"[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}"
+    if re.fullmatch(timestamp, fields["created"]) is None or re.fullmatch(timestamp, fields["finished"]) is None:
+        raise ArtifactError("artifact timestamps are invalid")
+    if not fields["scope"]:
+        raise ArtifactError("artifact scope is empty")
+    if not re.fullmatch(r"[0-9a-f]{64}", fields["diff_hash"]):
+        raise ArtifactError("artifact diff_hash is invalid")
+    if expected_scope is not None and fields["scope"] != expected_scope:
+        raise ArtifactError("artifact scope does not match the requested run")
+    if expected_hash is not None and fields["diff_hash"] != expected_hash:
+        raise ArtifactError("artifact diff_hash does not match the requested run")
+    if expected_epoch is not None and fields["run_epoch"] != expected_epoch:
+        raise ArtifactError("artifact run_epoch does not match the requested run")
+
+
+def main(argv):
+    run_id, expected_scope, expected_hash, expected_epoch = parse_args(argv)
+    try:
+        fields, body = parse_artifact(read_regular_file(f"/tmp/{run_id}.md"))
+        validate(fields, run_id, expected_scope, expected_hash, expected_epoch)
+    except ArtifactError as error:
+        print(f"read_verdict_artifact: {error}", file=sys.stderr)
+        return 1
+    sys.stdout.write(body)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))
