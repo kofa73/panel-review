@@ -1,0 +1,18 @@
+{{TASK}}
+
+## Claude-seat delivery contract (overrides the return instructions above)
+
+Do not return the fenced block(s) or summary as your final Agent message. Assemble the complete
+requested fenced block(s) in one file under your own scratch directory, then pass that file on stdin
+to the command below. This is the Claude seat's single final validation-and-write step; it replaces
+the task prompt's separate per-block pre-emit validation command. For a debate response, put both
+`stances` and `new_findings` in that file and invoke this command once. The helper validates every
+requested block and atomically installs the raw response at the stated destination:
+
+{{RAW_WRITE}}
+
+If validation fails, correct the scratch file and retry the same helper. If the command succeeds,
+return exactly `CLAUDE_SEAT_RAW_WRITTEN` as your final message. If it still fails, return exactly
+`CLAUDE_SEAT_RAW_FAILED`. Never fall back to returning findings, evidence, stances, or the raw
+response in the final message; the referee treats a missing or invalid raw file as this seat being
+down for the pass.

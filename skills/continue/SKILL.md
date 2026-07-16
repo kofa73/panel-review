@@ -69,6 +69,7 @@ have="$(jq --arg c "$CAT" '[.issues[] | select(($c=="both" and (.state=="unresol
 [ "$have" -gt 0 ] || { echo "Run $id has no $CAT issue to continue."; exit 1; }
 "$SC/reopen" --id "$id" --category "$CAT" || { echo "Could not re-open run $id."; exit 1; }
 EPOCH="$(jq -r '.run_epoch // 0' "/tmp/$id/index.json")"
+ID="$id"  # shared variable name used by start's artifact-only delivery step
 ```
 
 If Step 3's overrides changed `ISS`/`MAX` from the manifest's stored values, write them back:
@@ -88,13 +89,13 @@ prompt: |
   workdir=<repo root absolute path>
   scope=<scope>
   issue-rounds=<ISS>  max-rounds=<MAX>  debate-low=true
-  Return only the synthesized verdict in the documented Output format.
+  Persist the canonical verdict artifact, then return only PANEL_VERDICT_READY id=<id>.
 ```
 
 **Await its single return — do not poke it** (it waits for its own slow seats via background helper
 Agents — the `panel-review-cli-barrier` plus the Claude seat — and may run many minutes with no
-output; `SendMessage`-poking it only forces a wasteful full-context re-read — see `start`'s Step 4). Present the verdict per `start`'s Step 5 (verbatim,
-strip/act on `<<<PANEL-GATE…>>>` / `<<<PANEL-CONTINUABLE…>>>` control lines the same way). If the
-Agent ends unsuccessfully, apply `start`'s validated finished-artifact recovery using `--id "$id"
---scope "$scope" --diff-hash "$DH" --run-epoch "$EPOCH"`; otherwise retain the interrupted-run
-behavior. Never parse the artifact frontmatter in the main model.
+output; `SendMessage`-poking it only forces a wasteful full-context re-read — see `start`'s Step 4).
+After the Agent returns or fails, apply `start`'s Step 5 artifact-only delivery flow using
+`"$SC/read_verdict_artifact" --delivery --id "$id" --scope "$scope" --diff-hash "$DH" --run-epoch
+"$EPOCH"`. Present only its fixed pointer/control text; never copy the verdict body or parse artifact
+frontmatter in the main model. On validation failure, retain the interrupted run.

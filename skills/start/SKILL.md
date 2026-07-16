@@ -8,9 +8,10 @@ argument-hint: "--base <branch> | --uncommitted | --commit <SHA> | <question>  [
 # panel-review:start
 
 You are the **main-context entry point** for starting a fresh review. Your job: parse the scope +
-instructions + round limits, refuse if a session already exists, otherwise mint the run and dispatch
-the `panel-review:panel-review-referee` agent, then present its verdict **verbatim**. You do **not** run the review
-yourself. Run everything from the repo root.
+instructions + round limits, refuse if a session already exists, otherwise mint the run, dispatch
+the `panel-review:panel-review-referee` agent, and validate the durable report it writes. The report
+file is the only verdict-delivery surface; never copy its body into this conversation. You do **not**
+run the review yourself. Run everything from the repo root.
 
 ```bash
 # CLAUDE_PLUGIN_ROOT is substituted into this text at skill-load — it is NOT a
@@ -131,6 +132,7 @@ ids=(); [ -d "$base" ] && for d in "$base"/*/; do [ -f "$d/.panel-run" ] && ids+
 
 ```bash
 ID="$("$SC/init_run" --workdir "$PWD" --scope "$scope" --issue-rounds "$ISS" --max-rounds "$MAX" --diff-hash "$DH" --instructions "$INSTR")"
+EPOCH=0
 ```
 
 Spawn the `panel-review:panel-review-referee` subagent (Agent tool) with the resolved values in its prompt:
@@ -144,11 +146,11 @@ prompt: |
   workdir=<repo root absolute path>
   scope=<base=X | uncommitted | commit=SHA | question=...>
   issue-rounds=<ISS>  max-rounds=<MAX>  debate-low=<DEBATE_LOW>
-  Return only the synthesized verdict in the documented Output format.
+  Persist the canonical verdict artifact, then return only PANEL_VERDICT_READY id=<ID>.
 ```
 
-The agent reconstructs all state from `/tmp/<id>/`, runs the loop, and cleans up after producing the
-verdict. Run from cwd = repo root.
+The agent reconstructs all state from `/tmp/<id>/`, runs the loop, persists the verdict artifact, and
+cleans up only after successful persistence. Run from cwd = repo root.
 
 **Await its single return — do not poke it.** The referee waits for its own slow seats internally
 (per pass it spawns background helper Agents — the `panel-review-cli-barrier` for the Codex+Gemini
@@ -156,82 +158,55 @@ wait, plus the Claude seat — which wake it when they finish), so it can legiti
 minutes with no intermediate output. Do **not** `SendMessage`-resume it, re-dispatch it, or otherwise
 nudge it on any background-task notification: every such poke makes the referee re-read its whole
 (long-context-tier) context for nothing — exactly the waste these scripts exist to avoid. Let it run;
-act only on the verdict it returns. (A genuine interruption — the human cancels — is recovered later
+act only on its final wake. (A genuine interruption — the human cancels — is recovered later
 via `panel-review:resume`, not by poking the live agent.)
 
-### Failed final Agent response — recover only a validated finished artifact
+## Step 5 — validate artifact-only delivery (and handle the low-severity gate)
 
-Apply this after **every** referee Agent call in this command, including the gate-time `mode=resume`
-call in Step 5. If the Agent ends unsuccessfully but the main conversation receives another model
-turn, do not infer success from `/tmp/<ID>.md` existing and do not parse its YAML yourself. Ask the
-deterministic reader to validate the artifact against the run minted above:
+Apply this after **every** referee Agent call in this command, whether the Agent reports success or
+failure, including the gate-time `mode=resume` call below. The Agent's return is only a small status
+stub; it is never a report transport. Do not parse artifact YAML or copy the verdict body into the
+main conversation. Ask the deterministic reader to validate and classify the artifact against the
+run minted above:
 
 ```bash
-if RECOVERED="$("$SC/read_verdict_artifact" --id "$ID" --scope "$scope" --diff-hash "$DH" --run-epoch 0)"; then
-  # RECOVERED is only the verdict body from a validated, finished artifact.
+if DELIVERY="$("$SC/read_verdict_artifact" --delivery --id "$ID" --scope "$scope" --diff-hash "$DH" --run-epoch "$EPOCH")"; then
+  # DELIVERY contains only a fixed file pointer plus minimal gate/continuation status.
   true
 else
-  # No validated finished artifact: retain the ordinary interrupted-run behavior.
+  # No validated finished or low-gate artifact: retain interrupted-run behavior.
   false
 fi
 ```
 
-On success, present `RECOVERED` verbatim as the verdict, then report that the referee's final Agent
-response failed only after the completed verdict was persisted and recovered. If the Agent failure
-specifically reports session/quota exhaustion, say that the referee exhausted its session after
-persistence. Apply the normal conditional artifact pointer line below. On reader failure, surface
-the Agent failure normally and leave the run for `panel-review:resume`; never return an unvalidated
-artifact.
-
-## Step 5 — present the verdict (and the low-severity gate)
-
-**The pointer line is conditional.** The referee writes `/tmp/<ID>.md` best-effort and returns *only*
-the verdict — it reports no write success/failure. So before appending any *"Saved to `/tmp/<ID>.md`
-…"* pointer line below, confirm the artifact actually exists: `test -f "/tmp/<ID>.md"`. If it is
-absent (the write failed, e.g. `/tmp` full), present the verdict **without** the pointer line — never
-advertise a file that is not there. This applies to every branch that mentions the pointer line.
-
-First check whether the agent's return ends with a control line of the form:
-
-```
-<<<PANEL-GATE id=<ID> reason=low-only open=<n>>>>
-```
-
-- **No control line** (the normal case) → present the verdict **verbatim** — do not re-summarize,
-  re-classify, or add commentary. If it reports a degrade (any peer seat — Codex or Gemini — down), pass
-  that note through as-is. Then, **if the artifact exists** (see above), append one line: *"Saved to
-  `/tmp/<ID>.md` — move it somewhere permanent to keep it (`/tmp` is cleared on reboot)."* Done.
-
-- **Gate line present** → Round 0 found only low-severity items and the agent skipped the debate to
-  save tokens (the run is preserved, not cleaned up). Then:
-  1. Present the verdict verbatim **with the `<<<PANEL-GATE …>>>` line removed** (it's a control
-     signal, not for the human).
-  2. **Append the `/tmp/<ID>.md` pointer line now** (only if the file exists) — at gate time, *before*
-     the decision prompt — because choosing "Debate them" below overwrites this same path, so the user
-     must be told the gate-time snapshot exists while it still does.
-  3. **Ask the user** (`AskUserQuestion`): *Round 0 surfaced only low-severity findings. Debate them
-     anyway (another pass across all three seats), or finish here?*
-     - **Debate them** → re-dispatch the **same** `panel-review:panel-review-referee` agent (Step 4
-       form) with `mode=resume`, `id=<ID>`, the same `workdir`/`scope`/limits, and `debate-low=true`.
-       It reuses Round 0 (no seat re-run) and runs the debate loop. Present its returned verdict
-       verbatim, then the `/tmp/<ID>.md` pointer line **again** (only if the file exists) — it has been
-       refreshed with the debated result, overwriting the gate-time snapshot.
-     - **Finish here** → the verdict and its pointer are already shown, so don't repeat the pointer.
-       Before cleanup, finalize the gate artifact from the referee's canonical verdict body; this
-       makes `panel-review:result <ID>` retrieve the user-finished review while pre-decision gate
-       snapshots remain ineligible for failed-Agent recovery. Finalization is best-effort like the
-       original artifact write, then tear the run down:
-       ```bash
-       "$SC/write_verdict_artifact" --id "$ID" --final < "/tmp/$ID/verdict.new.md" >/dev/null || true
-       "$SC/cleanup" --id "$ID" --workdir "$PWD"
-       ```
-       Done.
-
-- **`<<<PANEL-CONTINUABLE id=<ID> unresolved=<n> contested=<m>>>>` present** → the run finished with
-  leftovers and was preserved (not cleaned up). Present the verdict verbatim **with that line
-  removed**, then append the `/tmp/<ID>.md` pointer line (only if the file exists) and one more: *"`<n>` unresolved, `<m>`
-  contested remain — run `panel-review:continue [unresolved|contested]` to debate them further, or
-  `panel-review:discard` to remove the saved review."* Do **not** clean up.
+- **Reader failure** → if the Agent also failed, surface its failure normally. If the Agent returned
+  its ready stub but validation failed, report that no validated final report was produced. In either
+  case leave the run for `panel-review:resume`; never claim completion or advertise the artifact.
+- **`DELIVERY` is exactly `Done. Final report: /tmp/<ID>.md`** → run
+  `"$SC/cleanup" --id "$ID" --workdir "$PWD"` idempotently, then present `DELIVERY` exactly and stop.
+  This closes the crash window where artifact persistence succeeded but the referee's cleanup or final
+  response did not.
+- **`DELIVERY` starts with `Done. Final report:` and has a second line** → this is a continuable run.
+  Present `DELIVERY` exactly, do not clean up, and do not add report prose.
+- **`DELIVERY` starts with `Review paused because only low-severity findings remain.`** → present
+  `DELIVERY` exactly, then ask the user (`AskUserQuestion`): *Only low-severity findings remain. Debate
+  them anyway (another pass across all three seats), or finish here?*
+  - **Debate them** → re-dispatch the **same** `panel-review:panel-review-referee` agent (Step 4 form)
+    with `mode=resume`, `id=<ID>`, the same `workdir`/`scope`/limits, and `debate-low=true`. It reuses
+    the completed passes and runs the debate loop. Await its return, then repeat Step 5; the refreshed
+    artifact overwrites the gate snapshot.
+  - **Finish here** → finalize the gate artifact from the referee's canonical verdict body. Only clean
+    up after both finalization and delivery validation succeed:
+    ```bash
+    if "$SC/write_verdict_artifact" --id "$ID" --final < "/tmp/$ID/verdict.new.md" >/dev/null \
+      && FINAL_DELIVERY="$("$SC/read_verdict_artifact" --delivery --id "$ID" --scope "$scope" --diff-hash "$DH" --run-epoch "$EPOCH")"; then
+      "$SC/cleanup" --id "$ID" --workdir "$PWD"
+      printf '%s\n' "$FINAL_DELIVERY"
+    else
+      echo "Could not finalize a validated report; the review was kept for panel-review:resume."
+      exit 1
+    fi
+    ```
 
 ## Notes
 

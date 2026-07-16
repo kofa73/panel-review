@@ -47,17 +47,19 @@ Four participants, strict role separation (full per-script map in `.claude/rules
   `discard` are `disable-model-invocation: true` (human-triggered only, so the model never auto-wipes a
   session); the read-only `status` and `result` stay model-invocable.
 - **Referee** (`agents/panel-review-referee.md`) — a **separate context** that orchestrates but
-  **never reviews code**. Its procedure lives in the preloaded skill
-  `skills/panel-review-for-agent/SKILL.md` (`user-invocable: false`), the single source of truth for
-  the debate protocol.
+  **never reviews code**. Its preloaded skill `skills/panel-review-for-agent/SKILL.md`
+  (`user-invocable: false`) loads only the active marked phase from the canonical protocol through
+  `read_protocol_phase`.
 - **Claude seat** (`agents/panel-review-claude-seat.md`) — a cold, no-memory reviewer subagent,
   **spawned fresh each pass, never forked** (a fork would inherit the referee's context and destroy
-  blindness). Codex and Gemini seats are external CLIs.
+  blindness). It atomically writes its validated raw block through `write_seat_raw` and returns only
+  a fixed status stub. Codex and Gemini seats are external CLIs.
 - **CLI barrier** (`agents/panel-review-cli-barrier.md`) — a thin non-reviewing helper the referee
   spawns as a **background Agent** each pass to run `await_seats` and return when both CLI seats settle
   (a background Agent reliably re-wakes the referee; a background Bash job does not).
 - **Wrapper scripts** (`scripts/`) — the referee never hand-rolls flags, writes, index math, or
-  parsing; it calls these so operations are byte-exact. Prompt templates in `prompts/` are filled by
+  parsing; it calls these so operations are byte-exact. The coarse `round` module owns normal-path
+  preparation, collection, commit, and verdict input. Prompt templates in `prompts/` are filled by
   `assemble` (whole-line literal substitution).
 
 **Issue lifecycle** (README "How an issue moves"): each seat takes a `support` /
@@ -84,8 +86,10 @@ workdir holds exactly one review; concurrent runs against the same workdir are u
 - The code under review is never modified: `repo_guard snapshot` at the start, `verify --restore` after
   every seat pass; reverted drift is flagged in the verdict's Process notes.
 - Claude seat is spawned fresh (`panel-review:panel-review-claude-seat`), never forked.
-- The referee returns **only** the synthesized verdict — never raw seat output, card text, or per-round
-  transcripts. No seat ever sees who raised a point or the stance tally (blindness).
+- The referee persists the synthesized verdict artifact and returns **only** a fixed ready/failure
+  stub — never the verdict body, raw seat output, card text, or per-round transcripts. The main
+  conversation validates the artifact and reports its filename. No seat ever sees who raised a point
+  or the stance tally (blindness).
 
 ## Design principles / trust model
 

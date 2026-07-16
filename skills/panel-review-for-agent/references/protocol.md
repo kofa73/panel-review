@@ -1,12 +1,11 @@
 # Panel Review — referee procedure (v10)
 
-This is the step-by-step procedure the referee follows. The `panel-review-for-agent`
-**bootstrap** skill (preloaded into the agent — it holds your role, the two hard rules, the
-invocation contract, and the Non-negotiables) directs you to Read this file **once** per run
-and follow it exactly. Reading it once — rather than carrying it as a preloaded skill — keeps
-it out of your context on every background-Agent wake. If it is ever missing from your context
-when you need a step (e.g. after a context compaction), Read it again; never proceed from
-memory.
+<!-- phase:common -->
+
+This is the canonical step-by-step procedure. The `panel-review-for-agent` bootstrap loads its
+marked phases through `read_protocol_phase`; never read this whole file directly. If an active phase
+is missing after context compaction, reload only that phase (and `common` if needed), never proceed
+from memory.
 
 **Paths.** `$ROOT`, `$SC` (= `$ROOT/scripts`) and `$PR` (= `$ROOT/prompts`) were derived in
 the bootstrap from the substituted plugin root. Re-derive them at the top of **every** Bash
@@ -43,12 +42,20 @@ reference; grepping a script for its flags wastes a full source-read into your c
 "$SC/parse_block" <tag> <raw> [label]        # ```<tag> block -> validated JSONL; exit 4 = NO block (down), 5 = malformed (you salvage — "Salvage")
 "$SC/parse_block" --diagnose <tag> <raw>     # WHY each item was rejected (reason + offending line); use it to guide a salvage rewrite on exit 5
 "$SC/check_draft" <tag> [file]               # SEAT-FACING pre-emit validator (thin wrapper over parse_block --diagnose); spliced into the seat prompt as {{CHECK}}, not called by the referee
+"$SC/write_seat_raw" --id <id> --round <0|N> [--batch <name>] < raw  # CLAUDE-SEAT ONLY: validate every required block and atomically install the derived raw path
+"$SC/round" prepare-round0 <id> <configured seats...>               # resolve/snapshot/assemble both prompts + write the CLI barrier command; compact JSON result
+"$SC/round" collect-round0 <id> [--final]                            # parse Claude raw + compact engagement/count summary; --final verifies/restores the guard
+"$SC/round" prepare-debate <id> <configured seats...>               # common single-batch plan/cards/prompts/barrier + Claude delivery prompt
+"$SC/round" collect-debate <id> [--final]                            # ingest batches/new findings + compact status; --final verifies/restores the guard
+"$SC/round" salvage-debate <id> <codex|gemini> <batch> <salvaged-raw> # validate/install one canonical CLI .salvaged side file as a complete batch checkpoint
+"$SC/round" commit <id> [--addendum <f>]                             # decide/merge/commit/regenerate + compact states/gate; exit 3 asks for judgment addendum
+"$SC/round" verdict-input <id>                                      # compact stable manifest/panel/index/origin/guard facts for synthesis
 "$SC/birth_index" --available "<seats>" --configured "<seats>" < issues.json   # clustered Round-0 issues -> full index.json (birth state/flags/coverage)
-"$SC/index"   {get|put|issue|bump|state|flag|gate-status|commit-sweep} <id> ...   # ONLY writer of index.json
+"$SC/index"   {get|put|issue|bump|state|flag|gate-status|delivery-status|commit-sweep} <id> ...   # ONLY writer of index.json
 "$SC/project_card" --id <id> --workdir <dir> [--index-rev N] < issue.json   # one issue record -> its card
 "$SC/regen_cards"  --id <id> --workdir <dir>                                # rebuild ALL cards from the index
 "$SC/index"   commit-sweep <id> <round> <epoch>  # apply a WHOLE debate round atomically (payload JSON on stdin)
-"$SC/sweep"   {begin|plan|plan-scaffold|ingest-batch|drop-seat|resume-plan|has|done|commit} <id> <round> ...  # checkpointed seat/batch debate sweeps; plan-scaffold takes the current panel as trailing seat args
+"$SC/sweep"   {begin|plan|plan-scaffold|extend-plan|ingest-batch|drop-seat|resume-plan|has|done|commit} <id> <round> ...  # checkpointed sweeps; scaffold/extend take panel seats
 "$SC/decide_round" --id <id> --round N --configured "<seats>" --engaged "<seats>" --stances <f> [--advice <f>]  # normal Transitions table -> commit-sweep payload
 "$SC/decide_degraded_round" --id <id> --round N --configured "<seats>" --engaged "<zero-or-one-seat>" --stances <f>  # terminal non-voting payload
 "$SC/merge_payload" <base.json> < addendum.json   # fold referee additions into the payload (set_state replace, revise field-merge) — never append a 2nd entry for an id
@@ -100,14 +107,14 @@ seat you must run inline, and even the 10-min max cannot cover `run_agy`'s worst
 | Gemini | `"$SC/run_agy" < prompt > raw` | fresh process each call |
 | Claude | **fresh named subagent** `panel-review:panel-review-claude-seat` via the Agent tool, each pass | cold context |
 
-For the Claude seat: spawn `subagent_type: panel-review:panel-review-claude-seat` with the assembled prompt
-as its prompt. **Never fork** (a fork inherits your context and destroys blindness). Capture the
-subagent's returned message to a raw file and parse it exactly like a CLI seat:
-
-```bash
-# write the subagent's returned text to a raw file, then:
-"$SC/parse_block" findings /tmp/$id/raw/round0.claude.txt claude
-```
+For the Claude seat, spawn `subagent_type: panel-review:panel-review-claude-seat` with the
+Claude-specific prompt returned by `round prepare-round0` / `round prepare-debate`. **Never fork**
+(a fork inherits your context and destroys blindness). The delivery wrapper makes the seat pass its
+complete response to `write_seat_raw`, which validates and atomically installs the expected raw path;
+the Agent returns only `CLAUDE_SEAT_RAW_WRITTEN` or `CLAUDE_SEAT_RAW_FAILED`. Never copy, quote, or
+write the Agent return. After both background Agents settle, `round collect-* --final` parses the
+on-disk raw. Missing/invalid Claude raw fails closed: Claude is down for that pass, with no fallback
+that returns findings or evidence into your context.
 
 A "full panel" = every seat `preflight` reported available (either peer may be absent → run with the rest). An
 **engaged** seat is one that returned a parseable block **this pass**. Settling a point needs
@@ -166,8 +173,8 @@ A **point**: `{"location":"file:line"|["file:line",...]|"analysis","assertion":"
 
 - `index.json` — a JSON **object**: `{"issues":[<issue record above>...],"committed_rounds":[<int>...],
   "round":<int>,"run_epoch":<int>}`. Only `index`/`sweep` write it.
-- `stances.<round>.json` — **JSONL**, one stance object per line (concatenated from each seat's
-  `*.stances.json` by `find … -exec cat`), produced by `parse_block stances`. Per line:
+- `stances.<round>.json` — **JSONL**, one stance object per line, assembled by `round commit` from the
+  active plan's complete engaged-seat checkpoints. Per line:
   ```json
   {"id":"i3","stance":"support|support_with_revision|reject","_source":"codex","fid":"codex-1","revision":{"severity":"…","category":"…","claim":"…"},"evidence":<point>,"new_evidence":<point>}
   ```
@@ -184,6 +191,9 @@ round — you do not write it. The `audit/` trail is for human inspection only; 
 reviewer-facing fields, so the origins never leak even if adjacent.
 
 ---
+
+<!-- /phase:common -->
+<!-- phase:salvage -->
 
 ## Salvage — recovering a slipped seat block (referee-owned)
 
@@ -223,21 +233,51 @@ inspection), then re-run the same parse/ingest against the side file:
   be reconstructed from what the seat wrote, drop just that item rather than guessing.
 - **Debate carries two blocks in one raw** (`stances` + `new_findings`). Re-emit **both** coherently
   so `sweep ingest-batch` gets a complete raw — you are repairing sweep's *input*, never bypassing its
-  validation (it still requires exactly one stance per expected ID). Point the re-ingest at the side
-  file. A genuine stub (no real stances) is not salvageable here — let the debate retry/drop-seat flow
-  handle it.
+  validation (it still requires exactly one stance per expected ID). Register the canonical side file
+  with `round salvage-debate`; it installs both parsed blocks as one checkpoint. A genuine stub (no
+  real stances) is not salvageable here — let the debate retry/drop-seat flow handle it. This command
+  is CLI-only: Claude output is validated before installation and is retried/dropped, never salvaged.
 
 ```bash
 # Round 0 (findings): re-parse the salvaged side file.
 "$SC/parse_block" findings "/tmp/$id/raw/round0.$seat.txt.salvaged" "$seat" > /tmp/$id/f.$seat.json
 echo "$?" > /tmp/$id/status.$seat
+
+# Debate (both blocks): install the canonical side file through the coarse interface.
+"$SC/round" salvage-debate "$id" "$seat" "$batch" \
+  "/tmp/$id/raw/round$round.$seat.$batch.txt.salvaged"
 ```
 
 ---
 
+<!-- /phase:salvage -->
+<!-- phase:round0 -->
+
 # Mode: fresh
 
 ## Round 0 — blind pass
+
+**Normal path — use the coarse module.** Run `preflight`, form the configured panel from Claude plus
+the available peer seat(s), then call:
+
+```bash
+"$SC/round" prepare-round0 "$id" <configured seats...>
+```
+
+Its compact JSON gives `prompt` for the CLI seats, `claude_prompt` for the fresh Claude Agent, and
+the CLI barrier's `command`/`done`/`sentinel` paths. It owns steps 1–3 below and the barrier command;
+do not repeat those mechanics. Exit 3 with `status=needs_auto_instructions` is the sole normal-path
+pause: compose the neutral auto guidance described in step 2 at the returned path, then call
+`prepare-round0` again. A diff-hash mismatch is a hard stop.
+
+Spawn the CLI barrier from those returned paths and the fresh Claude seat with `claude_prompt`, then
+take no turns until both Agents have returned. Call `round collect-round0 "$id" --final` once; its
+JSON is the authoritative engagement/count/guard summary. A CLI parse status 4/5 may use the lazily
+loaded `salvage` phase and then be recollected. A missing Claude raw means the seat failed closed and
+is down—never salvage from its short Agent stub. Continue at step 4 (clustering).
+
+Steps 1–3 retain the invariants implemented by `round prepare-round0`; they are reference material
+for exceptional diagnosis, not extra normal-path commands.
 
 1. **Resolve the diff** from `scope` via the shared `resolve_diff` script (the launching command —
    `panel-review:start`/`resume`/`continue` — used the exact same script to hash the scope for the
@@ -284,7 +324,8 @@ echo "$?" > /tmp/$id/status.$seat
    Capture into a variable as shown — never redirect `resolve_instructions` straight into
    `instructions.txt`, or the compose sentinel lands in the file on the `auto` path.
 
-3. **Assemble the prompt** (same prompt for all three seats). Also prepare the **scratch dir** the
+3. **Assemble the review prompt** (same review task for all three seats; the Claude Agent receives
+   a delivery wrapper around it). Also prepare the **scratch dir** the
    seats write throwaway scripts into — a git-ignored subtree of the run marker (`.panel-review/<id>/`
    is already excluded), passed as the `{{SCRATCH}}` sentinel. The path is **relative** because every
    seat runs from cwd = workdir:
@@ -361,15 +402,10 @@ echo "$?" > /tmp/$id/status.$seat
    **never a fork**). `status.$seat` (written by the barrier): 0 engaged, 4 no block (down), 5
    malformed, 124 outer-timeout (down; noted as a timeout in `--done` for Process notes).
    On each wake, process only the seat(s) whose status is already on disk; if the other Agent is still
-   running, stop again and wait. When the Claude Agent returns, write its text to the raw file, then
-   parse it — the Claude seat is not a CLI, so you parse it by hand exactly as `run_seat` parses the
-   CLI seats' raw:
-
-   ```bash
-   "$SC/parse_block" findings "/tmp/$id/raw/round0.claude.txt" claude > /tmp/$id/f.claude.json
-   echo "$?" > /tmp/$id/status.claude
-   ```
-   A status of **4** or **5** on any seat (Claude or CLI) is yours to **salvage** — read that one
+   running, stop again and wait. The Claude Agent's fixed stub is only a wake signal; never write or
+   parse it. `write_seat_raw` has already installed the raw response, and `round collect-round0`
+   parses that file and writes `status.claude`.
+   A status of **4** or **5** on a CLI seat is yours to **salvage** — read that one
    seat's raw and recover it per "Salvage" above (status 5: fix the shape; status 4: judge
    stub-vs-review, recover a real review, leave a genuine stub down). A `124` (the barrier's outer
    per-seat timeout) is a hung seat: it reads as **down** for engagement, and the `--done` summary
@@ -383,8 +419,9 @@ echo "$?" > /tmp/$id/status.$seat
    `fully_vetted` can never become true while a seat is unavailable). Don't confuse a down/malformed
    seat with a clean empty review.
 
-   **Guard the tree once all three seats have returned.** A seat is supposed to touch only its own
-   scratch subdir; verify nothing else changed and auto-revert if it did:
+   **Guard the tree once all three seats have returned.** `round collect-round0 --final` performs
+   this verification and restoration. A seat is supposed to touch only its own scratch subdir;
+   verify nothing else changed and auto-revert if it did:
 
    ```bash
    mkdir -p /tmp/$id/origins
@@ -432,8 +469,13 @@ echo "$?" > /tmp/$id/status.$seat
    "$SC/regen_cards" --id "$id" --workdir "$workdir"     # render every issue's card
    ```
 
-Proceed to the debate loop. (If after merge there are no `open` issues — everything settled at
-birth or only style remains — skip straight to synthesis and finish normally, no gate.)
+If after merge there are no `open` issues — everything settled at birth or only style remains —
+skip straight to synthesis and finish normally. Otherwise query `index gate-status`; load `gate`
+only if `low_only` is true and this fresh run does not have `debate-low=true`. If not, proceed to the
+debate loop.
+
+<!-- /phase:round0 -->
+<!-- phase:gate -->
 
 ### Round-0 severity gate (fresh mode only)
 
@@ -445,20 +487,18 @@ set rarely changes the outcome and burns tokens on confirmations. Instead:
    list the low items under **Minor** and add a Process note: *"Debate skipped — Round 0 surfaced
    only low-severity findings; re-run / continue to debate them."* Show every finding as usual.
 2. **Persist** it (`write_card … verdict-$id.md`) **but do NOT clean up.** Leave `/tmp/<id>` and the
-   cards intact so the human can opt into the debate via a `mode=resume` dispatch. Also write the
-   durable copy (`write_verdict_artifact --id $id < verdict.new.md`) — best-effort: if it fails, proceed
-   anyway, it must never block returning the verdict.
-3. End your return with this control line, **exactly, as the very last line**:
-
-   ```
-   <<<PANEL-GATE id=<id> reason=low-only open=<n>>>>
-   ```
-
-   The launching command detects it, presents the verdict, and asks the human whether to debate
-   anyway; on "yes" it re-dispatches you in `mode=resume` (which always proceeds to the debate loop, reusing
-   this Round 0 — no seat is re-run).
+   cards intact so the human can opt into the debate via a `mode=resume` dispatch. Write the durable
+   copy with `write_verdict_artifact --id $id < verdict.new.md`. Artifact persistence is required for
+   delivery: on failure return only `PANEL_VERDICT_WRITE_FAILED id=<id>` and leave the run intact.
+3. After the durable write succeeds, return only `PANEL_VERDICT_READY id=<id>`. The launching command
+   validates the incomplete artifact plus canonical low-only state, presents its snapshot pointer,
+   and asks the human whether to debate anyway. On "yes" it re-dispatches you in `mode=resume` (which
+   always proceeds to the debate loop, reusing this Round 0 — no seat is re-run).
 
 If `debate-low=true`, skip this gate and debate normally.
+
+<!-- /phase:gate -->
+<!-- phase:debate -->
 
 ## Debate loop
 
@@ -467,6 +507,28 @@ manifest). A **round = one full sweep over all currently-open issues** across al
 `round` counts debate sweeps starting at 1.
 
 For `round = 1, 2, … max-rounds`, while any issue is `open`:
+
+**Common single-batch path — use the coarse module.** Before calling it, use the current cards to
+decide whether the set needs the exceptional pagination in steps 4–7; do not register a common plan
+and then try to replace it. Otherwise, re-run `preflight`, form this pass's configured panel from
+Claude plus the available peer seat(s), then call
+`"$SC/round" prepare-debate "$id" <configured seats...>`.
+Its JSON gives the round/epoch, shared CLI prompt, optional Claude-specific prompt, and barrier paths.
+Spawn one CLI barrier per returned entry and a fresh Claude Agent only when `claude_prompt` is
+non-null; a missing entry/prompt is already checkpointed and must not be re-dispatched. Then wait for
+all Agent wakes without polling. Call `"$SC/round" collect-debate "$id" --final`; use its batch
+statuses and engaged list.
+Load `salvage` only for a failed CLI block. After rewriting both blocks to the canonical side file,
+call `round salvage-debate`, then call `round collect-debate` again; recollection reads the completed
+checkpoint instead of the malformed original. Retry each still-non-complete batch once, and use
+`sweep drop-seat` if it still fails. Claude raw already passed strict pre-write validation; if it is
+missing, empty, or incomplete, retry the fresh Claude seat once and then drop it—never read the
+status stub as review content.
+
+Steps 1–7 below document the invariants and the exceptional multi-batch path. Do not repeat their
+normal preparation/ingest/guard commands after the coarse calls. If the open card set genuinely
+needs pagination, use steps 4–7 to register the explicit multi-batch plan; `prepare-debate` owns only
+the common one-batch shape.
 
 1. `OPEN=$( "$SC/index" get "$id" | jq -r '.issues[]|select(.state=="open")|.id' )`. If empty → done.
 2. `epoch="$(jq -r '.run_epoch // 0' "/tmp/$id/index.json")"`
@@ -515,10 +577,10 @@ For `round = 1, 2, … max-rounds`, while any issue is `open`:
    ```
    Spawn a **fresh** `panel-review:panel-review-claude-seat` subagent for the Claude seat each round.
 7. **Ingest batches through `sweep`.** The plan was registered in step 5. After each response, use
-   `sweep ingest-batch`; it runs `parse_block`, requires exactly one stance for every expected ID,
-   and retains raw plus parsed output only for `status=complete`. `missing`, `empty`, `malformed`,
-   `partial`, and `wrong_ids` remain retryable. Also pull any **new findings** a seat raised this
-   round from the **same raw output** the stances came from. The `new_findings` block is now
+   `sweep ingest-batch`; it parses `stances` and `new_findings` from the same raw, requires exactly
+   one stance for every expected ID, and retains the complete two-block bundle only for
+   `status=complete`. `missing`, `empty`, `malformed`, `partial`, and `wrong_ids` remain retryable.
+   The `new_findings` block is
    **required-emptyable** (debate.tmpl asks the seat to *always* emit it, `[]` when nothing is new),
    so:
    - an **empty `[]`** block (parse exit 0, zero objects) = the seat raised nothing new;
@@ -526,14 +588,13 @@ For `round = 1, 2, … max-rounds`, while any issue is `open`:
      format slip — both are yours to **salvage** (see "Salvage"), exactly like Round-0 `findings`.
 
    Debate salvage is where the two-blocks-in-one-raw case bites: `stances` and `new_findings` live in
-   the **same** raw, which both `run_seat --tag new_findings` and `sweep ingest-batch` read. If a
+   the **same** raw, which `sweep ingest-batch` reads as one checkpoint. If a
    seat's raw fails to parse, do **not** re-dispatch a repair seat — read that one raw and rewrite it
    well-formed to `<raw>.salvaged`, re-emitting **both** blocks coherently (a genuine stub with no real
-   stances is not salvageable — let step 8's retry/drop-seat handle it). Then re-run **both** reads
-   against the side file: parse `new_findings` from it, and point `sweep ingest-batch` at it for
-   `stances`. This holds uniformly for the CLI seats and the Claude seat — the referee-owned rewrite
-   replaces the old per-seat repair paths, and because you re-emit the whole raw at once there is no
-   "preserve the sibling block" splice to get wrong.
+   stances is not salvageable — let step 8's retry/drop-seat handle it). Register that exact canonical
+   side path with `round salvage-debate`; do not invoke `sweep` or write `status.nf.*` yourself. This
+   salvage path applies to CLI seats. Claude's `write_seat_raw` validates both blocks before installing
+   them, so a failed Claude delivery is retried/dropped rather than reconstructed from its fixed stub.
 
    ```bash
    # Same barrier as Round 0, per BATCH: write the await_seats command for this batch's
@@ -553,8 +614,8 @@ For `round = 1, 2, … max-rounds`, while any issue is `open`:
    dispatch and the Agents' wakes (see the long-running-seats rule).
 
    ```bash
-   # Ingest the seat's raw. If ingest reports a non-complete status that a salvage
-   # recovers (see "Salvage"), re-run ingest-batch against the .salvaged side file.
+   # Ingest the original seat raw. If salvage is needed, use round salvage-debate;
+   # do not point this low-level command at the side file yourself.
    "$SC/sweep" ingest-batch "$id" "$round" "$epoch" "$seat" "$batch" \
      /tmp/$id/batch.$round.$batch.ids /tmp/$id/raw/round$round.$seat.$batch.txt
    ```
@@ -566,38 +627,54 @@ For `round = 1, 2, … max-rounds`, while any issue is `open`:
    "$SC/repo_guard" verify --id "$id" --workdir "$workdir" --restore >> /tmp/$id/origins/guard.debate.txt || true
    ```
    Any drift is reverted from the snapshot and carried into the verdict's Process notes.
-8. **Engaged = COMPLETE this pass.** A seat is engaged only when all of its planned batches are
-   `complete` in `"$SC/sweep" resume-plan "$id"`. A seat with any other batch status is not engaged.
+8. **Engaged = COMPLETE this pass.** A batch is complete only when its retained raw, exact-ID stances,
+   parsed `new_findings`, zero `status.nf.*`, expected IDs, and source record were installed together.
+   Because `.out` is published last as the completion marker, a published `.out` with any missing
+   companion is corrupt state and `sweep has`/`resume-plan` fail closed rather than downgrading it to
+   a retryable missing batch.
+   A seat is engaged only when all of its planned batches are `complete` in
+   `"$SC/sweep" resume-plan "$id"`. A seat with any other batch status is not engaged.
 9. **Retry every non-complete batch once, THEN re-check engagement.** A malformed batch first gets a
-   **salvage** attempt (see "Salvage": rewrite the raw well-formed, re-ingest the side file); missing,
-   empty, partial, wrong-ID, or an unsalvageable stub gets a fresh dispatch.
+   **salvage** attempt (see "Salvage": rewrite the raw well-formed, install it through
+   `round salvage-debate`); missing, empty, partial, wrong-ID, or an unsalvageable stub gets a fresh
+   dispatch.
    If any batch still fails, run `"$SC/sweep" drop-seat "$id" "$round" "$seat"`; this discards all
    of that seat's checkpoints and marks it dropped in the recovery plan. Do not hand-delete files.
-   Build the retained stance input with `find /tmp/$id/sweeps/round-$round -maxdepth 1 -name
-   '*.stances.json' -type f -exec cat {} + > /tmp/$id/stances.$round.json`. If fewer than two seats
-   remain, call `decide_degraded_round` and commit its payload. It records
-   coverage and produces only `unresolved`/`contested` plus eligible `fully_vetted` flags; it cannot
-   bump, revise, accept, reject, or promote evidence.
+   Do not glob `*.stances.json`: `round commit` selects only complete batches belonging to engaged
+   seats from the active plan.
+
+<!-- /phase:debate -->
+<!-- phase:degraded -->
+
+   If fewer than two seats remain, continue to `round commit`; it selects only the active plan's
+   complete batches and invokes `decide_degraded_round`. That path records coverage and produces only
+   `unresolved`/`contested` plus eligible `fully_vetted` flags; it cannot bump, revise, accept, reject,
+   or promote evidence.
+
+<!-- /phase:degraded -->
+<!-- phase:debate -->
+
+10. **Decide each open issue's outcome — `round commit` owns the mechanical transaction.** First call:
 
    ```bash
-   "$SC/decide_degraded_round" --id "$id" --round "$round" --configured "<full panel>" \
-     --engaged "<zero or one complete seat>" --stances /tmp/$id/stances.$round.json > /tmp/$id/payload.$round.json
+   "$SC/round" commit "$id"
    ```
-10. **Decide each open issue's outcome — `decide_round` does the mechanical part.** It applies the
+
+   When no prose revision or new finding needs judgment, it runs the normal/degraded decision,
+   commits atomically, regenerates cards, and returns compact engaged/state/gate data. Exit 3 with
+   `status=needs_judgment_addendum` is not a failure and makes no index mutation: read only the
+   returned advice/new-finding files, perform step 11's judgment, write the payload-shaped addendum,
+   then call `round commit "$id" --addendum /tmp/$id/addendum.$round.json`. An explicit `{}` records
+   that judgment was performed but required no payload addition.
+
+   Internally, `decide_round` applies the
    Transitions table below (stance counting, `bump`, `peer_reviewed`/`fully_vetted`, enum-field
    convergence, **and the forced-terminal-at-limits rule**) to the open issues and emits ONE
    commit-sweep payload, carrying every `reject`/revision rationale and `new_evidence` as evidence
    **verbatim, stripped of seat identity and any tally** — that is what keeps the accumulated
-   evidence blind. Do **not** hand-build this payload. Concatenate the engaged seats' parsed
-   stances and run it (do not mutate `index.json` yet):
-
-   ```bash
-   find /tmp/$id/sweeps/round-$round -maxdepth 1 -name '*.stances.json' -type f -exec cat {} + > /tmp/$id/stances.$round.json
-   "$SC/decide_round" --id "$id" --round "$round" \
-     --configured "<full panel from preflight>" --engaged "<seats that returned a parseable stance THIS round>" \
-     --stances /tmp/$id/stances.$round.json \
-     --advice /tmp/$id/advice.$round.json > /tmp/$id/payload.$round.json
-   ```
+   evidence blind. Do **not** hand-build this payload or concatenate stance files: `round commit`
+   selects only complete active-plan batches and invokes `decide_round` (without mutating
+   `index.json` until the complete payload is ready).
    `--configured` is the panel from `preflight`; `--engaged` is the subset that engaged this round
    (step 8). `decide_round` **validates** the stances against `--engaged`: exactly one stance per
    (engaged seat, open issue), no unknown/duplicate `_source`, no omissions — a violation is a hard
@@ -625,14 +702,23 @@ For `round = 1, 2, … max-rounds`, while any issue is `open`:
      refinements → nothing (the original claim stands). **Never** write a claim/evidence string
      that names or counts seats.
    - **New findings.** For each `new_findings` item, either **fold** it into an existing issue (same
-     merge test as Round 0 step 4 → its evidence as `add_evidence`, and a `set_state {open}` to
-     reopen it for peer review) or add a NEW issue via `add_issues`. Apply the birth-unanimity check
-     **only** among seats engaged in this pass: if every engaged seat (and ≥2) raised it, birth it
-     `accepted` with `peer_reviewed=true` (`fully_vetted=true` only when those raisers cover the full
-     configured panel); otherwise birth it `open` with `peer_reviewed=false`. In the same addendum,
-     set `evaluated_by[<new id>]` to all same-pass raisers, sorted and unique — including the single
-     raiser of a non-unanimous open issue. `index commit-sweep` permits that coverage entry to target
-     its same-transaction `add_issues` record while all other mutation types remain existing-only.
+     merge test as Round 0 step 4) or add a NEW issue via `add_issues`. A fold adds every materially
+     distinct point as `add_evidence`. **Preserve its current state** when the new evidence is
+     cumulative or reinforces its current outcome; evidence appearing later is not by itself a
+     reason to re-debate a settled issue. Reopen it with `set_state {open}` only when the evidence
+     **materially conflicts with its current outcome** and the issue has remaining debate budget
+     under both limits. If conflicting evidence arrives after either limit is exhausted, preserve
+     the forced-terminal rule: hand the issue off as `contested` when it has been peer reviewed,
+     otherwise `unresolved`, rather than leaving it open. This conflict test is referee judgment;
+     `merge_payload` and `index` cannot infer it from evidence text. Do not revise canonical issue
+     fields from one later finding alone; carry its detail in the evidence for the seats or verdict.
+     For a genuinely new issue, apply the birth-unanimity check **only** among seats engaged in this
+     pass: if every engaged seat (and ≥2) raised it, birth it `accepted` with `peer_reviewed=true`
+     (`fully_vetted=true` only when those raisers cover the full configured panel); otherwise birth
+     it `open` with `peer_reviewed=false`. In the same addendum, set `evaluated_by[<new id>]` to all
+     same-pass raisers, sorted and unique — including the single raiser of a non-unanimous open issue.
+     `index commit-sweep` permits that coverage entry to target its same-transaction `add_issues`
+     record while all other mutation types remain existing-only.
    - **Addendum shape** (payload-shaped, so `merge_payload`/`commit-sweep` read the same keys). A
      `revise` entry wraps the changed enum/prose fields under **`fields`** (a flat `claim` is
      rejected — `merge_payload` exit 2); `set_state`/`set_flag` carry `id` (+ `flag`):
@@ -643,10 +729,11 @@ For `round = 1, 2, … max-rounds`, while any issue is `open`:
       "set_flag":[{"id":"i4","flag":"detail_contested","value":true}]}
      ```
    - **Merge, don't append.** `decide_round` may already carry a `set_state`/`revise` for an issue
-     you are also touching (e.g. you reopen an issue it accepted, or add a `claim` where it set a
-     `severity`). Appending a second entry makes `index commit-sweep` reject the whole round
-     (duplicate state/revise target). Let `merge_payload` reconcile them (set_state: your addendum
-     wins → reopen; revise: fields deep-merged). Guard the `mv` on merge success (`&&`) — a rejected
+     you are also touching (e.g. conflicting evidence requires reopening an issue it accepted, or
+     you add a `claim` where it set a `severity`). Appending a second entry makes `index commit-sweep`
+     reject the whole round (duplicate state/revise target). Let `merge_payload` reconcile them
+     (set_state: your addendum wins; revise: fields deep-merged). Guard the `mv` on merge success
+     (`&&`) — a rejected
      addendum leaves an empty temp, and an unconditional `mv` would clobber the good `decide_round`
      payload with it and commit an empty round:
 
@@ -656,8 +743,9 @@ For `round = 1, 2, … max-rounds`, while any issue is `open`:
      # nonzero exit ⇒ fix the addendum shape and retry; payload.$round.json is untouched
      ```
      (If you have no additions, skip the merge — the `decide_round` payload is already complete.)
-12. **Commit atomically.** The payload from steps 10–11 is complete — `decide_round` already folded in
-   the forced-terminal rule — so just apply the whole round in one shot:
+12. **Commit atomically.** `round commit` performs this step after any required addendum is supplied.
+   The underlying payload from steps 10–11 is complete — `decide_round` already folded in
+   the forced-terminal rule — and the coarse module applies the whole round in one shot:
 
    ```bash
    "$SC/sweep" commit "$id" $round "$epoch" < /tmp/$id/payload.$round.json
@@ -666,7 +754,12 @@ For `round = 1, 2, … max-rounds`, while any issue is `open`:
    `sweep commit` pipes the payload to `index commit-sweep`, which is **idempotent** (guarded by
    `.committed_rounds`): a re-run after a crash is a complete no-op — no double-bump, no duplicated
    issue or evidence. Transitions, counters, evidence, and terminal states all take effect **only
-   here**, together.
+   here**, together. If the returned gate data has `low_only=true` and `debate-low` is false, load
+   `gate`; otherwise continue or finish without loading that phase.
+
+<!-- /phase:debate -->
+<!-- phase:gate -->
+
 13. **Low-severity stop gate (after each committed round).** Once the round commits, query
     `"$SC/index" gate-status "$id"`. If `low_only` is true and the run was **not** invoked with
     `debate-low=true`, **stop the loop** rather than spend the remaining
@@ -675,16 +768,15 @@ For `round = 1, 2, … max-rounds`, while any issue is `open`:
     Round-0 gate: synthesize the verdict so far (open low items under **Minor**, with a Process note
     *"Debate stopped early — only low-severity findings remained open; continue/resume to debate
     them."*), persist it (`write_card … verdict-$id.md`) and the durable copy
-    (`write_verdict_artifact --id $id < verdict.new.md`, best-effort), leave `/tmp/<id>` and the cards
-    intact, and end your return with this control line, **exactly, as the very last line**:
+    (`write_verdict_artifact --id $id < verdict.new.md`), and leave `/tmp/<id>` and the cards intact.
+    Artifact persistence is required for delivery: on failure return only
+    `PANEL_VERDICT_WRITE_FAILED id=<id>` and keep the run. On success return only
+    `PANEL_VERDICT_READY id=<id>`. The launching command validates the low-only snapshot, presents its
+    filename, and asks whether to keep debating; on "yes" it re-dispatches you in `mode=resume`, which
+    resumes the loop. If `debate-low=true`, skip this gate and continue the loop.
 
-    ```
-    <<<PANEL-GATE id=<id> reason=low-only open=<n>>>>
-    ```
-
-    The launching command presents the verdict and asks the human whether to keep debating; on "yes"
-    it re-dispatches you in `mode=resume`, which resumes the loop. If `debate-low=true`, skip this
-    gate and continue the loop.
+<!-- /phase:gate -->
+<!-- phase:debate -->
 
 `converged = no issue in state "open"`. Stop the loop when converged or at the ceiling.
 
@@ -711,7 +803,9 @@ merged `claim`, and clustering new findings — which it hands to you (step 10).
 | `open` at threshold/ceiling, 0 peer-review passes | **unresolved** (terminal) |
 | <2 engaged after retry, issue already `peer_reviewed` | **contested** (terminal); + `fully_vetted` if the lone seat completes coverage |
 | <2 engaged after retry, issue never `peer_reviewed` | **unresolved** (terminal) |
-| New finding belongs to an existing issue | **merged** |
+| New finding belongs to an existing issue and reinforces its outcome | **merged**; state preserved |
+| Folded evidence materially conflicts with the current outcome, with debate budget remaining | **open** for peer review |
+| Folded evidence conflicts after an issue/global limit | **contested** if peer reviewed, otherwise **unresolved** |
 
 - **No majority rule. You never pick a winning value** — conflicting revisions → accepted +
   `detail_contested`, surfaced for the human.
@@ -723,6 +817,9 @@ merged `claim`, and clustering new findings — which it hands to you (step 10).
   separately and prominently in the verdict.
 
 ---
+
+<!-- /phase:debate -->
+<!-- phase:recovery -->
 
 # Mode: resume
 
@@ -767,7 +864,12 @@ index diverge from its own just-rotated `.bak`, and that divergence *is* the tra
 5. **Debate recovery:** run `"$SC/sweep" resume-plan "$id"`. It validates the epoch and reports the
    next uncommitted round plus each planned batch as `complete`, `missing`, or `dropped`. Reuse only
    `complete` batches; dispatch only `missing` batches; treat `dropped` seats as down. Rebuild the
-   round payload from the retained parsed outputs and `sweep commit` exactly as in a fresh round.
+   round payload from the retained parsed outputs and `sweep commit` exactly as in a fresh round. On
+   the common single-batch path, `round prepare-debate` performs this reconciliation: it preserves
+   completed checkpoints (and their seats in this interrupted round's effective panel), extends the
+   stored plan for unplanned current-panel seats, reactivates already-planned dropped seats that have
+   returned, and drops only incomplete planned seats that current preflight no longer configures. An
+   exceptional multi-batch plan stays on the manual recovery path.
    The `committed_rounds` guard makes this safe even if the crash happened mid-commit.
 6. Never restart a committed sweep; never re-bump a committed round.
 
@@ -777,10 +879,15 @@ human's intent when they chose to continue. Do **not** re-apply the gate on resu
 
 ---
 
+<!-- /phase:recovery -->
+<!-- phase:verdict -->
+
 # Verdict synthesis
 
-Read the final `"$SC/index" get "$id"` and your origins. Present **everything**, surfacing
-origins only here. Severity → headings: `critical`/`high` → **Critical**, `medium` →
+Run `"$SC/round" verdict-input "$id"` and read that single compact result. It contains the stable
+manifest, configured panel, final index, structured origins, and guard facts needed below; do not
+re-read those state files separately. Present **everything**, surfacing origins only here. Severity
+→ headings: `critical`/`high` → **Critical**, `medium` →
 **Important**, `low` → **Minor**, `style` → **Style notes**.
 
 ```markdown
@@ -830,21 +937,26 @@ does not lose the result:
 "$SC/write_card" "$workdir/.panel-review/verdict-$id.md" < /tmp/$id/verdict.new.md
 ```
 
-Also write the durable copy that outlives cleanup/discard (best-effort — if this fails, proceed
-anyway; it must never block returning the verdict):
+Also write the durable copy that outlives cleanup/discard. Artifact persistence is required for
+delivery; if it fails, return only `PANEL_VERDICT_WRITE_FAILED id=<id>` and leave the run intact:
 
 ```bash
 "$SC/write_verdict_artifact" --id "$id" < /tmp/$id/verdict.new.md
 ```
 
-After the verdict is persisted and ready to return, **clean up**:
+After the verdict is persisted, **clean up**:
 `"$SC/cleanup" --id "$id" --workdir "$workdir"` — **unless** one of these holds, in which case you
 persist the verdict but deliberately **skip cleanup** so the run survives:
 
-- **Round-0 severity gate** (only-low): append the `<<<PANEL-GATE …>>>` line for the optional debate.
-- **Leftovers to continue:** if the final index has any `unresolved` or `contested` issue, append a
-  line `<<<PANEL-CONTINUABLE id=$id unresolved=<n> contested=<m>>>>` (counts from the final index),
-  so the user can `panel-review:continue [unresolved|contested]` to debate them further.
+- **Low-severity gate:** keep the run for the optional debate.
+- **Leftovers to continue:** keep the run if the final index has any `unresolved` or `contested`
+  issue, so the user can `panel-review:continue [unresolved|contested]` to debate them further.
+
+After persistence and conditional cleanup, return only `PANEL_VERDICT_READY id=<id>`. The launching
+command derives gate/continuation status from the validated artifact and retained canonical index;
+never return the verdict body or a second copy of those counts.
 
 If you are returning without a final verdict (error/abort), also do **not** clean up — leave the
 state for resume.
+
+<!-- /phase:verdict -->

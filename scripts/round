@@ -1,0 +1,745 @@
+#!/usr/bin/env python3
+"""Coarse deterministic operations for the referee's normal round path."""
+
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import shlex
+import subprocess
+import sys
+
+from panel_common import panel_atomic_write, panel_require_id
+
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent
+PROMPTS = ROOT / "prompts"
+SAFE_NAME_RE = re.compile(r"[A-Za-z0-9._-]+")
+USAGE = (
+    "usage: round {prepare-round0|collect-round0|prepare-debate|collect-debate|"
+    "salvage-debate|commit|verdict-input} ID ..."
+)
+
+
+class RoundError(Exception):
+    def __init__(self, message, code=1):
+        super().__init__(message)
+        self.code = code
+
+
+def compact(value):
+    return json.dumps(value, separators=(",", ":"), ensure_ascii=False)
+
+
+def emit(value):
+    print(compact(value))
+
+
+def load_json(path):
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return json.load(handle)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise RoundError(f"missing or invalid {path}") from error
+
+
+def run_dir(run_id):
+    return Path("/tmp") / run_id
+
+
+def run_command(args, *, cwd=None, input_data=None, stdout_path=None, allow=(0,)):
+    result = subprocess.run(
+        [str(value) for value in args],
+        cwd=cwd,
+        input=input_data,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if result.returncode not in allow:
+        detail = result.stderr.decode("utf-8", "replace").strip()
+        raise RoundError(detail or f"{Path(args[0]).name} exited {result.returncode}", result.returncode)
+    if stdout_path is not None:
+        panel_atomic_write(str(stdout_path), result.stdout)
+    return result
+
+
+def state(run_id):
+    directory = run_dir(run_id)
+    manifest = load_json(directory / "manifest.json")
+    index = load_json(directory / "index.json")
+    if manifest.get("id") != run_id:
+        raise RoundError("manifest id does not match the requested run")
+    workdir = manifest.get("workdir")
+    if not isinstance(workdir, str) or not os.path.isdir(workdir):
+        raise RoundError("manifest workdir is missing or invalid")
+    return directory, manifest, index, workdir
+
+
+def validate_seats(seats):
+    if len(seats) < 2 or "claude" not in seats:
+        raise RoundError("configured panel must contain claude and at least one peer", 2)
+    if any(seat not in {"claude", "codex", "gemini"} for seat in seats):
+        raise RoundError("configured panel contains an unknown seat", 2)
+    if len(seats) != len(set(seats)) or any(SAFE_NAME_RE.fullmatch(seat) is None for seat in seats):
+        raise RoundError("configured seats must be distinct safe names", 2)
+    return seats
+
+
+def configured_panel(directory):
+    value = load_json(directory / "panel.json")
+    seats = value.get("configured") if isinstance(value, dict) else None
+    if not isinstance(seats, list) or any(not isinstance(seat, str) for seat in seats):
+        raise RoundError("missing or invalid configured panel")
+    return validate_seats(seats)
+
+
+def ensure_instructions(directory, manifest):
+    destination = directory / "instructions.txt"
+    if destination.is_file():
+        return destination
+    if manifest.get("instructions") == "auto":
+        emit({"status": "needs_auto_instructions", "path": str(destination)})
+        raise RoundError("author instructions require referee composition", 3)
+    result = run_command([HERE / "resolve_instructions", "--id", manifest["id"]])
+    panel_atomic_write(str(destination), result.stdout)
+    return destination
+
+
+def write_common_files(directory, manifest, workdir):
+    scratch = Path(workdir) / ".panel-review" / manifest["id"] / "work"
+    scratch.mkdir(parents=True, exist_ok=True)
+    files = {
+        "workdir": f"{workdir}\n",
+        "scope": f"{manifest['scope']}\n",
+        "scratch": f"{scratch}\n",
+    }
+    for name, value in files.items():
+        panel_atomic_write(str(directory / f"{name}.txt"), value)
+    panel_atomic_write(str(scratch / ".panel-scratch"), f"{manifest['id']}\n")
+
+
+def assemble(template, destination, replacements):
+    args = [HERE / "assemble", PROMPTS / template]
+    args.extend(f"{key}={value}" for key, value in replacements.items())
+    run_command(args, stdout_path=destination)
+
+
+def write_claude_prompt(directory, task_path, round_number, batch=None):
+    if round_number == 0:
+        destination = directory / "raw" / "round0.claude.txt"
+        command = [HERE / "write_seat_raw", "--id", directory.name, "--round", "0"]
+        prompt = directory / "round0.claude.prompt"
+    else:
+        destination = directory / "raw" / f"round{round_number}.claude.{batch}.txt"
+        command = [
+            HERE / "write_seat_raw",
+            "--id",
+            directory.name,
+            "--round",
+            str(round_number),
+            "--batch",
+            batch,
+        ]
+        prompt = directory / f"debate.{round_number}.claude.{batch}.prompt"
+    delivery = directory / f"raw_write.{round_number}.{batch or 'round0'}.txt"
+    panel_atomic_write(
+        str(delivery),
+        f"Expected destination: {destination}\nCommand: {shlex.join(map(str, command))}\n",
+    )
+    assemble("claude_delivery.tmpl", prompt, {"TASK": task_path, "RAW_WRITE": delivery})
+    return prompt
+
+
+def remove_files(*paths):
+    for path in paths:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def barrier_command(directory, tag, prompt, round_number, batch, cli_seats):
+    if round_number == 0:
+        done = directory / "await.round0.txt"
+        script = directory / "cli_barrier.round0.sh"
+        status_name = lambda seat: directory / f"status.{seat}"
+        parsed_name = lambda seat: directory / f"f.{seat}.json"
+        raw_name = lambda seat: directory / "raw" / f"round0.{seat}.txt"
+    else:
+        done = directory / f"await.round{round_number}.{batch}.txt"
+        script = directory / f"cli_barrier.round{round_number}.{batch}.sh"
+        status_name = lambda seat: directory / f"status.round{round_number}.{seat}.{batch}"
+        parsed_name = lambda seat: directory / f"nf.{round_number}.{seat}.{batch}.json"
+        raw_name = lambda seat: directory / "raw" / f"round{round_number}.{seat}.{batch}.txt"
+    command = [HERE / "await_seats", "--id", directory.name, "--tag", tag, "--prompt", prompt]
+    for seat in cli_seats:
+        command.extend(
+            [
+                "--seat",
+                seat,
+                "--raw",
+                raw_name(seat),
+                "--parsed",
+                parsed_name(seat),
+                "--status",
+                status_name(seat),
+            ]
+        )
+    command.extend(["--done", done])
+    panel_atomic_write(str(script), shlex.join(map(str, command)) + "\n")
+    return script, done
+
+
+def cmd_prepare_round0(run_id, seats):
+    seats = validate_seats(seats)
+    directory, manifest, index, workdir = state(run_id)
+    if index.get("phase") != "round0":
+        raise RoundError("round 0 is already complete")
+    instructions = ensure_instructions(directory, manifest)
+    write_common_files(directory, manifest, workdir)
+    panel_atomic_write(str(directory / "panel.json"), compact({"configured": seats}) + "\n")
+
+    diff = run_command([HERE / "resolve_diff", manifest["scope"]], cwd=workdir).stdout
+    actual_hash = hashlib.sha256(diff).hexdigest()
+    if actual_hash != manifest.get("diff_hash"):
+        raise RoundError("resolved diff hash does not match the manifest")
+    panel_atomic_write(str(directory / "diff.txt"), diff)
+    run_command([HERE / "repo_guard", "snapshot", "--id", run_id, "--workdir", workdir])
+    panel_atomic_write(str(directory / "check.findings.txt"), f"{HERE / 'check_draft'} findings\n")
+
+    scope = manifest["scope"]
+    diff_info = []
+    if scope.startswith("base="):
+        diff_info.append(f"Range: {scope[5:]}..HEAD")
+    elif scope.startswith("commit="):
+        diff_info.append(f"Commit: {scope[7:]}")
+    diff_info.extend(
+        [
+            f"Canonical diff (authoritative review bytes) — read this file: {directory / 'diff.txt'}",
+            f"Size: {len(diff)} bytes   sha256: {actual_hash}",
+        ]
+    )
+    panel_atomic_write(str(directory / "diff_info.txt"), "\n".join(diff_info) + "\n")
+    prompt = directory / "round0.prompt"
+    assemble(
+        "blind_pass.tmpl",
+        prompt,
+        {
+            "WORKDIR": directory / "workdir.txt",
+            "SCOPE": directory / "scope.txt",
+            "INSTRUCTIONS": instructions,
+            "DIFFINFO": directory / "diff_info.txt",
+            "SCRATCH": directory / "scratch.txt",
+            "CHECK": directory / "check.findings.txt",
+            "SCHEMA_FINDINGS": PROMPTS / "schema" / "findings.txt",
+            "TILTH": PROMPTS / "tilth_guide.txt",
+        },
+    )
+    remove_files(
+        directory / "raw" / "round0.claude.txt",
+        directory / "f.claude.json",
+        directory / "status.claude",
+    )
+    claude_prompt = write_claude_prompt(directory, prompt, 0)
+    cli_seats = [seat for seat in seats if seat != "claude"]
+    barrier, done = barrier_command(directory, "findings", prompt, 0, None, cli_seats)
+    emit(
+        {
+            "status": "prepared",
+            "prompt": str(prompt),
+            "claude_prompt": str(claude_prompt),
+            "command": str(barrier),
+            "done": str(done),
+            "sentinel": str(directory / "await.round0.sentinel"),
+        }
+    )
+
+
+def read_status(path):
+    try:
+        value = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return int(value) if value.isdigit() else value
+
+
+def verify_guard(directory, run_id, workdir, name):
+    result = run_command(
+        [HERE / "repo_guard", "verify", "--id", run_id, "--workdir", workdir, "--restore"],
+        allow=(0, 1),
+    )
+    guard = directory / "origins" / name
+    guard.parent.mkdir(parents=True, exist_ok=True)
+    previous = guard.read_bytes() if guard.is_file() else b""
+    panel_atomic_write(str(guard), previous + result.stdout)
+    return result.returncode == 0
+
+
+def cmd_collect_round0(run_id, final):
+    directory, _manifest, _index, workdir = state(run_id)
+    seats = configured_panel(directory)
+    claude_raw = directory / "raw" / "round0.claude.txt"
+    claude_parsed = directory / "f.claude.json"
+    result = run_command(
+        [HERE / "parse_block", "findings", claude_raw, "claude"],
+        stdout_path=claude_parsed,
+        allow=(0, 1, 4, 5),
+    )
+    claude_status = 4 if result.returncode == 1 and not claude_raw.is_file() else result.returncode
+    panel_atomic_write(str(directory / "status.claude"), f"{claude_status}\n")
+    statuses = {seat: read_status(directory / f"status.{seat}") for seat in seats}
+    if final:
+        guard_clean = verify_guard(directory, run_id, workdir, "guard.round0.txt")
+    else:
+        guard_clean = None
+    counts = {}
+    for seat in seats:
+        parsed = directory / f"f.{seat}.json"
+        counts[seat] = sum(1 for line in parsed.read_text(encoding="utf-8").splitlines() if line) if parsed.is_file() else 0
+    emit(
+        {
+            "status": "collected" if final else "partial",
+            "seats": statuses,
+            "engaged": [seat for seat in seats if statuses[seat] == 0],
+            "finding_counts": counts,
+            "guard_clean": guard_clean,
+            "barrier_rc": read_status(directory / "await.round0.sentinel"),
+        }
+    )
+
+
+def open_issue_ids(index):
+    return [
+        issue["id"]
+        for issue in index.get("issues", [])
+        if isinstance(issue, dict) and issue.get("state") == "open" and isinstance(issue.get("id"), str)
+    ]
+
+
+def cmd_prepare_debate(run_id, seats):
+    directory, manifest, index, workdir = state(run_id)
+    seats = validate_seats(seats)
+    issue_ids = open_issue_ids(index)
+    if not issue_ids:
+        raise RoundError("no open issues to debate")
+    instructions = ensure_instructions(directory, manifest)
+    write_common_files(directory, manifest, workdir)
+    round_number = int(index.get("round", 0)) + 1
+    epoch = str(index.get("run_epoch", 0))
+    run_command([HERE / "sweep", "begin", run_id, str(round_number), epoch])
+    plan_path = directory / f"plan.{round_number}.json"
+    stored_plan_path = directory / "sweeps" / f"round-{round_number}" / "plan.json"
+    if stored_plan_path.is_file():
+        stored_plan = load_json(stored_plan_path)
+        batches = stored_plan.get("batches")
+        if not isinstance(batches, list) or {entry.get("batch") for entry in batches} != {"1"}:
+            raise RoundError("existing exceptional batch plan requires manual recovery")
+        planned_seats = {entry.get("seat") for entry in batches}
+        stored_ids = {
+            issue_id
+            for entry in batches
+            for issue_id in entry.get("expected_ids", [])
+        }
+        if stored_ids != set(issue_ids):
+            raise RoundError("existing plan does not match the current open issues")
+        resume = json.loads(run_command([HERE / "sweep", "resume-plan", run_id]).stdout)
+        completed_seats = {
+            seat
+            for seat in planned_seats
+            if all(
+                entry["status"] == "complete"
+                for entry in resume["batches"]
+                if entry["seat"] == seat
+            )
+        }
+        run_command(
+            [HERE / "sweep", "extend-plan", run_id, str(round_number), epoch, *seats]
+        )
+        for seat in sorted(planned_seats - set(seats) - completed_seats):
+            run_command([HERE / "sweep", "drop-seat", run_id, str(round_number), seat])
+        stored_plan = load_json(stored_plan_path)
+        batches = stored_plan["batches"]
+        effective_seats = list(seats)
+        effective_seats.extend(
+            entry["seat"]
+            for entry in batches
+            if entry["seat"] in completed_seats and entry["seat"] not in effective_seats
+        )
+    else:
+        run_command(
+            [HERE / "sweep", "plan-scaffold", run_id, str(round_number), *seats],
+            stdout_path=plan_path,
+        )
+        run_command([HERE / "sweep", "plan", run_id, str(round_number), epoch, plan_path])
+        stored_plan = load_json(stored_plan_path)
+        batches = stored_plan["batches"]
+        effective_seats = seats
+    panel_atomic_write(str(directory / "panel.json"), compact({"configured": effective_seats}) + "\n")
+    run_command([HERE / "regen_cards", "--id", run_id, "--workdir", workdir])
+
+    cards = [Path(workdir) / ".panel-review" / run_id / f"issue-{issue_id}.md" for issue_id in issue_ids]
+    panel_atomic_write(str(directory / f"cards.{round_number}.txt"), "\n".join(map(str, cards)) + "\n")
+    panel_atomic_write(str(directory / "check.stances.txt"), f"{HERE / 'check_draft'} stances\n")
+    prompt = directory / f"debate.{round_number}.prompt"
+    assemble(
+        "debate.tmpl",
+        prompt,
+        {
+            "WORKDIR": directory / "workdir.txt",
+            "CARDS": directory / f"cards.{round_number}.txt",
+            "INSTRUCTIONS": instructions,
+            "SCRATCH": directory / "scratch.txt",
+            "CHECK": directory / "check.stances.txt",
+            "SCHEMA_STANCES": PROMPTS / "schema" / "stances.txt",
+            "SCHEMA_FINDINGS": PROMPTS / "schema" / "findings.txt",
+            "TILTH": PROMPTS / "tilth_guide.txt",
+        },
+    )
+
+    batch = "1"
+    panel_atomic_write(str(directory / f"batch.{round_number}.{batch}.ids"), "\n".join(sorted(issue_ids)) + "\n")
+    dropped = set(load_json(stored_plan_path).get("dropped_seats", []))
+    planned_seats = [entry["seat"] for entry in batches if entry["seat"] not in dropped]
+    incomplete = []
+    for seat in planned_seats:
+        result = run_command(
+            [HERE / "sweep", "has", run_id, str(round_number), seat, batch],
+            allow=(0, 1),
+        )
+        if result.returncode == 1:
+            incomplete.append(seat)
+
+    claude_prompt = None
+    if "claude" in incomplete:
+        remove_files(
+            directory / "raw" / f"round{round_number}.claude.{batch}.txt",
+            directory / f"nf.{round_number}.claude.{batch}.json",
+            directory / f"status.nf.{round_number}.claude.{batch}",
+        )
+        claude_prompt = write_claude_prompt(directory, prompt, round_number, batch)
+    cli_seats = [seat for seat in incomplete if seat != "claude"]
+    barriers = []
+    if cli_seats:
+        barrier, done = barrier_command(directory, "new_findings", prompt, round_number, batch, cli_seats)
+        barriers.append(
+            {
+                "batch": batch,
+                "command": str(barrier),
+                "done": str(done),
+                "sentinel": str(directory / f"await.round{round_number}.{batch}.sentinel"),
+            }
+        )
+    emit(
+        {
+            "status": "prepared",
+            "round": round_number,
+            "epoch": int(epoch),
+            "prompt": str(prompt),
+            "claude_prompt": str(claude_prompt) if claude_prompt is not None else None,
+            "barriers": barriers,
+        }
+    )
+
+
+def debate_engaged(seats, batches):
+    engaged = []
+    for seat in seats:
+        seat_batches = [batch for batch in batches if batch["seat"] == seat]
+        if seat_batches and all(
+            batch["status"] == "complete"
+            for batch in seat_batches
+        ):
+            engaged.append(seat)
+    return engaged
+
+
+def cmd_collect_debate(run_id, final):
+    directory, _manifest, index, workdir = state(run_id)
+    seats = configured_panel(directory)
+    round_number = int(index.get("round", 0)) + 1
+    epoch = str(index.get("run_epoch", 0))
+    plan = load_json(directory / "sweeps" / f"round-{round_number}" / "plan.json")
+    statuses = []
+    for entry in plan["batches"]:
+        seat = entry["seat"]
+        batch = entry["batch"]
+        if seat in plan.get("dropped_seats", []):
+            statuses.append(
+                {
+                    "seat": seat,
+                    "batch": batch,
+                    "status": "dropped",
+                    "new_findings_status": None,
+                }
+            )
+            continue
+        raw = directory / "raw" / f"round{round_number}.{seat}.{batch}.txt"
+        expected = directory / f"batch.{round_number}.{batch}.ids"
+        checkpoint = run_command(
+            [HERE / "sweep", "has", run_id, str(round_number), seat, batch], allow=(0, 1)
+        )
+        if checkpoint.returncode == 0:
+            status = "complete"
+        else:
+            result = run_command(
+                [HERE / "sweep", "ingest-batch", run_id, str(round_number), epoch, seat, batch, expected, raw]
+            )
+            status = json.loads(result.stdout)["status"]
+        nf_status = read_status(directory / f"status.nf.{round_number}.{seat}.{batch}")
+        statuses.append(
+            {
+                "seat": seat,
+                "batch": batch,
+                "status": status,
+                "new_findings_status": nf_status,
+            }
+        )
+    engaged = debate_engaged(seats, statuses)
+    guard_clean = verify_guard(directory, run_id, workdir, "guard.debate.txt") if final else None
+    emit(
+        {
+            "status": "collected" if final else "partial",
+            "round": round_number,
+            "batches": statuses,
+            "engaged": engaged,
+            "guard_clean": guard_clean,
+            "barrier_rc": read_status(directory / f"await.round{round_number}.1.sentinel"),
+        }
+    )
+
+
+def cmd_salvage_debate(run_id, seat, batch, raw_arg):
+    directory, _manifest, index, _workdir = state(run_id)
+    if seat not in {"codex", "gemini"}:
+        raise RoundError("salvage-debate requires a CLI seat (codex or gemini)", 2)
+    if SAFE_NAME_RE.fullmatch(batch) is None:
+        raise RoundError("salvage-debate requires a safe batch name", 2)
+    if seat not in configured_panel(directory):
+        raise RoundError("salvage-debate seat is not in the configured panel", 2)
+    round_number = int(index.get("round", 0)) + 1
+    epoch = str(index.get("run_epoch", 0))
+    plan = load_json(directory / "sweeps" / f"round-{round_number}" / "plan.json")
+    if seat in plan.get("dropped_seats", []):
+        raise RoundError("salvage-debate seat was dropped")
+    if not any(entry["seat"] == seat and entry["batch"] == batch for entry in plan["batches"]):
+        raise RoundError("salvage-debate seat/batch is not in the active plan", 2)
+    expected_raw = directory / "raw" / f"round{round_number}.{seat}.{batch}.txt.salvaged"
+    supplied_raw = Path(raw_arg)
+    if supplied_raw != expected_raw:
+        raise RoundError(f"salvage-debate raw must be {expected_raw}", 2)
+    if not supplied_raw.is_file():
+        raise RoundError("salvage-debate raw does not exist", 2)
+    expected = directory / f"batch.{round_number}.{batch}.ids"
+    result = run_command(
+        [
+            HERE / "sweep",
+            "ingest-batch",
+            run_id,
+            str(round_number),
+            epoch,
+            seat,
+            batch,
+            expected,
+            supplied_raw,
+        ]
+    )
+    emit(json.loads(result.stdout))
+
+
+def cmd_commit(run_id, addendum):
+    directory, _manifest, index, workdir = state(run_id)
+    configured = configured_panel(directory)
+    round_number = int(index.get("round", 0)) + 1
+    epoch = str(index.get("run_epoch", 0))
+    plan = json.loads(run_command([HERE / "sweep", "resume-plan", run_id]).stdout)
+    engaged = debate_engaged(configured, plan["batches"])
+    sweep_dir = directory / "sweeps" / f"round-{round_number}"
+    stance_paths = [
+        sweep_dir / f"{batch['seat']}.{batch['batch']}.stances.json"
+        for batch in plan["batches"]
+        if batch["seat"] in engaged and batch["status"] == "complete"
+    ]
+    missing_stances = [str(path) for path in stance_paths if not path.is_file()]
+    if missing_stances:
+        raise RoundError(f"complete batch is missing stances: {', '.join(missing_stances)}")
+    stances = b"".join(path.read_bytes() for path in stance_paths)
+    stances_path = directory / f"stances.{round_number}.json"
+    panel_atomic_write(str(stances_path), stances)
+    payload = directory / f"payload.{round_number}.json"
+    if len(engaged) >= 2:
+        advice = directory / f"advice.{round_number}.json"
+        run_command(
+            [
+                HERE / "decide_round",
+                "--id",
+                run_id,
+                "--round",
+                str(round_number),
+                "--configured",
+                " ".join(configured),
+                "--engaged",
+                " ".join(engaged),
+                "--stances",
+                stances_path,
+                "--advice",
+                advice,
+            ],
+            stdout_path=payload,
+        )
+        advice_value = load_json(advice)
+    else:
+        run_command(
+            [
+                HERE / "decide_degraded_round",
+                "--id",
+                run_id,
+                "--round",
+                str(round_number),
+                "--configured",
+                " ".join(configured),
+                "--engaged",
+                " ".join(engaged),
+                "--stances",
+                stances_path,
+            ],
+            stdout_path=payload,
+        )
+        advice_value = {"prose_revisions": []}
+    new_finding_paths = [
+        directory / f"nf.{round_number}.{batch['seat']}.{batch['batch']}.json"
+        for batch in plan["batches"]
+        if batch["seat"] in engaged
+    ]
+    new_findings_present = any(
+        path.is_file() and any(line for line in path.read_text(encoding="utf-8").splitlines() if line)
+        for path in new_finding_paths
+    )
+    judgment_required = bool(advice_value.get("prose_revisions")) or new_findings_present
+    if judgment_required and addendum is None:
+        emit(
+            {
+                "status": "needs_judgment_addendum",
+                "advice": str(advice) if len(engaged) >= 2 else None,
+                "new_findings": [
+                    str(path)
+                    for path in sorted(new_finding_paths)
+                    if path.is_file()
+                    and any(line for line in path.read_text(encoding="utf-8").splitlines() if line)
+                ],
+            }
+        )
+        raise RoundError("judgment addendum required", 3)
+    if addendum is not None:
+        if not addendum.is_file():
+            raise RoundError("addendum file not found", 2)
+        merged = directory / f"payload.{round_number}.merged.json"
+        run_command([HERE / "merge_payload", payload], input_data=addendum.read_bytes(), stdout_path=merged)
+        panel_atomic_write(str(payload), merged.read_bytes())
+    run_command(
+        [HERE / "sweep", "commit", run_id, str(round_number), epoch],
+        input_data=payload.read_bytes(),
+    )
+    run_command([HERE / "regen_cards", "--id", run_id, "--workdir", workdir])
+    updated = load_json(directory / "index.json")
+    gate = json.loads(run_command([HERE / "index", "gate-status", run_id]).stdout)
+    counts = {}
+    for issue in updated.get("issues", []):
+        state_name = issue.get("state")
+        counts[state_name] = counts.get(state_name, 0) + 1
+    emit(
+        {
+            "status": "committed",
+            "round": round_number,
+            "engaged": engaged,
+            "states": counts,
+            "gate": gate,
+        }
+    )
+
+
+def cmd_verdict_input(run_id):
+    directory, manifest, index, _workdir = state(run_id)
+    origins = {}
+    origins_dir = directory / "origins"
+    if origins_dir.is_dir():
+        for path in sorted(origins_dir.iterdir()):
+            if not path.is_file():
+                continue
+            if path.suffix == ".json":
+                origins[path.name] = load_json(path)
+            elif path.name.startswith("guard."):
+                origins[path.name] = [line for line in path.read_text(encoding="utf-8").splitlines() if line]
+            elif ".raw." not in path.name and not path.name.endswith(".raw.txt"):
+                origins[path.name] = path.read_text(encoding="utf-8")
+    emit(
+        {
+            "manifest": {
+                key: manifest.get(key)
+                for key in ("id", "scope", "instructions", "limits", "diff_hash", "created")
+            },
+            "configured": configured_panel(directory),
+            "index": index,
+            "origins": origins,
+        }
+    )
+
+
+def main(argv):
+    command = argv[1] if len(argv) > 1 else ""
+    if command in {"-h", "--help", "help"}:
+        print(USAGE)
+        return 0
+    if command not in {
+        "prepare-round0",
+        "collect-round0",
+        "prepare-debate",
+        "collect-debate",
+        "salvage-debate",
+        "commit",
+        "verdict-input",
+    }:
+        print(USAGE, file=sys.stderr)
+        return 2
+    run_id = argv[2] if len(argv) > 2 else ""
+    panel_require_id(run_id)
+    try:
+        if command == "prepare-round0":
+            cmd_prepare_round0(run_id, argv[3:])
+        elif command == "collect-round0":
+            if argv[3:] not in ([], ["--final"]):
+                raise RoundError("collect-round0 takes only optional --final", 2)
+            cmd_collect_round0(run_id, argv[3:] == ["--final"])
+        elif command == "prepare-debate":
+            cmd_prepare_debate(run_id, argv[3:])
+        elif command == "collect-debate":
+            if argv[3:] not in ([], ["--final"]):
+                raise RoundError("collect-debate takes only optional --final", 2)
+            cmd_collect_debate(run_id, argv[3:] == ["--final"])
+        elif command == "salvage-debate":
+            if len(argv) != 6:
+                raise RoundError("salvage-debate takes ID SEAT BATCH SALVAGED_RAW", 2)
+            cmd_salvage_debate(run_id, argv[3], argv[4], argv[5])
+        elif command == "commit":
+            if len(argv) == 3:
+                addendum = None
+            elif len(argv) == 5 and argv[3] == "--addendum":
+                addendum = Path(argv[4])
+            else:
+                raise RoundError("commit takes ID and optional --addendum FILE", 2)
+            cmd_commit(run_id, addendum)
+        else:
+            if len(argv) != 3:
+                raise RoundError("verdict-input takes only ID", 2)
+            cmd_verdict_input(run_id)
+    except RoundError as error:
+        if error.code != 3:
+            print(f"round {command}: {error}", file=sys.stderr)
+        return error.code
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

@@ -27,6 +27,7 @@ assert_eq() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "expected [$2] got
 # assert_exit <name> <want-code> <got-code>
 assert_exit() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "want exit $2 got $3"; fi; }
 assert_file_contains() { if grep -Fq -- "$2" "$3"; then ok "$1"; else bad "$1" "missing [$2] in $3"; fi; }
+assert_file_not_contains() { if grep -Fq -- "$2" "$3"; then bad "$1" "unexpected [$2] in $3"; else ok "$1"; fi; }
 section() { echo; echo "## $1"; }
 
 # ---------------------------------------------------------------------------
@@ -69,29 +70,41 @@ case "$pf" in *"WARNING: run 'codex login'"*) bad "logged-in Codex does not warn
 assert_eq "preflight calls codex login status" 'login status' "$(cat "$TMP/codex.log")"
 
 section "protocol and template contracts"
+protocol="$root/skills/panel-review-for-agent/references/protocol.md"
 # The emit schema is single-sourced in prompts/schema/ (Concern E): the category
 # revision field now lives in the stances fragment, not inline in debate.tmpl.
 assert_file_contains "stances schema fragment exposes category revision" '"category"' "$root/prompts/schema/stances.txt"
 assert_file_contains "debate template splices the stances schema" '{{SCHEMA_STANCES}}' "$root/prompts/debate.tmpl"
 assert_file_contains "template describes selective rationale promotion" 'plus the `rationale` from a `reject`' "$root/prompts/debate.tmpl"
-assert_file_contains "protocol uses degraded decision script" 'decide_degraded_round' "$root/skills/panel-review-for-agent/SKILL.md"
-retained_line="$(grep -nF 'Build the retained stance input' "$root/skills/panel-review-for-agent/SKILL.md" | head -1 | cut -d: -f1)"
-degraded_line="$(grep -nF '"$SC/decide_degraded_round" --id "$id"' "$root/skills/panel-review-for-agent/SKILL.md" | head -1 | cut -d: -f1)"
-if [ -n "$retained_line" ] && [ -n "$degraded_line" ] && [ "$retained_line" -lt "$degraded_line" ]; then
-  ok "protocol builds retained stances before degraded decision"
-else
-  bad "protocol ordering for retained stances" "build line=$retained_line degraded line=$degraded_line"
-fi
-assert_file_contains "protocol delegates batch admission" 'sweep ingest-batch' "$root/skills/panel-review-for-agent/SKILL.md"
-assert_file_contains "protocol delegates dropped-seat cleanup" 'sweep" drop-seat' "$root/skills/panel-review-for-agent/SKILL.md"
-assert_file_contains "protocol reapplies the low-only gate" 'Low-severity stop gate (after each committed round)' "$root/skills/panel-review-for-agent/SKILL.md"
+assert_file_contains "protocol uses degraded decision script" 'decide_degraded_round' "$protocol"
+assert_file_contains "protocol delegates batch admission" 'sweep ingest-batch' "$protocol"
+assert_file_contains "protocol uses coarse debate salvage" 'round" salvage-debate' "$protocol"
+assert_file_contains "protocol forbids stance checkpoint globbing" 'Do not glob `*.stances.json`' "$protocol"
+assert_file_contains "protocol defines complete two-block checkpoints" 'parsed `new_findings`, zero `status.nf.*`' "$protocol"
+assert_file_contains "protocol delegates dropped-seat cleanup" 'sweep" drop-seat' "$protocol"
+assert_file_contains "protocol reapplies the low-only gate" 'Low-severity stop gate (after each committed round)' "$protocol"
 assert_file_contains "README uses general constrained-seat wording" 'any seat running in a constrained/sandboxed workspace' "$root/README.md"
 assert_file_contains "README warns to run in an isolated environment (broad seat permissions)" 'isolated environment (Docker' "$root/README.md"
 assert_file_contains "blind_pass template carries the scratch sentinel" '{{SCRATCH}}' "$root/prompts/blind_pass.tmpl"
 assert_file_contains "debate template carries the scratch sentinel"     '{{SCRATCH}}' "$root/prompts/debate.tmpl"
-assert_file_contains "protocol passes SCRATCH to assemble" 'SCRATCH=/tmp/$id/scratch.txt' "$root/skills/panel-review-for-agent/SKILL.md"
-assert_file_contains "protocol snapshots the tracked tree" 'repo_guard" snapshot' "$root/skills/panel-review-for-agent/SKILL.md"
-assert_file_contains "protocol verifies + restores the tree" 'repo_guard" verify' "$root/skills/panel-review-for-agent/SKILL.md"
+assert_file_contains "protocol passes SCRATCH to assemble" 'SCRATCH=/tmp/$id/scratch.txt' "$protocol"
+assert_file_contains "protocol snapshots the tracked tree" 'repo_guard" snapshot' "$protocol"
+assert_file_contains "protocol verifies + restores the tree" 'repo_guard" verify' "$protocol"
+
+# Final-report delivery is artifact-only: the referee returns a fixed stub and the
+# main-context commands validate the artifact through one deterministic reader mode.
+assert_file_contains "referee returns only the artifact-ready stub" 'PANEL_VERDICT_READY id=<id>' "$root/agents/panel-review-referee.md"
+assert_file_contains "protocol requires durable artifact delivery" 'Artifact persistence is required for delivery' "$protocol"
+assert_file_contains "start closes post-persistence cleanup crash window" 'artifact persistence succeeded but the referee' "$root/skills/start/SKILL.md"
+for command in start resume continue; do
+  skill="$root/skills/$command/SKILL.md"
+  assert_file_contains "$command validates artifact-only delivery" 'read_verdict_artifact" --delivery' "$skill"
+  if grep -Fq 'present the verdict verbatim' "$skill"; then
+    bad "$command does not restate the verdict body" "stale verbatim-delivery instruction remains"
+  else
+    ok "$command does not restate the verdict body"
+  fi
+done
 
 # --- blind-pass robustness (design-notes/blind-pass-robustness.md) ---------------
 # Concern A: the diff body is EXTERNALIZED — blind_pass.tmpl references a file, it no
@@ -102,9 +115,9 @@ else
   ok "blind_pass no longer inlines the diff body"
 fi
 assert_file_contains "blind_pass carries a diff REFERENCE sentinel" '{{DIFFINFO}}' "$root/prompts/blind_pass.tmpl"
-assert_file_contains "protocol builds the diff_info reference" 'diff_info.txt' "$root/skills/panel-review-for-agent/SKILL.md"
-assert_file_contains "protocol passes DIFFINFO to assemble" 'DIFFINFO=/tmp/$id/diff_info.txt' "$root/skills/panel-review-for-agent/SKILL.md"
-if grep -Fq -- 'DIFF=/tmp/$id/diff.txt' "$root/skills/panel-review-for-agent/SKILL.md"; then
+assert_file_contains "protocol builds the diff_info reference" 'diff_info.txt' "$protocol"
+assert_file_contains "protocol passes DIFFINFO to assemble" 'DIFFINFO=/tmp/$id/diff_info.txt' "$protocol"
+if grep -Fq -- 'DIFF=/tmp/$id/diff.txt' "$protocol"; then
   bad "protocol drops the inline DIFF= assemble arg" "still passes DIFF=/tmp/\$id/diff.txt"
 else
   ok "protocol drops the inline DIFF= assemble arg"
@@ -115,9 +128,9 @@ assert_file_contains "blind_pass carries the review-root anchor" '{{WORKDIR}}' "
 assert_file_contains "debate carries the review-root anchor"     '{{WORKDIR}}' "$root/prompts/debate.tmpl"
 assert_file_contains "blind_pass directs agy to set the tool cwd" 'working-directory / `cwd` parameter' "$root/prompts/blind_pass.tmpl"
 assert_file_contains "debate directs agy to set the tool cwd"     'working-directory / `cwd` parameter' "$root/prompts/debate.tmpl"
-assert_file_contains "protocol writes an ABSOLUTE scratch anchor" '"$workdir/.panel-review/$id/work" > /tmp/$id/scratch.txt' "$root/skills/panel-review-for-agent/SKILL.md"
-assert_file_contains "protocol writes the review-root file" 'workdir.txt' "$root/skills/panel-review-for-agent/SKILL.md"
-assert_file_contains "protocol collects ABSOLUTE card paths" '<workdir>/.panel-review/<id>/issue-<oid>.md' "$root/skills/panel-review-for-agent/SKILL.md"
+assert_file_contains "protocol writes an ABSOLUTE scratch anchor" '"$workdir/.panel-review/$id/work" > /tmp/$id/scratch.txt' "$protocol"
+assert_file_contains "protocol writes the review-root file" 'workdir.txt' "$protocol"
+assert_file_contains "protocol collects ABSOLUTE card paths" '<workdir>/.panel-review/<id>/issue-<oid>.md' "$protocol"
 # Concern C: the output contract is hoisted ABOVE the Files/Diff section in blind_pass.
 of_line="$(grep -nF '## Output format' "$root/prompts/blind_pass.tmpl" | head -1 | cut -d: -f1)"
 fd_line="$(grep -nF '## Files / Diff' "$root/prompts/blind_pass.tmpl" | head -1 | cut -d: -f1)"
@@ -150,16 +163,16 @@ printf '```new_findings\n[]\n```\n' > "$TMP/nf.empty-array.txt"
 "$SC/parse_block" new_findings "$TMP/nf.empty-array.txt" x >/dev/null 2>&1
 assert_exit "empty-array new_findings block is valid (F)" 0 "$?"
 assert_file_contains "debate asks to ALWAYS emit new_findings" 'ALWAYS emit this block' "$root/prompts/debate.tmpl"
-assert_file_contains "protocol treats new_findings as required-emptyable" 'required-emptyable' "$root/skills/panel-review-for-agent/SKILL.md"
+assert_file_contains "protocol treats new_findings as required-emptyable" 'required-emptyable' "$protocol"
 # Salvage is referee-owned (no script repair, no repair seat): the protocol carries the
 # extract-first-else-empty anti-hallucination rule, and repair.tmpl is retired.
-assert_file_contains "protocol salvage uses extract-first-else-empty wording" 'if and only if the seat genuinely raised nothing' "$root/skills/panel-review-for-agent/SKILL.md"
+assert_file_contains "protocol salvage uses extract-first-else-empty wording" 'if and only if the seat genuinely raised nothing' "$protocol"
 [ -e "$root/prompts/repair.tmpl" ] && bad "repair.tmpl is retired" "still present" || ok "repair.tmpl is retired"
 
 # --- CLI-seat wait is a background Agent, never a backgrounded Bash job (the stalled-referee fix) ---
 # Root cause it guards: a background Bash job does NOT re-invoke the sub-agent that launched it, so a
 # referee that backgrounded await_seats stalled forever. The wait must go through an Agent.
-spk="$root/skills/panel-review-for-agent/SKILL.md"
+spk="$protocol"
 bar="$root/agents/panel-review-cli-barrier.md"
 assert_file_contains "cli-barrier agent exists with the right name" 'name: panel-review-cli-barrier' "$bar"
 assert_file_contains "cli-barrier agent is a non-reviewing wait barrier" 'wait barrier**, not a reviewer' "$bar"
@@ -178,7 +191,7 @@ if grep -Fq '570000' "$bar"; then bad "cli-barrier must not depend on raising th
 if grep -Fq 'timeout 540 bash' "$bar"; then bad "cli-barrier must not use a >2-min wait the Bash default truncates"; else ok "cli-barrier uses no >2-min blocking wait"; fi
 assert_file_contains "protocol dispatches the cli-barrier Agent" 'panel-review:panel-review-cli-barrier' "$spk"
 assert_file_contains "protocol writes the Round-0 barrier command to a script" 'cli_barrier.round0.sh' "$spk"
-assert_file_contains "protocol explains why background Bash cannot wake a sub-agent" 'background Bash job does not re-invoke a sub-agent' "$spk"
+assert_file_contains "protocol explains why background Bash cannot wake a sub-agent" 're-invoke the sub-agent that launched it' "$spk"
 # Regression guard: the OLD broken instruction (referee backgrounds await_seats itself) must be gone.
 if grep -Fq 'ONE background Bash call' "$spk"; then bad "protocol must not background await_seats as a bash job"; else ok "protocol no longer backgrounds await_seats directly"; fi
 if grep -Eq 'await_seats.*run_in_background' "$spk"; then bad "protocol must not pair await_seats with run_in_background"; else ok "await_seats is not backgrounded by the referee"; fi
@@ -218,6 +231,14 @@ case "$(grep -F 'tools:' "$root/agents/panel-review-claude-seat.md")" in
   *mcp__tilth__tilth_write*) bad "Claude seat must NOT expose tilth write tool" ;;
   *) ok "Claude seat excludes tilth write tool" ;;
 esac
+assert_file_not_contains "Claude seat does not request batched evidence lookups" 'Batch independent evidence lookups' "$root/agents/panel-review-claude-seat.md"
+assert_file_not_contains "Claude seat does not prefer multi-symbol lookup" 'one `tilth_search` multi-symbol query' "$root/agents/panel-review-claude-seat.md"
+assert_file_contains "Claude seat avoids redundant reads" 'Avoid redundant evidence reads' "$root/agents/panel-review-claude-seat.md"
+assert_file_contains "Claude seat stops after sufficient evidence" 'Stop exploratory calls once the output is supported' "$root/agents/panel-review-claude-seat.md"
+assert_file_contains "Claude seat has no hard call cap" 'hard tool-call' "$root/agents/panel-review-claude-seat.md"
+assert_file_contains "Claude delivery combines both debate blocks" 'For a debate response, put both' "$root/prompts/claude_delivery.tmpl"
+assert_file_contains "Claude delivery validates and writes both debate blocks once" '`stances` and `new_findings` in that file and invoke this command once' "$root/prompts/claude_delivery.tmpl"
+assert_file_contains "Claude delivery replaces redundant per-block validation" "the task prompt's separate per-block pre-emit validation command" "$root/prompts/claude_delivery.tmpl"
 case "$(grep -F 'codex exec' "$root/scripts/run_codex")" in
   *--sandbox\ read-only*) bad "run_codex must no longer pin --sandbox read-only" ;;
   *--dangerously-bypass-approvals-and-sandbox*) ok "run_codex bypasses the sandbox" ;;
@@ -455,6 +476,7 @@ section "protocol wording — the barrier's wait signal is the sentinel, never -
 # excluded (they may still mention --done as a result file).
 wording_docs=(
   "$root/skills/panel-review-for-agent/SKILL.md"
+  "$protocol"
   "$root/agents/panel-review-cli-barrier.md"
   "$root/AGENTS.md"
   "$root/scripts/await_seats"
@@ -615,10 +637,10 @@ assert_eq "no-match leaves index untouched" '1|0' "$(jq -r '"\(.round)|\(.run_ep
 rm -rf "/tmp/$rid" "/tmp/$rid.md" "/tmp/$rid.md.bak" "/tmp/$rid2"
 
 section "protocol references the new deterministic helpers"
-assert_file_contains "protocol uses birth_index"          'birth_index' "$root/skills/panel-review-for-agent/SKILL.md"
-assert_file_contains "protocol uses run_seat"             'run_seat'    "$root/skills/panel-review-for-agent/SKILL.md"
-assert_file_contains "protocol uses resolve_instructions" 'resolve_instructions' "$root/skills/panel-review-for-agent/SKILL.md"
-assert_file_contains "protocol waits via await_seats barrier" 'await_seats' "$root/skills/panel-review-for-agent/SKILL.md"
+assert_file_contains "protocol uses birth_index"          'birth_index' "$protocol"
+assert_file_contains "protocol uses run_seat"             'run_seat'    "$protocol"
+assert_file_contains "protocol uses resolve_instructions" 'resolve_instructions' "$protocol"
+assert_file_contains "protocol waits via await_seats barrier" 'await_seats' "$protocol"
 
 # ---------------------------------------------------------------------------
 # Python suite — the coverage for the migrated stateful scripts (index, parse_block,

@@ -1,0 +1,109 @@
+#!/usr/bin/env python3
+"""Validate and atomically persist a Claude seat's complete raw response."""
+
+import os
+import re
+import subprocess
+import sys
+import tempfile
+
+from panel_common import panel_atomic_write, panel_require_id
+
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+PARSE_BLOCK = os.path.join(HERE, "parse_block")
+USAGE = "usage: write_seat_raw --id ID --round N [--batch NAME]"
+ROUND_RE = re.compile(r"0|[1-9][0-9]*")
+NAME_RE = re.compile(r"[A-Za-z0-9._-]+")
+
+
+def fail(message, code=1):
+    print(f"write_seat_raw: {message}", file=sys.stderr)
+    return code
+
+
+def parse_args(argv):
+    run_id = None
+    round_number = None
+    batch = None
+    index = 1
+    while index < len(argv):
+        arg = argv[index]
+        if arg in {"-h", "--help", "help"}:
+            print(USAGE)
+            raise SystemExit(0)
+        if arg not in {"--id", "--round", "--batch"} or index + 1 >= len(argv):
+            print(USAGE, file=sys.stderr)
+            raise SystemExit(2)
+        value = argv[index + 1]
+        if arg == "--id":
+            run_id = value
+        elif arg == "--round":
+            round_number = value
+        else:
+            batch = value
+        index += 2
+
+    panel_require_id(run_id or "")
+    if round_number is None or ROUND_RE.fullmatch(round_number) is None:
+        raise ValueError("--round must be 0 or a positive integer")
+    if round_number == "0" and batch is not None:
+        raise ValueError("round 0 does not take --batch")
+    if round_number != "0" and batch is None:
+        raise ValueError("debate rounds require --batch")
+    if batch is not None and NAME_RE.fullmatch(batch) is None:
+        raise ValueError("--batch must be a safe name")
+    return run_id, round_number, batch
+
+
+def validate(raw_path, tag):
+    result = subprocess.run(
+        [PARSE_BLOCK, "--diagnose", tag, raw_path],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def main(argv):
+    try:
+        run_id, round_number, batch = parse_args(argv)
+    except ValueError as error:
+        return fail(str(error), 2)
+
+    run_dir = os.path.join("/tmp", run_id)
+    if not os.path.isdir(run_dir):
+        return fail("run directory not found")
+    raw_dir = os.path.join(run_dir, "raw")
+    os.makedirs(raw_dir, exist_ok=True)
+    if round_number == "0":
+        destination = os.path.join(raw_dir, "round0.claude.txt")
+        tags = ("findings",)
+    else:
+        destination = os.path.join(raw_dir, f"round{round_number}.claude.{batch}.txt")
+        tags = ("stances", "new_findings")
+
+    raw = sys.stdin.buffer.read()
+    fd, temporary = tempfile.mkstemp(prefix=".seat-raw.", dir=raw_dir)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(raw)
+            handle.flush()
+            os.fsync(handle.fileno())
+        for tag in tags:
+            if not validate(temporary, tag):
+                return fail(f"invalid {tag} block")
+        panel_atomic_write(destination, raw)
+    finally:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+
+    print(destination)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

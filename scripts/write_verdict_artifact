@@ -11,15 +11,15 @@
 # Usage: write_verdict_artifact --id ID [--final] < verdict.md
 #
 # Header fields scope/instructions/limits/diff_hash/created come from
-# /tmp/<ID>/manifest.json. run_epoch and status come from the canonical index;
+# /tmp/<ID>/manifest.json. run_epoch, status, and index_hash come from the canonical index;
 # status is finished when no issue remains open. The main start skill uses
 # --final only after the user explicitly finishes at the low-only gate, where
 # open issues intentionally remain. seats/rounds are pulled from the verdict body's own
 # "**Seats:**"/"**Rounds:**" lines rather than passed again as separate args —
 # a second copy of the same fact would drift from the verdict text it
-# describes. Missing manifest is a hard error (exit 1): the caller should
-# treat this script as best-effort and not let its failure block returning the
-# verdict to the user.
+# describes. Missing manifest is a hard error (exit 1). The caller must keep
+# the run resumable and must not claim report delivery when this write fails,
+# because the artifact is the only final-report delivery surface.
 #
 # Prints the artifact path on stdout.
 set -euo pipefail
@@ -56,6 +56,7 @@ instr=$(jq -r '.instructions // ""' "$man")
 iss=$(jq -r '.limits.issue_rounds' "$man")
 mx=$(jq -r '.limits.max_rounds' "$man")
 dh=$(jq -r '.diff_hash' "$man")
+index_hash="$("$here/diff_hash" < "$index")"
 created=$(jq -r '.created' "$man")
 finished="$(date '+%Y-%m-%d %H:%M:%S')"
 epoch="$(jq -er '
@@ -102,6 +103,7 @@ dest="/tmp/$id.md"
   printf 'created: %s\n' "$created"
   printf 'finished: %s\n' "$finished"
   printf 'diff_hash: %s\n' "$dh"
+  printf 'index_hash: %s\n' "$index_hash"
   printf '%s\n' "---"
   printf '\n'
   printf '%s\n' "$body"

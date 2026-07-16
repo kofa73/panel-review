@@ -126,9 +126,9 @@ Only `panel-review:start` takes a scope or instructions — the session remember
 `panel-review:resume`/`panel-review:continue` read them back from the manifest rather than asking
 you to retype them.
 
-It returns one synthesized verdict. The review runs in a separate context, so it doesn't clutter
-your conversation. The verdict is also saved to a durable file at **`/tmp/<ID>.md`** (see
-[Persistence & resume](#persistence--resume)).
+It writes one synthesized verdict to **`/tmp/<ID>.md`** and returns only that filename plus any
+minimal gate/continuation status. The review and report body stay in a separate context, so they do
+not clutter your conversation. See [Persistence & resume](#persistence--resume).
 
 ### Steering the review with instructions
 
@@ -177,8 +177,9 @@ Three more behaviors worth knowing before you run it:
 - **No scope, no guess.** With no scope argument `panel-review:start` prints the usage line and
   stops — it never guesses a base branch.
 - **Low-severity gate.** If Round 0 surfaces only `low`-severity items, the tool stops *before* the
-  debate, shows the Round-0 result, and asks whether to debate them anyway — debating an all-low set
-  usually just burns tokens confirming non-issues. Continuing reuses Round 0 (no seat is re-run).
+  debate, writes a report snapshot, shows its filename, and asks whether to debate them anyway —
+  debating an all-low set usually just burns tokens confirming non-issues. Continuing reuses Round 0
+  (no seat is re-run).
   Pass `--debate-low` to skip the gate.
 - **Resumable.** If a run is interrupted — crash, token exhaustion, you stop it — its state
   survives. `panel-review:status` shows it, and `panel-review:resume` picks it up from where it
@@ -266,9 +267,9 @@ start      ── parse scope (commit=abc123) + round limits; hash the diff
 referee    ── Round 0: assemble one blind prompt, dispatch all 3 seats (Claude seat = fresh agent)
   (agent)  ── merge findings into issues (judgment); project blind cards
            ── debate sweeps: cards → seats → stances → transitions → commit (checkpointed)
-           ── synthesize the verdict, then clean up
+           ── synthesize + persist the verdict; return a fixed ready stub; then clean up when eligible
            │  (back in main conversation)
-start      ── presents that verdict verbatim
+start      ── validates the artifact; reports only `/tmp/<ID>.md` + minimal control status
    (skill)
 ```
 
@@ -319,9 +320,13 @@ settle an issue), the state advances:
   it becomes **contested** (had ≥1 review pass) or **unresolved** (none)
 - an issue's *existence* can be **accepted** while a *detail* (severity / claim / location) is
   **contested** — flagged for you
-- a finding that emerges mid-review is treated like a Round-0 finding, not penalized for arriving late
-  — though one raised near the global ceiling may run out of rounds to reach the 2-seat quorum, ending
-  **unresolved** (or **contested**, if it gets one split review pass first)
+- a genuinely new finding that emerges mid-review is treated like a Round-0 finding, not penalized
+  for arriving late — though one raised near the global ceiling may run out of rounds to reach the
+  2-seat quorum, ending **unresolved** (or **contested**, if it gets one split review pass first)
+- a later finding folded into an existing issue adds its materially distinct evidence without
+  changing that issue's state when it reinforces the current outcome; it reopens the issue only when
+  the evidence materially conflicts with that outcome and debate budget remains. At a limit, the
+  forced terminal human handoff still applies instead of leaving the issue open
 
 Beyond its state, each issue record also carries three boolean **flags**, two **counters**, and its
 **evidence**:
@@ -361,25 +366,28 @@ fenced block).
 | `run_codex` | The **only** way to call the Codex seat — defaults `--profile panel-review` (auto-creates the profile from a shipped default) and runs with the sandbox **bypassed** (`--dangerously-bypass-approvals-and-sandbox`, the only mode where Codex's MCP/tilth runs and it can write scratch; integrity is enforced by `repo_guard`, not this sandbox) |
 | `repo_guard` | Protect the **code under review**: `snapshot` records the tracked tree (a `git stash create` SHA + a sha256 manifest) at the start; `verify --restore` after each seat pass detects, reverts, and reports any tracked-file drift. Untracked scratch and the `.panel-review/` cache are left alone |
 | `run_agy` | The **only** way to call the Gemini seat — pins the model, a 15-min `--print-timeout` budget, and the flag-binding invocation (prompt on **stdin with no bare `--print`**, since agy's `--print` takes the prompt as its argument and would otherwise swallow `--model`); falls back from the primary Gemini model to a faster one if the primary fails or exhausts its `--print-timeout` (whose expiry prints `Error: timed out waiting for response`) |
-| `run_seat` | Dispatch one **CLI** seat (Codex or Gemini) for a tag, parse the block, and print the parse status (0 engaged · 4 no block · 5 malformed). **It does not repair.** Salvaging a slipped block — a malformed fence, or a real review the seat forgot to fence — is the **referee's** job, not a script's: the seat that wrote the block has exited, so any "repair" re-dispatch is a fresh cold model whose only input is the raw file the referee already has, and deciding *"real review or down-seat stub?"* is an LLM judgment, not a grep heuristic. On a 4/5 the referee reads that one seat's raw and rewrites it well-formed (see "Salvage" in the referee protocol). The Claude seat is a subagent, not a CLI, so it is driven by the referee directly. **CLI seats are long-running** (minutes; `run_agy` up to ~34 min across its two 15-min model attempts), longer than the Bash tool's foreground timeout (2 min default, 10 min max), so the seats run **in the background**, never foreground (a foreground dispatch is killed mid-pass and the empty raw file reads as a down seat) |
+| `run_seat` | Dispatch one **CLI** seat (Codex or Gemini) for a tag, parse the block, and print the parse status (0 engaged · 4 no block · 5 malformed). **It does not repair.** Salvaging a slipped CLI block — a malformed fence, or a real review the seat forgot to fence — is the **referee's** job, not a script's: the seat that wrote the block has exited, so any "repair" re-dispatch is a fresh cold model whose only input is the raw file the referee already has, and deciding *"real review or down-seat stub?"* is an LLM judgment, not a grep heuristic. On a 4/5 the referee reads that one CLI seat's raw and rewrites it well-formed (see "Salvage" in the referee protocol); debate salvage is installed through `round salvage-debate`, which requires the canonical `.salvaged` side path and never overwrites the original. The Claude seat instead writes through `write_seat_raw`, which validates before installation and fails closed. **CLI seats are long-running** (minutes; `run_agy` up to ~34 min across its two 15-min model attempts), longer than the Bash tool's foreground timeout (2 min default, 10 min max), so the seats run **in the background**, never foreground (a foreground dispatch is killed mid-pass and the empty raw file reads as a down seat) |
 | `await_seats` | **Barrier** over the CLI seats: runs them all concurrently (each through `run_seat`, so dispatch + parse are unchanged — neither repairs) inside **one** job, waits for every seat with a configurable per-seat outer timeout (`--seat-timeout`, default 2400s — the backstop `run_codex` otherwise lacks), writes each seat's final status plus one combined `--done` summary, and exits. It is run by the **`panel-review-cli-barrier` Agent**, not backgrounded by the referee directly: a background **Bash** job does **not** re-invoke the sub-agent that launched it (its completion is routed to the root session and dropped, stalling the referee), whereas a background **Agent** reliably wakes its spawner. So a pass spawns two background Agents — the CLI barrier and the Claude seat — for two reliable wakes instead of the per-seat polling loop that made the referee burn turns re-reading its whole context |
 | `panel-review-cli-barrier` (agent) | Thin, non-reviewing helper subagent the referee spawns **background** each pass: it `bash`-runs the `await_seats` command the referee wrote — wrapped so `await_seats`' exit code is always written to a **completion sentinel** — then watches that sentinel (not the `--done` file, which exists only on a clean run) via bounded foreground waits in its own tiny context, and returns once `await_seats` has fully exited. Its return is the event that wakes the referee; the sentinel's exit code tells the referee whether the seats actually ran (`0`) or hit a setup error / wedged (nonzero / absent → CLI seats down for the pass, no false "settled" and no late writes). Exists solely because a background Agent — unlike a background Bash job — reliably re-invokes its spawning sub-agent |
 | `extract_block` / `parse_block` | Pull a `findings` / `stances` / `new_findings` block → validated JSONL; `parse_block` exit 4 = no block (down seat), exit 0 = a valid block (including an empty or explicit `[]` block — a legitimate "nothing", e.g. a `new_findings` with no new issue), exit 5 = malformed (content present but wholly unparseable). `parse_block --diagnose` reports *why* each item was rejected (reason + offending line) to guide the referee's salvage rewrite |
 | `check_draft` | **Seat-facing** pre-emit validator, spliced into each seat prompt as `{{CHECK}}` (never called by the referee): a seat runs it on the JSONL it is about to fence so it can fix malformed items *before* emitting. A thin wrapper over `parse_block --diagnose` (same validator, no second schema to drift). Closes the silent-drop gap: `parse_block`'s normal mode discards individual malformed lines with only an unseen stderr note (it fails hard only when the *whole* block is unparseable), so a seat that emits some good and some bad items would otherwise lose the bad ones with no repair |
 | `birth_index` | Turn the referee's clustered Round-0 finding-to-issue map into the full `index.json` — assigns each issue's birth state, vetting flags, and `evaluated_by` coverage by the birth-unanimity rule (the deterministic half of clustering; the referee still owns the merge itself) |
 | `decide_round` / `decide_degraded_round` | Build normal (≥2 seats) and degraded (0–1 seat) debate payloads. Both update private `evaluated_by` coverage in the same atomic commit; the degraded path only emits terminal unresolved/contested states and eligible `fully_vetted` flags |
-| `merge_payload` | Fold the referee's addendum (synthesized claims, `add_issues`, fold-reopen) into the `decide_round` payload with `commit-sweep`'s per-key semantics (`set_state` replace, `revise` field-merge) — so additions never become a duplicate `set_state`/`revise` that rejects the round |
+| `merge_payload` | Fold the referee's addendum (synthesized claims, `add_issues`, conditional fold-reopen) into the `decide_round` payload with `commit-sweep`'s per-key semantics (`set_state` replace, `revise` field-merge) — so additions never become a duplicate `set_state`/`revise` that rejects the round; the referee, not this mechanical merge, decides whether folded evidence conflicts with the current outcome |
 | `init_run` / `resume_check` / `cleanup` | Mint a run (marker-last); decide resume/continuable/diverged/stale/ambiguous; tear down after the verdict |
 | `inspect_run` | Pure, read-only per-run inspector for `panel-review:status` — never repairs, never writes |
 | `discard` | The fault-tolerant traversal behind `panel-review:discard` — removes every session for the workdir |
 | `set_limits` | Writes a `--issue-rounds`/`--max-rounds` override back into a run's manifest, for `resume`/`continue` |
 | `reopen` | The engine behind `panel-review:continue` — revives a **finished** run's `unresolved`/`contested` leftovers for another debate cycle: `index reopen` bumps `run_epoch` and clears `committed_rounds`, then `/tmp/<ID>/sweeps/` is cleared so `resume` starts a clean debate at round 1. Before that, it snapshots the finished cycle into `/tmp/<ID>/epochs/epoch-<n>/` (best-effort) so the next cycle's round-1 filenames don't destroy the previous cycle's transcripts/verdict. Counterpart to `init_run` |
-| `index` | The **only** writer of the canonical issue index (`/tmp/<id>/index.json`) — state, flags, private coverage, counters, `gate-status`, and the idempotent `commit-sweep` that applies a whole debate round atomically (and emits that round's human-readable `audit/round-<N>.md` trail as a side effect, best-effort) |
+| `index` | The **only** writer of the canonical issue index (`/tmp/<id>/index.json`) — state, flags, private coverage, counters, `gate-status`, read-only artifact `delivery-status`, and the idempotent `commit-sweep` that applies a whole debate round atomically (and emits that round's human-readable `audit/round-<N>.md` trail as a side effect, best-effort) |
 | `project_card` / `regen_cards` | Render issue records → blind cards (no origins, no tally); rebuild all cards from the index on resume |
 | `write_card` | Atomic single-card write (temp + fsync + rename, `.bak` rotation) over `panel_atomic_write`, for the card writes `project_card`/`regen_cards` don't own |
-| `sweep` | Checkpointed debate sweeps — owns batch plans (including `plan-scaffold`, which emits one correctly shaped batch per supplied current-panel seat from the open issue IDs), targeted plan-schema diagnostics, parse/ID validation, checkpoint retention, dropped-seat cleanup, and resume plans; counters advance **only** on a committed sweep |
-| `write_verdict_artifact` | Write the durable verdict to the `/tmp/<ID>.md` sibling of `/tmp/<ID>/` (outside it, so `cleanup`/`discard` never delete it), stamped with the continuation epoch and `finished` only when the canonical index has no open issue or the user explicitly finishes at the low-only gate; best-effort — its failure must not block returning the verdict to the user |
-| `read_verdict_artifact` | Validate a durable artifact's ID, finished status, metadata, and optional expected scope/diff hash/continuation epoch, then emit only its verdict body; used for failed-final-response recovery and `panel-review:result <ID>` |
+| `write_seat_raw` | Validate and atomically install the Claude seat's complete fenced response at its derived `/tmp/<ID>/raw/` path; the seat then returns only a fixed status stub to the referee |
+| `round` | Coarse normal-path module: prepare Round 0/debate prompts and barriers from the current preflight panel, collect compact seat/guard status, install an explicitly supplied canonical CLI debate salvage through `salvage-debate`, select only complete active-plan batches for decision/atomic commit with an optional judgment addendum, and render stable compact verdict input |
+| `sweep` | Checkpointed debate sweeps — owns batch plans (including `plan-scaffold`, which emits one correctly shaped batch per supplied current-panel seat, and `extend-plan`, which adds unplanned seats or reactivates already-planned dropped seats when they return to the current panel), targeted plan-schema diagnostics, two-block (`stances` + `new_findings`) parse/ID validation, complete-bundle checkpoint retention/source provenance, dropped-seat cleanup, and resume plans. A published completion marker with any missing companion is corrupt state and fails closed; counters advance **only** on a committed sweep |
+| `write_verdict_artifact` | Write the canonical verdict to the `/tmp/<ID>.md` sibling of `/tmp/<ID>/` (outside it, so `cleanup`/`discard` never delete it), stamped with the continuation epoch, exact index hash, and `finished` only when the canonical index has no open issue or the user explicitly finishes at the low-only gate. This artifact is the only final-report delivery surface; write failure keeps the run resumable and blocks cleanup |
+| `read_verdict_artifact` | Validate a durable artifact's ID, metadata, and optional expected scope/diff hash/continuation epoch. Default mode requires a finished review and emits its body for `panel-review:result`; `--delivery` verifies retained state through `index delivery-status`, rejects a stale same-epoch snapshot, and emits only the validated filename plus minimal gate/continuation status for `start`/`resume`/`continue` |
+| `read_protocol_phase` | Emit one marked phase from the canonical referee procedure so normal runs load only common, active-mode, exceptional-on-demand, and final-synthesis instructions |
 
 ---
 
@@ -400,7 +408,7 @@ derived, regenerable cache; state is never inferred from them.
 | `.panel-review/<ID>/` (the dir) | the per-worktree marker / lock — its name carries `<ID>` |
 | `/tmp/<ID>/manifest.json` | scope, limits, diff hash, phase |
 | `/tmp/<ID>/index.json` | the **issue index** — the authoritative record of every issue: its state (e.g. `accepted`), flags, counters, and evidence (all defined under [How an issue moves](#how-an-issue-moves-transitions)); cards are rendered from it and the verdict is read off it (referee only) |
-| `/tmp/<ID>/sweeps/` | one subdir per **sweep** — a sweep is one full pass over the open issues across all engaged seats (i.e. one debate round). Holds each seat's cached output so an interrupted round resumes without re-running finished seats; **read back on resume** (referee only) |
+| `/tmp/<ID>/sweeps/` | one subdir per **sweep** — a sweep is one full pass over the open issues across all engaged seats (i.e. one debate round). A complete seat/batch checkpoint binds the retained raw, exact-ID stances, parsed `new_findings`, zero parse status, expected IDs, and source provenance; interrupted rounds resume without re-running complete batches. **Read back on resume** (referee only) |
 | `/tmp/<ID>/raw/` | each seat's verbatim response text, before parsing; **read back** — `parse_block` turns these into findings/stances, and resume reuses them (referee only) |
 | `/tmp/<ID>/origins/` | who raised each point, its original wording, and the per-round stances — the data the blind cards omit; **read back** by the referee to track review coverage and to attribute findings in the verdict (referee only) |
 | `/tmp/<ID>/audit/` | `round-<N>.md` — a human-readable trail of the issue-field changes applied in each debate round (state, flag, severity/claim/location revisions, evidence, new issues), written mechanically by `index commit-sweep`; **for inspection only — never read back by the process** |
@@ -418,28 +426,27 @@ verdict at `/tmp/<ID>.md` survives regardless.
 
 ### The durable verdict file (`/tmp/<ID>.md`)
 
-The session state above is torn down on a clean finish, so the verdict would otherwise live **only**
-in your conversation transcript. To give you a movable copy, the referee writes every verdict to
-**`/tmp/<ID>.md`** — a **sibling** of `/tmp/<ID>/`, deliberately *not* inside it, so the
+The session state above is torn down on a clean finish, so the referee writes every verdict to the
+standalone **`/tmp/<ID>.md`** report — a **sibling** of `/tmp/<ID>/`, deliberately *not* inside it, so the
 `rm -rf /tmp/<ID>` in `cleanup`/`discard` never touches it. It is written **whenever a verdict is
-produced** (the low-severity gate, a finished-with-leftovers run, or a final finish), so every
-verdict you see has a matching file; a `continue` or a debated gate **overwrites** the same path
+produced** (the low-severity gate, a finished-with-leftovers run, or a final finish), and it is the
+only surface that carries the report body; a `continue` or a debated gate **overwrites** the same path
 (the prior copy rotates to `/tmp/<ID>.md.bak`, and `continue` additionally snapshots it into that
 cycle's `/tmp/<ID>/epochs/epoch-<n>/`). The file is self-contained: a YAML frontmatter header
 (`id`, `run_epoch`, `status`, `scope`, `instructions`, `limits`, `seats`, `rounds`,
-`created`/`finished`, `diff_hash`)
+`created`/`finished`, `diff_hash`, `index_hash`)
 followed by the verdict markdown verbatim — the full diff is not embedded (it is large and
-reproducible from the scope; `diff_hash` is the reference). Writing it is **best-effort**: if it
-fails (e.g. `/tmp` full), the verdict is still returned, just without the pointer line. **`/tmp` is
-cleared on reboot — move the file somewhere permanent to keep it.**
+reproducible from the scope; `diff_hash` is the reference). Writing it is required for delivery: if
+it fails (e.g. `/tmp` full), the run is kept for resume, cleanup is skipped, and the command does not
+claim completion. **`/tmp` is cleared on reboot — move the file somewhere permanent to keep it.**
 
-If the referee persists a finished verdict but its final Agent response fails, `start`, `resume`,
-and `continue` call `read_verdict_artifact` with the run's expected ID, scope, diff hash, and
-continuation epoch. They
-present the recovered body only if all checks pass; an artifact's existence alone is not treated as
-completion. If a hard session/quota limit leaves no main-conversation turn for that recovery, reset
-the quota and run `panel-review:result <ID>`. This read-only command validates `/tmp/<ID>.md` and
-prints its verdict body without depending on the normally removed workspace marker or re-running
+After every referee Agent completion, including a failed final response, `start`, `resume`, and
+`continue` call `read_verdict_artifact --delivery` with the run's expected ID, scope, diff hash, and
+continuation epoch. Only a validated finished artifact or canonical low-only snapshot produces a
+filename; existence alone is not treated as completion. The report body never passes through the
+main conversation. If a hard session/quota limit leaves no main-conversation turn for that check,
+reset the quota and run `panel-review:result <ID>`. This read-only command validates `/tmp/<ID>.md`
+and prints its verdict body without depending on the normally removed workspace marker or re-running
 any seat.
 
 ### Continuing a finished review
@@ -502,11 +509,16 @@ discipline.
   `~/.codex/panel-review.config.toml` (auto-created from a shipped default); leave it and any other
   `~/.codex/*.config.toml` profile to their tools.
 - The code under review is **never modified**: `scripts/repo_guard` snapshots the tracked tree and
-  auto-reverts any tracked-file change after every seat pass. Seats write only to `.panel-review/<ID>/work/`.
+  auto-reverts any tracked-file change after every seat pass. Seats write only to
+  `.panel-review/<ID>/work/`, except that the Claude seat passes its complete response to
+  `write_seat_raw`, which can write only the derived `/tmp/<ID>/raw/` path.
 - `index.json` is written **only** through the `index` / `sweep` scripts; cards **only** through
   `project_card` / `regen_cards`. Never hand-write state files.
 - The Claude seat is spawned as a fresh `panel-review:panel-review-claude-seat` subagent — **never forked**.
-- The referee returns **only** the verdict — never raw seat output, card text, or per-round
-  transcripts.
+- Claude-seat evidence-efficiency guidance is advisory; it must not impose a hard tool-call cap or
+  stop a review before the evidence and material revision fields are complete.
+- The referee persists the verdict and returns **only** a fixed ready/failure stub — never the report
+  body, raw seat output, card text, or per-round transcripts. The main conversation receives only a
+  validated filename plus minimal gate/continuation status.
 </content>
 </invoke>

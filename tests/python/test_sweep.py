@@ -76,13 +76,23 @@ class TestSweep(unittest.TestCase):
         self.assertEqual(duplicate.stdout, '{"status":"wrong_ids"}\n')
         wrong = self.ingest(self.raw("wrong.txt", "```stances\n{\"id\":\"i1\",\"stance\":\"support\"}\n{\"id\":\"i3\",\"stance\":\"reject\"}\n```\n"))
         self.assertEqual(wrong.stdout, '{"status":"wrong_ids"}\n')
-        complete = self.ingest(self.raw("complete.txt", "```stances\n{\"id\":\"i1\",\"stance\":\"support\"}\n{\"id\":\"i2\",\"stance\":\"reject\"}\n```\n"))
+        missing_new_findings = self.ingest(self.raw("missing-nf.txt", "```stances\n{\"id\":\"i1\",\"stance\":\"support\"}\n{\"id\":\"i2\",\"stance\":\"reject\"}\n```\n"))
+        self.assertEqual(missing_new_findings.stdout, '{"status":"missing_new_findings"}\n')
+        self.assertEqual(self.run_sweep("has", self.run_id, "1", "codex", "b1").returncode, 1)
+        self.assertFalse((self.run_dir / "sweeps" / "round-1" / "codex.b1.stances.json").exists())
+        self.assertFalse((self.run_dir / "nf.1.codex.b1.json").exists())
+        complete = self.ingest(self.raw("complete.txt", "```stances\n{\"id\":\"i1\",\"stance\":\"support\"}\n{\"id\":\"i2\",\"stance\":\"reject\"}\n```\n```new_findings\n[]\n```\n"))
         self.assertEqual(complete.stdout, '{"status":"complete"}\n')
         self.assertEqual(self.run_sweep("has", self.run_id, "1", "codex", "b1").returncode, 0)
+        source = json.loads(
+            (self.run_dir / "sweeps" / "round-1" / "codex.b1.source.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(source["salvaged"], False)
+        self.assertEqual((self.run_dir / "status.nf.1.codex.b1").read_text(encoding="utf-8"), "0\n")
 
     def test_resume_drop_and_commit(self):
         self.begin_and_plan()
-        complete = self.raw("complete.txt", "```stances\n{\"id\":\"i1\",\"stance\":\"support\"}\n{\"id\":\"i2\",\"stance\":\"reject\"}\n```\n")
+        complete = self.raw("complete.txt", "```stances\n{\"id\":\"i1\",\"stance\":\"support\"}\n{\"id\":\"i2\",\"stance\":\"reject\"}\n```\n```new_findings\n[]\n```\n")
         self.assertEqual(self.ingest(complete).returncode, 0)
         resume = json.loads(self.run_sweep("resume-plan", self.run_id).stdout)
         self.assertEqual([batch["status"] for batch in resume["batches"]], ["complete", "missing"])
@@ -94,6 +104,20 @@ class TestSweep(unittest.TestCase):
         self.assertEqual(self.run_sweep("commit", self.run_id, "1", "0", input_data="{}").returncode, 0)
         self.assertEqual(self.run_sweep("done", self.run_id, "1").returncode, 0)
         self.assertEqual(self.run_sweep("commit", self.run_id, "1", "1", input_data="{}").returncode, 1)
+
+    def test_published_checkpoint_with_missing_companion_is_corrupt(self):
+        self.begin_and_plan()
+        complete = self.raw("complete.txt", "```stances\n{\"id\":\"i1\",\"stance\":\"support\"}\n{\"id\":\"i2\",\"stance\":\"reject\"}\n```\n```new_findings\n[]\n```\n")
+        self.assertEqual(self.ingest(complete).returncode, 0)
+        (self.run_dir / "sweeps" / "round-1" / "codex.b1.stances.json").unlink()
+
+        has = self.run_sweep("has", self.run_id, "1", "codex", "b1")
+        resume = self.run_sweep("resume-plan", self.run_id)
+
+        self.assertEqual(has.returncode, 2)
+        self.assertIn("corrupt complete checkpoint", has.stderr)
+        self.assertEqual(resume.returncode, 1)
+        self.assertIn("corrupt complete checkpoint", resume.stderr)
 
     def test_plan_rejects_invalid_and_existing_difference(self):
         self.assertEqual(self.run_sweep("begin", self.run_id, "1", "0").returncode, 0)
@@ -172,6 +196,22 @@ class TestSweep(unittest.TestCase):
         duplicate = self.run_sweep("plan-scaffold", self.run_id, "1", "codex", "codex")
         self.assertEqual(duplicate.returncode, 2)
         self.assertEqual(duplicate.stderr, "sweep plan-scaffold: duplicate seat: codex\n")
+
+    def test_extend_plan_adds_new_seat_without_replacing_checkpoints(self):
+        scaffold = self.run_sweep("plan-scaffold", self.run_id, "1", "claude", "codex")
+        scaffold_path = self.tmp / "common.json"
+        scaffold_path.write_text(scaffold.stdout, encoding="utf-8")
+        self.assertEqual(self.run_sweep("begin", self.run_id, "1", "0").returncode, 0)
+        self.assertEqual(self.run_sweep("plan", self.run_id, "1", "0", scaffold_path).returncode, 0)
+        self.assertEqual(self.run_sweep("drop-seat", self.run_id, "1", "codex").returncode, 0)
+
+        extended = self.run_sweep("extend-plan", self.run_id, "1", "0", "claude", "gemini")
+
+        self.assertEqual(extended.returncode, 0, extended.stderr)
+        plan = json.loads((self.run_dir / "sweeps" / "round-1" / "plan.json").read_text(encoding="utf-8"))
+        self.assertEqual([entry["seat"] for entry in plan["batches"]], ["claude", "codex", "gemini"])
+        self.assertEqual(plan["dropped_seats"], ["codex"])
+        self.assertTrue(all(entry["expected_ids"] == ["i1", "i2", "i3"] for entry in plan["batches"]))
 
     def test_usage_reachable_without_valid_id(self):
         # Regression for issues-2026-07-04 #1: USAGE must be reachable WITHOUT a run

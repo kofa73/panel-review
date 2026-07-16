@@ -56,6 +56,9 @@ them up. No real run is touched.
   `drop-seat` exclusion; `done`/`commit` (incl. stale-epoch rejection); plan
   validation with field-specific diagnostics; `plan-scaffold` validation and
   scaffold-to-plan round trip.
+- **protocol phases** (`test_protocol_phases.py`): every marked canonical phase
+  is independently readable with no marker leakage; the debate interface keeps
+  settled folds terminal unless evidence conflicts and debate budget remains.
 
 ## What the bash suite covers (`run_tests.sh`)
 
@@ -75,8 +78,10 @@ them up. No real run is touched.
 - **cleanup / discard**: `PANEL_REVIEW_KEEP_TMP=true` preserves `/tmp/<id>` while
   removing the marker / `.panel-review`; the default still removes `/tmp/<id>`.
 - **Protocol/template contracts**: pins the documented batch-completeness,
-  dropped-seat cleanup, low-only gate, coverage, prompt/schema requirements, and
-  the protocol's use of `birth_index` / `run_seat` / `resolve_instructions`.
+  dropped-seat cleanup, low-only gate, coverage, prompt/schema requirements,
+  Claude-seat redundant-read and sufficient-evidence guidance without lookup
+  batching or a hard call cap, its single final validation/write step, and the
+  protocol's use of `birth_index` / `run_seat` / `resolve_instructions`.
 
 ## Fixtures
 

@@ -1,5 +1,6 @@
 """Black-box coverage for the Python index migration."""
 
+import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -84,6 +85,30 @@ class IndexTest(unittest.TestCase):
             item.update({"state": "accepted", "peer_reviewed": True})
         self.write_index(data)
         self.assertEqual(self.run_index("gate-status", self.run_id).stdout, '{"open":0,"low_only":false}\n')
+
+    def test_delivery_status_owns_classification_and_exact_index_identity(self):
+        data = self.read_index()
+        data["phase"] = "debate"
+        data["issues"][0]["state"] = "unresolved"
+        data["issues"][1]["state"] = "contested"
+        self.write_index(data)
+        expected_hash = hashlib.sha256(self.index_path.read_bytes()).hexdigest()
+
+        result = self.run_index("delivery-status", self.run_id)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            json.loads(result.stdout),
+            {
+                "index_hash": expected_hash,
+                "run_epoch": 0,
+                "phase": "debate",
+                "open": 0,
+                "low_only": False,
+                "unresolved": 1,
+                "contested": 1,
+            },
+        )
 
     def test_state_validates_and_bumps_card_revision(self):
         result = self.run_index("state", self.run_id, "i1", "contested")

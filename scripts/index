@@ -3,6 +3,7 @@
 
 import copy
 import fcntl
+import hashlib
 import json
 import os
 import sys
@@ -343,14 +344,22 @@ def write_index(path, index):
     panel_atomic_write(path, compact(index) + "\n")
 
 
+def gate_status(index):
+    open_issues = [issue for issue in index["issues"] if issue.get("state") == "open"]
+    return {
+        "open": len(open_issues),
+        "low_only": bool(open_issues) and all(issue.get("severity") == "low" for issue in open_issues),
+    }
+
+
 def mutation_failure(reason=""):
     detail = reason or "filter rejected or bad JSON"
     print(f"index: mutate failed: {detail}; index.json left intact", file=sys.stderr)
     return 1
 
 
-USAGE = "usage: index {get|put|issue|bump|state|flag|gate-status|commit-sweep|reopen} <ID> ..."
-KNOWN_CMDS = {"get", "issue", "gate-status", "put", "bump", "state", "flag", "commit-sweep", "reopen"}
+USAGE = "usage: index {get|put|issue|bump|state|flag|gate-status|delivery-status|commit-sweep|reopen} <ID> ..."
+KNOWN_CMDS = {"get", "issue", "gate-status", "delivery-status", "put", "bump", "state", "flag", "commit-sweep", "reopen"}
 
 
 def main(argv):
@@ -384,8 +393,41 @@ def main(argv):
         return 0
     if cmd == "gate-status":
         index = read_index(path)
-        open_issues = [issue for issue in index["issues"] if issue.get("state") == "open"]
-        print(compact({"open": len(open_issues), "low_only": bool(open_issues) and all(issue.get("severity") == "low" for issue in open_issues)}))
+        print(compact(gate_status(index)))
+        return 0
+    if cmd == "delivery-status":
+        try:
+            with open(path, "rb") as handle:
+                raw = handle.read()
+            index = json.loads(raw)
+            issues = index.get("issues") if type(index) is dict else None
+            epoch = index.get("run_epoch", 0) if type(index) is dict else None
+            phase = index.get("phase") if type(index) is dict else None
+            if (
+                type(issues) is not list
+                or any(type(issue) is not dict or issue.get("state") not in STATES for issue in issues)
+                or type(epoch) is not int
+                or isinstance(epoch, bool)
+                or epoch < 0
+                or phase not in {"round0", "debate"}
+            ):
+                raise ValueError
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+            print("index delivery-status: invalid index", file=sys.stderr)
+            return 1
+        gate = gate_status(index)
+        print(
+            compact(
+                {
+                    "index_hash": hashlib.sha256(raw).hexdigest(),
+                    "run_epoch": epoch,
+                    "phase": phase,
+                    **gate,
+                    "unresolved": sum(issue["state"] == "unresolved" for issue in issues),
+                    "contested": sum(issue["state"] == "contested" for issue in issues),
+                }
+            )
+        )
         return 0
 
     mutations = {"put", "bump", "state", "flag", "commit-sweep", "reopen"}

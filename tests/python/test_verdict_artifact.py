@@ -72,6 +72,9 @@ class VerdictArtifactTest(unittest.TestCase):
             check=False,
         )
 
+    def deliver_artifact(self, *extra):
+        return self.read_artifact("--delivery", *extra)
+
     def test_finished_artifact_is_validated_and_reader_emits_only_body(self):
         written = self.write_artifact()
         self.assertEqual(written.returncode, 0, written.stderr)
@@ -89,6 +92,105 @@ class VerdictArtifactTest(unittest.TestCase):
         by_id = self.read_artifact()
         self.assertEqual(by_id.returncode, 0, by_id.stderr)
         self.assertEqual(by_id.stdout, self.body)
+
+    def test_finished_artifact_delivery_emits_only_the_fixed_file_pointer(self):
+        self.assertEqual(self.write_artifact().returncode, 0)
+
+        result = self.deliver_artifact(
+            "--scope", self.scope,
+            "--diff-hash", self.diff_hash,
+            "--run-epoch", "0",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, f"Done. Final report: /tmp/{self.run_id}.md\n")
+
+    def test_continuable_artifact_delivery_adds_only_leftover_status(self):
+        self.write_index("contested")
+        self.assertEqual(self.write_artifact().returncode, 0)
+
+        result = self.deliver_artifact(
+            "--scope", self.scope,
+            "--diff-hash", self.diff_hash,
+            "--run-epoch", "0",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            result.stdout,
+            f"Done. Final report: /tmp/{self.run_id}.md\n"
+            "0 unresolved, 1 contested remain — run panel-review:continue "
+            "[unresolved|contested] to debate them further, or panel-review:discard "
+            "to remove the saved review.\n",
+        )
+
+    def test_incomplete_low_only_gate_delivery_emits_snapshot_pointer(self):
+        self.write_index("open", severity="low")
+        self.assertEqual(self.write_artifact().returncode, 0)
+
+        result = self.deliver_artifact(
+            "--scope", self.scope,
+            "--diff-hash", self.diff_hash,
+            "--run-epoch", "0",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            result.stdout,
+            f"Review paused because only low-severity findings remain. Report snapshot: "
+            f"/tmp/{self.run_id}.md\n",
+        )
+
+    def test_low_gate_delivery_rejects_snapshot_from_earlier_same_epoch_state(self):
+        self.write_index("open", severity="low")
+        self.assertEqual(self.write_artifact().returncode, 0)
+        index = json.loads((self.run_dir / "index.json").read_text(encoding="utf-8"))
+        index["round"] = 1
+        (self.run_dir / "index.json").write_text(json.dumps(index), encoding="utf-8")
+
+        result = self.deliver_artifact(
+            "--scope", self.scope,
+            "--diff-hash", self.diff_hash,
+            "--run-epoch", "0",
+        )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("retained index does not match the artifact", result.stderr)
+        self.assertEqual(result.stdout, "")
+
+    def test_delivery_rejects_missing_or_non_gate_incomplete_artifact(self):
+        missing = self.deliver_artifact(
+            "--scope", self.scope,
+            "--diff-hash", self.diff_hash,
+            "--run-epoch", "0",
+        )
+        self.assertEqual(missing.returncode, 1)
+        self.assertEqual(missing.stdout, "")
+
+        self.write_index("open", severity="medium")
+        self.assertEqual(self.write_artifact().returncode, 0)
+        invalid = self.deliver_artifact(
+            "--scope", self.scope,
+            "--diff-hash", self.diff_hash,
+            "--run-epoch", "0",
+        )
+        self.assertEqual(invalid.returncode, 1)
+        self.assertIn("not a low-severity gate", invalid.stderr)
+        self.assertEqual(invalid.stdout, "")
+
+    def test_delivery_rejects_corrupt_retained_state(self):
+        self.assertEqual(self.write_artifact().returncode, 0)
+        self.write_index("unknown")
+
+        result = self.deliver_artifact(
+            "--scope", self.scope,
+            "--diff-hash", self.diff_hash,
+            "--run-epoch", "0",
+        )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("retained index is malformed", result.stderr)
+        self.assertEqual(result.stdout, "")
 
     def test_reader_rejects_scope_or_hash_mismatch(self):
         self.assertEqual(self.write_artifact().returncode, 0)
@@ -124,6 +226,9 @@ class VerdictArtifactTest(unittest.TestCase):
         result = self.read_artifact()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, self.body)
+        delivery = self.deliver_artifact()
+        self.assertEqual(delivery.returncode, 0, delivery.stderr)
+        self.assertEqual(delivery.stdout, f"Done. Final report: /tmp/{self.run_id}.md\n")
 
     def test_finalization_rejects_non_low_open_issues(self):
         self.write_index("open", severity="medium")

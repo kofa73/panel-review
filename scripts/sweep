@@ -19,7 +19,7 @@ from panel_common import panel_atomic_write, panel_require_id
 
 NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 NUMBER_RE = re.compile(r"^[0-9]+$")
-USAGE = "usage: sweep {begin|record|plan|plan-scaffold|ingest-batch|drop-seat|resume-plan|has|done|commit} <ID> <round> ..."
+USAGE = "usage: sweep {begin|record|plan|plan-scaffold|extend-plan|ingest-batch|drop-seat|resume-plan|has|done|commit} <ID> <round> ..."
 
 
 def fail(message, code):
@@ -71,6 +71,45 @@ def sorted_ids(values):
 
 def write_atomic(path, data):
     panel_atomic_write(path, data)
+
+
+def batch_paths(sd, run_dir, round_text, seat, batch):
+    prefix = os.path.join(sd, f"{seat}.{batch}")
+    return {
+        "out": f"{prefix}.out",
+        "stances": f"{prefix}.stances.json",
+        "expected": f"{prefix}.expected.ids",
+        "source": f"{prefix}.source.json",
+        "new_findings": os.path.join(run_dir, f"nf.{round_text}.{seat}.{batch}.json"),
+        "new_findings_status": os.path.join(run_dir, f"status.nf.{round_text}.{seat}.{batch}"),
+    }
+
+
+def read_status(path):
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return int(handle.read().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def batch_complete(paths):
+    return (
+        all(os.path.isfile(paths[name]) for name in ("out", "stances", "expected", "source", "new_findings"))
+        and read_status(paths["new_findings_status"]) == 0
+    )
+
+
+def batch_corrupt(paths):
+    return os.path.isfile(paths["out"]) and not batch_complete(paths)
+
+
+def clear_batch_checkpoint(paths):
+    for name in ("out", "stances", "expected", "source", "new_findings"):
+        try:
+            os.unlink(paths[name])
+        except FileNotFoundError:
+            pass
 
 
 def validate_plan(plan):
@@ -237,7 +276,46 @@ def cmd_plan_scaffold(idx, seats):
     return 0
 
 
-def cmd_ingest_batch(sd, epoch, seat, batch, expected_path, raw_path):
+def cmd_extend_plan(sd, idx, epoch, seats):
+    if not is_number(epoch):
+        return fail("sweep extend-plan: requires numeric epoch", 2)
+    if not seats:
+        return fail("sweep extend-plan: requires at least one seat", 2)
+    if len(seats) != len(set(seats)) or any(not valid_name(seat) for seat in seats):
+        return fail("sweep extend-plan: seats must be distinct safe names", 2)
+    epoch_path = os.path.join(sd, ".epoch")
+    plan_path = os.path.join(sd, "plan.json")
+    if not epoch_file_present(epoch_path) or not os.path.isfile(plan_path):
+        return fail("sweep extend-plan: stored plan not found", 1)
+    if read_epoch(epoch_path) != epoch or index_epoch(idx) != epoch:
+        return fail("sweep extend-plan: stale run epoch", 1)
+    try:
+        with open(plan_path, encoding="utf-8") as handle:
+            plan = json.load(handle)
+        index = read_index(idx)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return fail("sweep extend-plan: plan or index is invalid", 1)
+    valid, reason = validate_plan({"batches": plan.get("batches")})
+    if not valid or plan.get("epoch") != int(epoch) or type(plan.get("dropped_seats")) is not list:
+        return fail(f"sweep extend-plan: invalid stored plan: {reason or 'metadata'}", 1)
+    issue_ids = sorted_ids([
+        issue.get("id") for issue in index.get("issues", [])
+        if type(issue) is dict and issue.get("state") == "open" and type(issue.get("id")) is str
+    ])
+    if not issue_ids:
+        return fail("sweep extend-plan: no open issues", 1)
+    if any(entry["batch"] != "1" or sorted_ids(entry["expected_ids"]) != issue_ids for entry in plan["batches"]):
+        return fail("sweep extend-plan: only a matching common single-batch plan can be extended", 1)
+    plan["dropped_seats"] = sorted(set(plan["dropped_seats"]) - set(seats))
+    planned = {entry["seat"] for entry in plan["batches"]}
+    for seat in seats:
+        if seat not in planned:
+            plan["batches"].append({"seat": seat, "batch": "1", "expected_ids": issue_ids})
+    write_atomic(plan_path, compact(plan) + "\n")
+    return 0
+
+
+def cmd_ingest_batch(sd, run_dir, round_text, epoch, seat, batch, expected_path, raw_path):
     if not is_number(epoch):
         return fail("sweep ingest-batch: requires numeric epoch", 2)
     if not valid_name(seat):
@@ -258,38 +336,80 @@ def cmd_ingest_batch(sd, epoch, seat, batch, expected_path, raw_path):
         plan = json.load(handle)
     if seat in plan.get("dropped_seats", []):
         return fail("sweep ingest-batch: seat was dropped", 1)
+    wanted = expected_ids(expected_path)
+    if wanted is None:
+        return fail("sweep ingest-batch: expected IDs must be unique, non-empty lines", 2)
+    planned = []
+    for entry in plan.get("batches", []):
+        if entry.get("seat") == seat and entry.get("batch") == batch:
+            planned.extend(entry.get("expected_ids", []))
+    if wanted != sorted_ids(planned):
+        return fail("sweep ingest-batch: expected IDs do not match the batch plan", 2)
+
+    paths = batch_paths(sd, run_dir, round_text, seat, batch)
+    if batch_complete(paths):
+        print('{"status":"complete"}')
+        return 0
+    clear_batch_checkpoint(paths)
     if not os.path.isfile(raw_path):
+        write_atomic(paths["new_findings_status"], "4\n")
         print('{"status":"missing"}')
         return 0
-    parsed = tempfile.NamedTemporaryFile(prefix=".parsed.", dir=sd, delete=False)
+
+    parsed = tempfile.NamedTemporaryFile(prefix=".stances.", dir=sd, delete=False)
+    new_findings = tempfile.NamedTemporaryFile(prefix=".new-findings.", dir=sd, delete=False)
     try:
         with parsed:
-            result = subprocess.run(
-                [os.path.join(HERE, "parse_block"), "stances", raw_path, seat],
-                stdout=parsed,
+            stance_result = subprocess.run(
+                [os.path.join(HERE, "parse_block"), "stances", raw_path, seat], stdout=parsed
             )
-        if result.returncode == 4:
+        with new_findings:
+            new_findings_result = subprocess.run(
+                [os.path.join(HERE, "parse_block"), "new_findings", raw_path, seat],
+                stdout=new_findings,
+            )
+        write_atomic(paths["new_findings_status"], f"{new_findings_result.returncode}\n")
+
+        if stance_result.returncode == 4:
             print('{"status":"missing"}')
             return 0
         if os.path.getsize(parsed.name) == 0:
-            print('{"status":"malformed"}' if result.returncode == 5 else '{"status":"empty"}')
+            print('{"status":"malformed"}' if stance_result.returncode == 5 else '{"status":"empty"}')
             return 0
-        wanted = expected_ids(expected_path)
-        if wanted is None:
-            return fail("sweep ingest-batch: expected IDs must be unique, non-empty lines", 2)
-        planned = []
-        for entry in plan.get("batches", []):
-            if entry.get("seat") == seat and entry.get("batch") == batch:
-                planned.extend(entry.get("expected_ids", []))
-        if wanted != sorted_ids(planned):
-            return fail("sweep ingest-batch: expected IDs do not match the batch plan", 2)
         lines, received = parsed_ids(parsed.name)
         if received == wanted and len(lines) == len(wanted):
-            with open(raw_path, "rb") as handle:
-                write_atomic(os.path.join(sd, f"{seat}.{batch}.out"), handle.read())
+            if new_findings_result.returncode != 0:
+                status = (
+                    "missing_new_findings"
+                    if new_findings_result.returncode in {1, 4}
+                    else "malformed_new_findings"
+                )
+                print(compact({"status": status}))
+                return 0
+            with open(new_findings.name, "rb") as handle:
+                write_atomic(paths["new_findings"], handle.read())
             with open(parsed.name, "rb") as handle:
-                write_atomic(os.path.join(sd, f"{seat}.{batch}.stances.json"), handle.read())
-            write_atomic(os.path.join(sd, f"{seat}.{batch}.expected.ids"), "".join(f"{value}\n" for value in wanted))
+                write_atomic(paths["stances"], handle.read())
+            write_atomic(paths["expected"], "".join(f"{value}\n" for value in wanted))
+            write_atomic(
+                paths["source"],
+                compact(
+                    {
+                        "raw": os.path.abspath(raw_path),
+                        "salvaged": os.path.abspath(raw_path)
+                        == os.path.join(
+                            run_dir,
+                            "raw",
+                            f"round{round_text}.{seat}.{batch}.txt.salvaged",
+                        ),
+                    }
+                )
+                + "\n",
+            )
+            with open(raw_path, "rb") as handle:
+                # .out is the completion marker and is installed only after the whole
+                # two-block checkpoint is durable.
+                write_atomic(paths["out"], handle.read())
             print('{"status":"complete"}')
             return 0
         unique_received = sorted_ids(set(received))
@@ -304,19 +424,30 @@ def cmd_ingest_batch(sd, epoch, seat, batch, expected_path, raw_path):
             os.unlink(parsed.name)
         except OSError:
             pass
+        try:
+            os.unlink(new_findings.name)
+        except OSError:
+            pass
 
 
-def cmd_drop_seat(sd, seat):
+def cmd_drop_seat(sd, run_dir, round_text, seat):
     if not valid_name(seat):
         return fail("sweep drop-seat: bad seat name", 2)
     if not os.path.isdir(sd):
         return fail("sweep drop-seat: sweep dir not found", 1)
-    for suffix in (".out", ".stances.json", ".expected.ids"):
+    for suffix in (".out", ".stances.json", ".expected.ids", ".source.json"):
         for path in glob.glob(os.path.join(sd, f"{seat}.*{suffix}")):
             try:
                 os.unlink(path)
             except OSError:
                 pass
+    for path in glob.glob(os.path.join(run_dir, f"nf.{round_text}.{seat}.*.json")) + glob.glob(
+        os.path.join(run_dir, f"status.nf.{round_text}.{seat}.*")
+    ):
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
     plan_path = os.path.join(sd, "plan.json")
     if os.path.isfile(plan_path):
         with open(plan_path, encoding="utf-8") as handle:
@@ -346,11 +477,18 @@ def cmd_resume_plan(run_id, idx):
     with open(plan_path, encoding="utf-8") as handle:
         plan = json.load(handle)
     dropped = plan.get("dropped_seats", [])
+    run_dir = os.path.join("/tmp", run_id)
     batches = []
     for entry in plan["batches"]:
+        paths = batch_paths(sd, run_dir, str(next_round), entry["seat"], entry["batch"])
         if entry["seat"] in dropped:
             status = "dropped"
-        elif os.path.isfile(os.path.join(sd, f"{entry['seat']}.{entry['batch']}.out")):
+        elif batch_corrupt(paths):
+            return fail(
+                f"sweep resume-plan: corrupt complete checkpoint for {entry['seat']}/{entry['batch']}",
+                1,
+            )
+        elif batch_complete(paths):
             status = "complete"
         else:
             status = "missing"
@@ -384,7 +522,7 @@ def cmd_commit(sd, idx, run_id, round_text, epoch):
     return 0
 
 
-KNOWN_CMDS = {"begin", "record", "plan", "plan-scaffold", "ingest-batch", "drop-seat",
+KNOWN_CMDS = {"begin", "record", "plan", "plan-scaffold", "extend-plan", "ingest-batch", "drop-seat",
               "resume-plan", "has", "done", "commit"}
 
 
@@ -405,6 +543,7 @@ def main(argv):
     if cmd != "resume-plan" and not is_number(round_text):
         return fail("sweep: round must be a number", 2)
     sd = os.path.join("/tmp", run_id, "sweeps", f"round-{round_text}")
+    run_dir = os.path.join("/tmp", run_id)
     idx = os.path.join("/tmp", run_id, "index.json")
 
     if cmd == "begin":
@@ -415,10 +554,12 @@ def main(argv):
         return cmd_plan(sd, argv[4] if len(argv) > 4 else "", argv[5] if len(argv) > 5 else "")
     if cmd == "plan-scaffold":
         return cmd_plan_scaffold(idx, argv[4:])
+    if cmd == "extend-plan":
+        return cmd_extend_plan(sd, idx, argv[4] if len(argv) > 4 else "", argv[5:])
     if cmd == "ingest-batch":
-        return cmd_ingest_batch(sd, argv[4] if len(argv) > 4 else "", argv[5] if len(argv) > 5 else "", argv[6] if len(argv) > 6 else "", argv[7] if len(argv) > 7 else "", argv[8] if len(argv) > 8 else "")
+        return cmd_ingest_batch(sd, run_dir, round_text, argv[4] if len(argv) > 4 else "", argv[5] if len(argv) > 5 else "", argv[6] if len(argv) > 6 else "", argv[7] if len(argv) > 7 else "", argv[8] if len(argv) > 8 else "")
     if cmd == "drop-seat":
-        return cmd_drop_seat(sd, argv[4] if len(argv) > 4 else "")
+        return cmd_drop_seat(sd, run_dir, round_text, argv[4] if len(argv) > 4 else "")
     if cmd == "resume-plan":
         return cmd_resume_plan(run_id, idx)
     if cmd == "has":
@@ -426,7 +567,10 @@ def main(argv):
         batch = argv[5] if len(argv) > 5 else "all"
         if not valid_name(batch):
             return fail("sweep: bad batch name", 2)
-        return 0 if os.path.isfile(os.path.join(sd, f"{seat}.{batch}.out")) else 1
+        paths = batch_paths(sd, run_dir, round_text, seat, batch)
+        if batch_corrupt(paths):
+            return fail(f"sweep has: corrupt complete checkpoint for {seat}/{batch}", 2)
+        return 0 if batch_complete(paths) else 1
     if cmd == "done":
         if not os.path.isfile(idx):
             return 1

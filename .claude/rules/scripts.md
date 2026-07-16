@@ -18,7 +18,8 @@ byte-exact.
 - `index` — the **only** writer of `/tmp/<ID>/index.json`; all state/flag/counter math lives here.
   `commit-sweep` applies a whole debate round atomically and idempotently (guarded by
   `committed_rounds`) and writes that round's inspection-only `audit/round-<N>.md` as a best-effort
-  side effect. Never hand-write `index.json`.
+  side effect. Its read-only `delivery-status` owns low-gate/leftover classification and reports the
+  exact index hash used to reject a stale same-epoch report snapshot. Never hand-write `index.json`.
 - `decide_round` / `decide_degraded_round` — the **only** builders of normal and degraded debate
   `commit-sweep` payloads. They apply the Transitions table mechanically (stance counting, `bump`,
   `peer_reviewed`/`fully_vetted`, enum convergence, forced-terminal). Normal path carries evidence
@@ -28,12 +29,25 @@ byte-exact.
   `_source`); a plain `support` endorses the issue *as stated* (enum change adopted only on full
   effective-value agreement).
 - `sweep` — owns batch plans, including generating the common single-batch shape from open issue IDs
-  and the referee-supplied current panel; reports the exact rejected plan field, owns
-  parsing/expected-ID checkpoint admission, dropped-seat cleanup, and recovery plans. Don't
-  reconstruct batch eligibility from raw files or hand-write the common plan.
-- `merge_payload` — folds the referee's addendum (synthesized claims, `add_issues`, fold-reopen) into
-  the `decide_round` payload with the per-key semantics `commit-sweep` needs (`set_state` replace,
-  `revise` field-merge, `set_flag` dedup). The referee must **never append** a second
+  and the referee-supplied current panel; reports the exact rejected plan field, safely extends an
+  interrupted common plan by adding unplanned seats or reactivating already-planned dropped seats
+  that return to the current panel, and owns two-block parsing/expected-ID complete checkpoint
+  admission, source provenance, dropped-seat cleanup, and recovery plans. A batch is
+  complete only when its retained raw, exact-ID stances, parsed `new_findings`, zero parse status,
+  expected IDs, and source record were installed together. A published `.out` completion marker with
+  any missing companion is corrupt and fails closed. Don't reconstruct batch eligibility from raw
+  files or hand-write the common plan.
+- `round` — the referee's coarse normal-path module over the owners in this list. It resolves and
+  assembles Round 0, prepares the common one-batch debate, collects compact engagement/guard status,
+  installs a canonical CLI debate side file through `salvage-debate`, selects only complete
+  active-plan batches for the normal or degraded decision and atomic commit with an optional referee
+  addendum, and renders stable verdict input. It does not absorb judgment: clustering, prose-claim
+  resolution, new-finding folds, and verdict prose remain with the referee.
+- `merge_payload` — folds the referee's addendum (synthesized claims, `add_issues`, conditional
+  fold-reopen) into the `decide_round` payload with the per-key semantics `commit-sweep` needs
+  (`set_state` replace, `revise` field-merge, `set_flag` dedup). It does not decide whether folded
+  evidence materially conflicts with the current outcome; that judgment remains with the referee.
+  The referee must **never append** a second
   `set_state`/`revise` for one id — merge through here or `commit-sweep` rejects the round. A
   mis-shaped addendum (e.g. a `revise` entry with a flat `claim` instead of the `fields` wrapper) is a
   hard error (**exit 2** + message), not a traceback — so the SKILL's `> tmp && mv tmp payload` guard
@@ -56,6 +70,10 @@ byte-exact.
   referee never calls it). Thin wrapper over `parse_block --diagnose` — don't re-implement the
   finding/stance checks. Lets a seat catch bad items before emitting (closes `parse_block`'s
   silent-drop of individual malformed lines).
+- `write_seat_raw` — the Claude seat's sole write outside its scratch directory. It derives the
+  expected Round-0 or debate raw path from a validated run ID/round/batch, requires every requested
+  fenced block to pass `parse_block --diagnose`, and only then atomically installs the complete raw
+  response. It never accepts an arbitrary destination path.
 - `await_seats` — the barrier that owns CLI-seat waiting; runs every CLI seat concurrently (each via
   `run_seat`) in ONE job with a per-seat outer timeout, writes per-seat status + a combined `--done`
   summary. **Run it via the `panel-review-cli-barrier` Agent, never as a referee-backgrounded Bash
@@ -73,17 +91,22 @@ byte-exact.
   bytes verbatim (whole-line, literal). `extract_block` is its inverse — pulls one fenced ` ```<tag> `
   block byte-exactly (`--present` distinguishes empty from missing). Never re-implement the fence
   scan/substitution inline.
+- `read_protocol_phase` — the referee's lazy protocol interface. It emits one marked section from the
+  single canonical `references/protocol.md`, so inactive branches stay out of context without
+  duplicating protocol prose across files.
 - `reopen` — engine behind `panel-review:continue`: revives a finished run's leftover
   (`unresolved`/`contested`) issues via `index reopen` (bumps `run_epoch`, clears `committed_rounds`)
   then clears `/tmp/<ID>/sweeps/`. Counterpart to `init_run`.
 - `write_card` / `write_verdict_artifact` — atomic-write CLIs over `panel_atomic_write`: one card;
-  the durable verdict to the `/tmp/<ID>.md` sibling (best-effort — its failure must not block the
-  verdict). The verdict writer stamps the continuation epoch and whether the canonical index was
-  finished or incomplete; `start -- Finish here` uses its explicit `--final` mode before cleanup.
-- `read_verdict_artifact` — validates the durable artifact's ID, finished status, metadata, and
-  optional expected scope/diff hash/continuation epoch, then emits only its verdict body.
-  `start`/`resume`/`continue` use it after a failed final Agent response;
-  `panel-review:result <ID>` uses it after cleanup.
+  the durable verdict to the `/tmp/<ID>.md` sibling. Because that file is the only final-report
+  delivery surface, artifact failure keeps the run resumable and blocks cleanup. The verdict writer
+  stamps the continuation epoch and whether the canonical index was finished or incomplete;
+  `start -- Finish here` uses its explicit `--final` mode before cleanup.
+- `read_verdict_artifact` — validates the durable artifact's ID, metadata, and optional expected
+  scope/diff hash/continuation epoch. Its default mode requires a finished artifact and emits the
+  verdict body for `panel-review:result <ID>`; `--delivery` verifies any retained index through
+  `index delivery-status`, then emits only the fixed filename plus minimal gate/continuation status.
+  It is the sole final-return interface for `start`/`resume`/`continue`.
 - `init_run` / `resume_check` / `cleanup` / `discard` / `inspect_run` / `set_limits` — run lifecycle
   and resume/diverged/stale classification. `PANEL_REVIEW_KEEP_TMP=true` makes `cleanup`/`discard` keep
   `/tmp/<id>/` (diagnostics) while still removing the workspace marker/cards/git-exclude.

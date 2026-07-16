@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
-"""Validate a finished durable verdict artifact and emit only its body."""
+"""Validate a durable verdict artifact and emit its body or delivery pointer."""
 
 import json
 import os
 import re
 import stat
+import subprocess
 import sys
 
 from panel_common import panel_require_id
 
 
-USAGE = "usage: read_verdict_artifact --id ID [--scope SCOPE --diff-hash HASH --run-epoch N]"
+USAGE = "usage: read_verdict_artifact --id ID [--delivery] [--scope SCOPE --diff-hash HASH --run-epoch N]"
 JSON_FIELDS = {"scope", "instructions", "seats", "rounds"}
 REQUIRED_FIELDS = {
     "id",
@@ -24,6 +25,7 @@ REQUIRED_FIELDS = {
     "created",
     "finished",
     "diff_hash",
+    "index_hash",
 }
 
 
@@ -36,12 +38,17 @@ def parse_args(argv):
     scope = None
     diff_hash = None
     run_epoch = None
+    delivery = False
     index = 1
     while index < len(argv):
         arg = argv[index]
         if arg in {"-h", "--help", "help"}:
             print(USAGE)
             raise SystemExit(0)
+        if arg == "--delivery":
+            delivery = True
+            index += 1
+            continue
         if arg not in {"--id", "--scope", "--diff-hash", "--run-epoch"} or index + 1 >= len(argv):
             print(USAGE, file=sys.stderr)
             raise SystemExit(2)
@@ -66,7 +73,7 @@ def parse_args(argv):
     if run_epoch is not None and re.fullmatch(r"0|[1-9][0-9]*", run_epoch) is None:
         print("read_verdict_artifact: --run-epoch must be a non-negative integer", file=sys.stderr)
         raise SystemExit(2)
-    return run_id, scope, diff_hash, run_epoch
+    return run_id, scope, diff_hash, run_epoch, delivery
 
 
 def read_regular_file(path):
@@ -129,10 +136,10 @@ def parse_artifact(raw):
     return fields, body
 
 
-def validate(fields, run_id, expected_scope, expected_hash, expected_epoch):
+def validate(fields, run_id, expected_scope, expected_hash, expected_epoch, allow_incomplete=False):
     if fields["id"] != run_id:
         raise ArtifactError("artifact id does not match the requested run")
-    if fields["status"] != "finished":
+    if fields["status"] != "finished" and not (allow_incomplete and fields["status"] == "incomplete"):
         raise ArtifactError("artifact is not a finished review")
     if re.fullmatch(r"0|[1-9][0-9]*", fields["run_epoch"]) is None:
         raise ArtifactError("artifact run_epoch is invalid")
@@ -146,6 +153,8 @@ def validate(fields, run_id, expected_scope, expected_hash, expected_epoch):
         raise ArtifactError("artifact scope is empty")
     if not re.fullmatch(r"[0-9a-f]{64}", fields["diff_hash"]):
         raise ArtifactError("artifact diff_hash is invalid")
+    if not re.fullmatch(r"[0-9a-f]{64}", fields["index_hash"]):
+        raise ArtifactError("artifact index_hash is invalid")
     if expected_scope is not None and fields["scope"] != expected_scope:
         raise ArtifactError("artifact scope does not match the requested run")
     if expected_hash is not None and fields["diff_hash"] != expected_hash:
@@ -154,15 +163,95 @@ def validate(fields, run_id, expected_scope, expected_hash, expected_epoch):
         raise ArtifactError("artifact run_epoch does not match the requested run")
 
 
+def read_retained_delivery_status(run_id):
+    path = f"/tmp/{run_id}/index.json"
+    if not os.path.exists(path):
+        return None
+    try:
+        result = subprocess.run(
+            [os.path.join(os.path.dirname(__file__), "index"), "delivery-status", run_id],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError as error:
+        raise ArtifactError("retained index delivery status is unavailable") from error
+    if result.returncode != 0:
+        raise ArtifactError("retained index is malformed")
+    try:
+        status = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise ArtifactError("retained index delivery status is malformed") from error
+    required = {"index_hash", "run_epoch", "phase", "open", "low_only", "unresolved", "contested"}
+    if (
+        not isinstance(status, dict)
+        or set(status) != required
+        or not re.fullmatch(r"[0-9a-f]{64}", status.get("index_hash", ""))
+        or not isinstance(status.get("run_epoch"), int)
+        or isinstance(status.get("run_epoch"), bool)
+        or status["run_epoch"] < 0
+        or status.get("phase") not in {"round0", "debate"}
+        or any(
+            not isinstance(status.get(key), int)
+            or isinstance(status.get(key), bool)
+            or status[key] < 0
+            for key in ("open", "unresolved", "contested")
+        )
+        or not isinstance(status.get("low_only"), bool)
+    ):
+        raise ArtifactError("retained index delivery status is malformed")
+    return status
+
+
+def delivery_text(fields, run_id):
+    status = read_retained_delivery_status(run_id)
+    if fields["status"] == "incomplete":
+        if status is None or status["phase"] != "debate":
+            raise ArtifactError("incomplete artifact is not a low-severity gate")
+        if str(status["run_epoch"]) != fields["run_epoch"]:
+            raise ArtifactError("retained index run_epoch does not match the artifact")
+        if status["index_hash"] != fields["index_hash"]:
+            raise ArtifactError("retained index does not match the artifact")
+        if status["open"] == 0 or not status["low_only"]:
+            raise ArtifactError("incomplete artifact is not a low-severity gate")
+        return (
+            "Review paused because only low-severity findings remain. Report snapshot: "
+            f"/tmp/{run_id}.md\n"
+        )
+    lines = [f"Done. Final report: /tmp/{run_id}.md"]
+    if status is None:
+        return "\n".join(lines) + "\n"
+    if str(status["run_epoch"]) != fields["run_epoch"]:
+        raise ArtifactError("retained index run_epoch does not match the artifact")
+    if status["index_hash"] != fields["index_hash"]:
+        raise ArtifactError("retained index does not match the artifact")
+    unresolved = status["unresolved"]
+    contested = status["contested"]
+    if unresolved or contested:
+        lines.append(
+            f"{unresolved} unresolved, {contested} contested remain — run panel-review:continue "
+            "[unresolved|contested] to debate them further, or panel-review:discard "
+            "to remove the saved review."
+        )
+    return "\n".join(lines) + "\n"
+
+
 def main(argv):
-    run_id, expected_scope, expected_hash, expected_epoch = parse_args(argv)
+    run_id, expected_scope, expected_hash, expected_epoch, delivery = parse_args(argv)
     try:
         fields, body = parse_artifact(read_regular_file(f"/tmp/{run_id}.md"))
-        validate(fields, run_id, expected_scope, expected_hash, expected_epoch)
+        validate(fields, run_id, expected_scope, expected_hash, expected_epoch, allow_incomplete=delivery)
     except ArtifactError as error:
         print(f"read_verdict_artifact: {error}", file=sys.stderr)
         return 1
-    sys.stdout.write(body)
+    if delivery:
+        try:
+            sys.stdout.write(delivery_text(fields, run_id))
+        except ArtifactError as error:
+            print(f"read_verdict_artifact: {error}", file=sys.stderr)
+            return 1
+    else:
+        sys.stdout.write(body)
     return 0
 
 
