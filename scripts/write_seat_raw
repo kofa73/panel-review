@@ -8,6 +8,7 @@ import sys
 import tempfile
 
 from panel_common import panel_atomic_write, panel_require_id
+from seat_contract import PHASES, response_problem
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -78,11 +79,13 @@ def main(argv):
     raw_dir = os.path.join(run_dir, "raw")
     os.makedirs(raw_dir, exist_ok=True)
     if round_number == "0":
+        phase = "round0"
         destination = os.path.join(raw_dir, "round0.claude.txt")
-        tags = ("findings",)
+        tags = PHASES[phase]["required_blocks"]
     else:
+        phase = "debate"
         destination = os.path.join(raw_dir, f"round{round_number}.claude.{batch}.txt")
-        tags = ("stances", "new_findings")
+        tags = PHASES[phase]["required_blocks"]
 
     raw = sys.stdin.buffer.read()
     fd, temporary = tempfile.mkstemp(prefix=".seat-raw.", dir=raw_dir)
@@ -91,6 +94,10 @@ def main(argv):
             handle.write(raw)
             handle.flush()
             os.fsync(handle.fileno())
+        problem = response_problem(raw.decode("utf-8", "replace"), phase)
+        if problem is not None:
+            _code, message = problem
+            return fail(message)
         for tag in tags:
             if not validate(temporary, tag):
                 return fail(f"invalid {tag} block")

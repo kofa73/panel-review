@@ -54,6 +54,7 @@ case "$seat" in
   *) echo "run_seat: --seat must be codex|gemini (the Claude seat is a subagent, not a CLI)" >&2; exit 2 ;;
 esac
 case "$tag" in findings|new_findings|stances) ;; *) echo "run_seat: --tag must be findings|new_findings|stances" >&2; exit 2 ;; esac
+case "$tag" in findings) phase=round0 ;; *) phase=debate ;; esac
 [ -n "$prompt" ] && [ -f "$prompt" ] || { echo "run_seat: --prompt must name an existing file" >&2; exit 1; }
 [ -n "$raw" ]    || { echo "run_seat: --raw required" >&2; exit 2; }
 [ -n "$parsed" ] || { echo "run_seat: --parsed required" >&2; exit 2; }
@@ -69,7 +70,7 @@ set -e
 # Parse the block; its exit status (0 engaged · 4 no block · 5 malformed) is the
 # engagement signal the caller reads from stdout.
 set +e
-"$here/parse_block" "$tag" "$raw" "$label" > "$parsed"
+"$here/parse_block" --response "$phase" "$tag" "$raw" "$label" > "$parsed"
 status=$?
 set -e
 

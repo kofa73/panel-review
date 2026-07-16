@@ -20,7 +20,8 @@ not merely wording or diagnostics.
 
 - `prompts/debate.tmpl` says plain `support` accepts the issue as stated, while
   `support_with_revision` supplies corrected fields.
-- `prompts/schema/stances.txt` demonstrates a `support` stance that contains a populated `revision`.
+- The then-current `prompts/schema/stances.txt` demonstrated a `support` stance with a populated
+  `revision`; issue 05 later replaced that fragment with `scripts/seat_contract.py`.
 - `scripts/parse_block` validates the stance name and normalizes a present revision, but does not
   enforce stance-dependent fields or require a rationale where the prompt assigns one semantic
   meaning.
@@ -91,8 +92,9 @@ Completed 2026-07-16:
 - `decide_round` treats revisions as orthogonal support proposals, filters exact no-ops from enum
   mutation, claim advice, rationale promotion, and blindness checks, and fails explicitly on removed
   stance names or invalid reject checkpoints retained from an older run.
-- The rendered debate prompt, schema fragment, README, glossary, canonical protocol, script rules,
-  repository instructions, examples, fixtures, and test documentation now use the same contract.
+- The rendered debate prompt, then-current schema fragment, README, glossary, canonical protocol,
+  script rules, repository instructions, examples, fixtures, and test documentation used the same
+  contract. Issue 05 later made `scripts/seat_contract.py` its executable owner.
 - Focused parser/check-draft/decision/round tests passed.
 - Full `./tests/run_tests.sh` passed: `PASS: 216   FAIL: 0`.
 - Python compilation and `git diff --check` passed.

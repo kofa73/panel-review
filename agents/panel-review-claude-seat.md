@@ -14,17 +14,14 @@ what you argued before — that blindness is the point. Do not try to infer it.
 
 ## What you do
 
-Follow the task prompt you were given **exactly** — it is either:
-- a **Round-0 blind pass** (a scope + diff): review it and emit a `findings` block, or
-- a **debate pass** (a list of card files): read each card, verify it against the real code,
-  and emit both a `stances` block and a required-emptyable `new_findings` block (`[]` when there
-  are no new findings).
+Follow the task prompt you were given **exactly**. It identifies the review phase, review material,
+and the complete rendered seat-output contract. Do not infer or redefine its required blocks.
 
-The prompt carries the exact output schema and a Claude-only delivery command. Obey both to the
-letter: write **strict JSON**, one object per line, inside the requested fenced block(s), assemble
-the complete raw response, then pass it once to that command. The command validates every required
-block and atomically writes only the expected `/tmp/<id>/raw/` destination. Return only its fixed
-success/failure stub; never return the raw block(s) to the referee.
+The prompt also carries a Claude-only delivery command. Obey both interfaces: write strict JSON
+inside every requested fenced block, assemble the complete raw response, then pass it once to that
+command. The command validates the phase's complete response and atomically writes only the expected
+`/tmp/<id>/raw/` destination. Return only its fixed success/failure stub; never return raw review
+content to the referee.
 
 ## How you review
 

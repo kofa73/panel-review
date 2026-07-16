@@ -43,14 +43,15 @@ shared debate/delivery contract rather than being copied into the agent file.
 
 Completed 2026-07-16.
 
-- The Claude seat role summary now requires both debate blocks and explicitly uses `[]` when
-  `new_findings` is empty.
-- The shell contract regression rejects the former optional wording and requires the two-block role
-  summary.
+- The Claude seat role summary initially required both debate blocks and explicitly used `[]` when
+  `new_findings` was empty. Issue 05 later thinned the agent to defer phase requirements to the
+  rendered seat contract, which now owns that same rule.
+- The shell contract regression rejects the former optional wording at the rendered-contract seam
+  and ensures the agent does not redefine phase-specific blocks.
 - The round regression checks that an assembled Claude debate prompt contains both output sections
   and the single-write delivery contract.
 - Existing writer regressions verify that `[]` succeeds and an omitted `new_findings` block fails
   closed.
 
-Duplicate-fence validation was intentionally left out of scope. This item corrects the contradictory
-Claude instruction; it does not broaden the raw-block parser contract.
+Duplicate-fence validation was intentionally left out of this item's scope. Issue 05 subsequently
+added complete-response block-cardinality validation through the shared seat contract.

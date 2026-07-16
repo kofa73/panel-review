@@ -61,21 +61,34 @@ class TestParseBlock(unittest.TestCase):
             res = self.run_script(["findings", p, "codex"])
             self.assertEqual(res.returncode, 5)
 
-    def test_schema_fragments_validate(self):
-        # Concern E (parser-behavior drift check): the single-sourced schema fragments
-        # spliced into every prompt must PARSE, or the example we show seats is one the
-        # pipeline would reject. Assert parser behavior, not literal field-set equality.
-        prompts = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'prompts', 'schema'))
-        for tag in ("findings", "stances"):
-            with open(os.path.join(prompts, f"{tag}.txt"), encoding="utf-8") as f:
-                line = f.read().strip()
-            with tempfile.TemporaryDirectory() as d:
-                p = os.path.join(d, "frag.txt")
-                with open(p, "w") as fh:
-                    fh.write(f"```{tag}\n{line}\n```\n")
-                res = self.run_script([tag, p, "x"])
-                self.assertEqual(res.returncode, 0, f"{tag} fragment must validate; got {res.stderr}")
-                self.assertTrue(res.stdout.strip(), f"{tag} fragment produced no parsed object")
+    def test_response_mode_rejects_duplicate_required_blocks(self):
+        finding = json.dumps({
+            "claim": "x",
+            "location": "f.c:1",
+            "category": "correctness",
+            "severity": "high",
+            "points": [{"assertion": "x", "location": "f.c:1"}],
+        })
+        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".txt") as tmp:
+            tmp.write(f"```findings\n{finding}\n```\n```findings\n{finding}\n```\n")
+            tmp_path = tmp.name
+        try:
+            res = self.run_script(["--response", "round0", "findings", tmp_path])
+            self.assertEqual(res.returncode, 5)
+            self.assertIn("expected exactly one `findings` block, got 2", res.stderr)
+        finally:
+            os.remove(tmp_path)
+
+    def test_response_mode_requires_both_debate_blocks(self):
+        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".txt") as tmp:
+            tmp.write('```stances\n{"id":"i1","stance":"support"}\n```\n')
+            tmp_path = tmp.name
+        try:
+            res = self.run_script(["--response", "debate", "stances", tmp_path])
+            self.assertEqual(res.returncode, 4)
+            self.assertIn("expected exactly one `new_findings` block, got 0", res.stderr)
+        finally:
+            os.remove(tmp_path)
 
     def test_flat_shape_findings(self):
         # round0.claude.flat.txt -> exit 5

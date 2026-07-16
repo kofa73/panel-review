@@ -1,0 +1,163 @@
+#!/usr/bin/env python3
+"""Check executable-instruction ownership and rendered seat contracts."""
+
+import argparse
+import json
+from pathlib import Path
+import re
+import sys
+
+from seat_contract import PHASES, get_rules, render_contract, response_problem
+
+
+def normalized(text):
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def fail(errors, invariant, location, detail):
+    errors.append(f"{invariant}: {location}: {detail}")
+
+
+def read(root, relative):
+    path = root / relative
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError as error:
+        raise RuntimeError(f"cannot read {relative}: {error}") from error
+
+
+def check_rendered_contracts(errors):
+    recognized = {tag for phase in PHASES.values() for tag in phase["required_blocks"]}
+    for phase, definition in PHASES.items():
+        for panel_size in (2, 3):
+            label = f"rendered:{phase}:panel-{panel_size}"
+            rendered = render_contract(
+                phase,
+                panel_size,
+                f"/plugin/scripts/check_draft {'findings' if phase == 'round0' else 'stances'}",
+            )
+            if f"configured panel has {panel_size} reviewer seats, including you" not in rendered:
+                fail(errors, "configured-panel-wording", label, "panel size is absent or incorrect")
+            problem = response_problem(rendered, phase)
+            if problem is not None:
+                fail(errors, "seat-block-cardinality", label, problem[1])
+            for tag in definition["required_blocks"]:
+                match = re.search(
+                    rf"(?ms)^```{re.escape(tag)}[ \t\r]*$\n(.*?)^```[ \t\r]*$",
+                    rendered,
+                )
+                if match is None:
+                    fail(errors, "seat-block-cardinality", label, f"missing rendered `{tag}` example")
+                    continue
+                raw_items = match.group(1).strip()
+                if not raw_items:
+                    continue
+                for line in raw_items.splitlines():
+                    try:
+                        item = json.loads(line)
+                    except json.JSONDecodeError:
+                        fail(errors, "seat-field-contract", label, f"`{tag}` example is not JSON")
+                        continue
+                    valid_func, _diagnose_func = get_rules(tag)
+                    valid, _normalized_item = valid_func(item)
+                    if not valid:
+                        fail(errors, "seat-field-contract", label, f"`{tag}` example fails runtime validation")
+            for tag in recognized - set(definition["required_blocks"]):
+                if re.search(rf"(?m)^```{re.escape(tag)}[ \t\r]*$", rendered):
+                    fail(errors, "seat-block-cardinality", label, f"unexpected `{tag}` example")
+
+
+def check_tree(errors, root):
+    templates = {
+        "round0": read(root, "prompts/blind_pass.tmpl"),
+        "debate": read(root, "prompts/debate.tmpl"),
+    }
+    for phase, template in templates.items():
+        if template.count("{{SEAT_CONTRACT}}") != 1:
+            fail(errors, "seat-contract-owner", f"prompts/{phase}", "must contain one SEAT_CONTRACT sentinel")
+        if re.search(r"(?m)^```(findings|stances|new_findings)[ \t\r]*$", template):
+            fail(errors, "seat-contract-owner", f"prompts/{phase}", "template restates a seat block")
+
+    owner_map = read(root, "CONTRACTS.md")
+    for owner in (
+        "scripts/seat_contract.py",
+        "skills/panel-review-for-agent/references/protocol.md",
+        "agents/panel-review-cli-barrier.md",
+        "scripts/write_verdict_artifact",
+        "skills/panel-review-for-agent/SKILL.md",
+    ):
+        if owner not in owner_map:
+            fail(errors, "contract-ownership-map", "CONTRACTS.md", f"missing owner {owner}")
+
+    protocol = read(root, "skills/panel-review-for-agent/references/protocol.md")
+    barrier = read(root, "agents/panel-review-cli-barrier.md")
+    referee = read(root, "agents/panel-review-referee.md")
+    claude_seat = read(root, "agents/panel-review-claude-seat.md")
+    claude_delivery = read(root, "prompts/claude_delivery.tmpl")
+    bootstrap = read(root, "skills/panel-review-for-agent/SKILL.md")
+    status = read(root, "skills/status/SKILL.md")
+    executable_text = "\n".join([*templates.values(), protocol, referee, bootstrap])
+
+    if re.search(r"(?i)`(findings|stances|new_findings)` block|required-emptyable", claude_seat):
+        fail(errors, "seat-contract-owner", "agents/panel-review-claude-seat.md", "restates phase block rules")
+    if "`stances`" in claude_delivery or "`new_findings`" in claude_delivery:
+        fail(errors, "seat-contract-owner", "prompts/claude_delivery.tmpl", "restates phase block names")
+
+    for relative, text in (
+        ("protocol.md", protocol),
+        ("panel-review-cli-barrier.md", barrier),
+    ):
+        for sentence in re.split(r"[.\n]", normalized(text)):
+            lowered = sentence.lower()
+            if "watch" in lowered and "--done" in lowered and "sentinel" not in lowered:
+                fail(errors, "barrier-completion-signal", relative, "treats --done as the wait signal")
+
+    if re.search(r"(?i)(scratch )?path is \**relative\**|relative (scratch|seat) path", normalized(protocol)):
+        fail(errors, "absolute-seat-paths", "protocol.md", "describes a seat path as relative")
+
+    broad_failure = re.compile(
+        r"(?is)(PANEL_VERDICT_WRITE_FAILED.{0,100}(any|general|review) failure|"
+        r"(any|general|review) failure.{0,100}PANEL_VERDICT_WRITE_FAILED)"
+    )
+    if broad_failure.search(referee + "\n" + bootstrap + "\n" + protocol):
+        fail(errors, "referee-return-status", "referee contracts", "write failure stub is used for a review failure")
+    for status_name in ("PANEL_VERDICT_READY", "PANEL_VERDICT_WRITE_FAILED", "PANEL_REVIEW_FAILED"):
+        if status_name not in bootstrap:
+            fail(errors, "referee-return-status", "bootstrap skill", f"missing {status_name}")
+        if status_name in referee or status_name in protocol:
+            fail(errors, "referee-return-status", "non-owner referee instructions", f"restate {status_name}")
+
+    if re.search(r"(?i)two other AIs", executable_text):
+        fail(errors, "configured-panel-wording", "seat-facing instructions", "hard-codes a three-seat panel")
+
+    if re.search(r"(?i)peer seat \(Codex or Gemini\) down", normalized(protocol)):
+        fail(errors, "all-seat-health-reporting", "protocol.md", "excludes Claude from down-seat notes")
+
+    if re.search(r"(?i)(verdict.{0,80})?shown in the transcript", normalized(status)):
+        fail(errors, "artifact-only-status-wording", "skills/status/SKILL.md", "claims the verdict body entered the transcript")
+
+    if "support_with_revision" in executable_text:
+        fail(errors, "canonical-stance-values", "executable instructions", "contains retired stance support_with_revision")
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parent.parent)
+    args = parser.parse_args(argv)
+    errors = []
+    try:
+        check_rendered_contracts(errors)
+        check_tree(errors, args.root.resolve())
+    except RuntimeError as error:
+        print(f"contract-check-setup: {error}", file=sys.stderr)
+        return 2
+    if errors:
+        for error in errors:
+            print(error, file=sys.stderr)
+        return 1
+    print("instruction contracts: OK")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

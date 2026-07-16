@@ -1,7 +1,4 @@
-You are performing an independent code review. Two other AIs are reviewing the
-same work in parallel. You will not see their findings until after this pass.
-Be neutral, objective, brief, simple but accurate: keep info, relevant details.
-accuracy wins over simplicity. no praise, no sycophancy. voice concerns, point out mistakes.
+{{SEAT_CONTRACT}}
 
 ## Review root (absolute)
 This review is anchored at this absolute repository root:
@@ -85,31 +82,6 @@ Prefer one strong finding over several weak ones; do not dilute serious issues w
 Before emitting, re-read each finding and drop it unless it is: adversarial (a defect, not a
 style note or a restatement of correct behavior), tied to a concrete code location, plausible
 under a real failure scenario, and actionable by an engineer fixing it.
-
-## Output format (STRICT JSON — malformed lines are discarded)
-
-Emit ONE fenced block tagged `findings`, JSONL, one candidate issue per line. Each line is one
-candidate issue in exactly this shape (`severity` is one of critical|high|medium|low|style;
-`category` is one of security|correctness|performance|maintainability|style):
-
-```findings
-{{SCHEMA_FINDINGS}}
-```
-
-`points` is the evidence FOR the issue (one located fact each). If you find no issues, emit
-an empty `findings` block. After the block, write 2-3 sentences on overall quality and your
-confidence.
-
-## Validate before you emit
-A malformed finding is **silently dropped** downstream — you are NOT re-prompted to fix it, so
-a bad item is a lost finding. Before emitting, write the JSONL you plan to put inside the fence
-to a scratch file and validate it by running the command below with that file path appended:
-
-{{CHECK}}
-
-Exit status 0 means every item is valid and you are safe to emit. A nonzero exit prints which
-items are malformed and why — fix those and re-run until it passes. (An empty draft is fine: it
-just means you found nothing.)
 
 ## Files / Diff
 The scope and the exact bytes under review are described below: a `base..HEAD` range (when the

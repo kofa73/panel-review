@@ -76,7 +76,7 @@ class WriteSeatRawTest(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 1)
-        self.assertIn("invalid new_findings block", result.stderr)
+        self.assertIn("expected exactly one `new_findings` block, got 0", result.stderr)
         self.assertFalse((self.run_dir / "raw" / "round1.claude.1.txt").exists())
 
     def test_round_and_batch_shape_is_strict(self):

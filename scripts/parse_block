@@ -6,134 +6,32 @@ import subprocess
 import re
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from panel_common import CATEGORIES, SEVERITIES, valid_location, valid_point
+from seat_contract import get_rules, response_problem
 
 def compact_json(obj):
     return json.dumps(obj, separators=(',', ':'), ensure_ascii=False)
 
-def ok_object(obj): return isinstance(obj, dict)
-def ok_claim(obj): return isinstance(obj.get("claim"), str)
-def ok_location(obj): return "location" in obj and valid_location(obj["location"])
-def ok_category(obj): return isinstance(obj.get("category"), str) and obj.get("category") in CATEGORIES
-def ok_severity(obj): return isinstance(obj.get("severity"), str) and obj.get("severity") in SEVERITIES
-
-def normalize_points(obj):
-    points = obj.get("points", [])
-    if isinstance(points, list):
-        return [p for p in points if valid_point(p)]
-    elif valid_point(points):
-        return [points]
-    return []
-
-def ok_points(obj):
-    return len(normalize_points(obj)) > 0
-
-def ok_id(obj): return isinstance(obj.get("id"), str)
-def ok_stance(obj):
-    return isinstance(obj.get("stance"), str) and bool(re.match(r"^(support|reject)$", obj.get("stance", "")))
-def ok_reject_rationale(obj):
-    return obj.get("stance") != "reject" or (
-        isinstance(obj.get("rationale"), str) and bool(obj["rationale"].strip())
-    )
-
-def diag_findings(obj):
-    if not ok_object(obj): return "not a JSON object"
-    if not ok_claim(obj): return "missing or non-string field `claim`"
-    if not ok_location(obj): return "missing/invalid `location` (a non-empty \"file:line\" string, or an array of such)"
-    if not ok_category(obj): return "missing/invalid `category` (one of: security, correctness, performance, maintainability, style)"
-    if not ok_severity(obj): return "missing/invalid `severity` (one of: critical, high, medium, low, style)"
-    if not ok_points(obj): return "no valid `points[]`: every finding needs a non-empty points array; each point needs a string `assertion` and a valid `location` (do not put precondition/impact at the top level)"
-    return "valid"
-
-def valid_findings(obj):
-    if ok_object(obj) and ok_claim(obj) and ok_location(obj) and ok_category(obj) and ok_severity(obj):
-        points = normalize_points(obj)
-        if len(points) > 0:
-            obj["points"] = points
-            return True, obj
-    return False, None
-
-def diag_stances(obj):
-    if not ok_object(obj): return "not a JSON object"
-    if not ok_id(obj): return "missing or non-string field `id`"
-    if not ok_stance(obj): return "missing/invalid `stance` (one of: support, reject)"
-    if not ok_reject_rationale(obj): return "reject requires non-empty `rationale` counter-evidence"
-    return "valid"
-
-def valid_stances(obj):
-    if not (ok_object(obj) and ok_id(obj) and ok_stance(obj) and ok_reject_rationale(obj)):
-        return False, None
-
-    if obj["stance"] == "reject":
-        obj.pop("revision", None)
-    elif "revision" in obj:
-        if isinstance(obj["revision"], dict):
-            rev = obj["revision"]
-            new_rev = {}
-            for k in list(rev.keys()):
-                if k not in {"category", "severity", "claim", "location"}:
-                    continue
-                val = rev[k]
-                if k == "category" and not (isinstance(val, str) and val in CATEGORIES):
-                    continue
-                if k == "severity" and not (isinstance(val, str) and val in SEVERITIES):
-                    continue
-                if k == "claim" and not isinstance(val, str):
-                    continue
-                if k == "location" and not valid_location(val):
-                    continue
-                new_rev[k] = val
-            if len(new_rev) == 0:
-                del obj["revision"]
-            else:
-                obj["revision"] = new_rev
-        else:
-            del obj["revision"]
-
-    if "new_evidence" in obj:
-        if isinstance(obj["new_evidence"], dict) and valid_point(obj["new_evidence"]):
-            pass
-        else:
-            del obj["new_evidence"]
-
-    if "evidence" in obj:
-        if isinstance(obj["evidence"], dict) and valid_point(obj["evidence"]):
-            pass
-        else:
-            del obj["evidence"]
-
-    return True, obj
-
-def diag_default(obj):
-    if ok_object(obj): return "valid"
-    return "not a JSON object"
-
-def valid_default(obj):
-    if ok_object(obj):
-        return True, obj
-    return False, None
-
-def get_rules(tag):
-    if tag in ("findings", "new_findings"):
-        return valid_findings, diag_findings
-    elif tag == "stances":
-        return valid_stances, diag_stances
-    else:
-        return valid_default, diag_default
-
 def main():
     if len(sys.argv) < 2:
-        print("usage: parse_block [--diagnose] <tag> <rawfile> [label]", file=sys.stderr)
+        print("usage: parse_block [--diagnose] [--response <round0|debate>] <tag> <rawfile> [label]", file=sys.stderr)
         sys.exit(2)
 
     args = sys.argv[1:]
     diagnose = False
-    if args and args[0] == "--diagnose":
-        diagnose = True
-        args = args[1:]
+    response_phase = None
+    while args and args[0].startswith("--"):
+        if args[0] == "--diagnose":
+            diagnose = True
+            args = args[1:]
+        elif args[0] == "--response" and len(args) >= 2:
+            response_phase = args[1]
+            args = args[2:]
+        else:
+            print("usage: parse_block [--diagnose] [--response <round0|debate>] <tag> <rawfile> [label]", file=sys.stderr)
+            sys.exit(2)
 
     if len(args) < 2:
-        print("usage: parse_block [--diagnose] <tag> <rawfile> [label]", file=sys.stderr)
+        print("usage: parse_block [--diagnose] [--response <round0|debate>] <tag> <rawfile> [label]", file=sys.stderr)
         sys.exit(2)
 
     tag = args[0]
@@ -148,6 +46,18 @@ def main():
     if not os.path.isfile(file_path):
         print(f"parse_block: no such file: {file_path}", file=sys.stderr)
         sys.exit(1)
+
+    if response_phase is not None:
+        try:
+            with open(file_path, encoding="utf-8", errors="replace") as handle:
+                problem = response_problem(handle.read(), response_phase)
+        except ValueError as error:
+            print(f"parse_block: {error}", file=sys.stderr)
+            sys.exit(2)
+        if problem is not None:
+            code, message = problem
+            print(f"parse_block: {message}", file=sys.stderr)
+            sys.exit(code)
 
     here = os.path.dirname(os.path.abspath(__file__))
     extract_bin = os.path.join(here, "extract_block")

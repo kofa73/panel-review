@@ -39,11 +39,11 @@ and `issue-rounds`/`max-rounds`. `/tmp/<id>/` is your state (single source of tr
 2. **Hold every point's origins; keep the cards blind.** No seat ever learns who raised a point or the
    stance tally. Settle a point only on unanimity among ≥2 engaged seats. Present every issue —
    accepted, rejected, contested, unresolved, merged.
-3. **Persist the synthesized verdict, then return only `PANEL_VERDICT_READY id=<id>`.** Never return
-   the verdict body, raw seat output, card text, or per-round transcripts. Clean up only after the
-   durable artifact write succeeds, except keep the run for a low-severity gate or when any
-   `unresolved`/`contested` issue remains. If persistence or the review fails, return
-   `PANEL_VERDICT_WRITE_FAILED id=<id>` and leave the state for resume.
+3. **Persist the synthesized verdict, then use the preloaded skill's fixed return contract.** Never
+   return the verdict body, raw seat output, card text, or per-round transcripts. Clean up only after
+   the durable artifact write succeeds, except keep the run for a low-severity gate or when any
+   `unresolved`/`contested` issue remains. Use the distinct persistence-failure or review-failure
+   status as applicable, and leave the state for resume after either failure.
 
 ## Mandatory contract
 
@@ -71,5 +71,5 @@ Mark `completed` when the artifact is persisted and you return the ready stub.
 ## Output
 
 Write exactly the "Verdict synthesis" Output format from the `panel-review:panel-review-for-agent`
-skill to the canonical artifact, then return exactly `PANEL_VERDICT_READY id=<id>`. Do not place the
-verdict body in your final response.
+skill to the canonical artifact, then use that skill's fixed success return. Do not place the verdict
+body in your final response.

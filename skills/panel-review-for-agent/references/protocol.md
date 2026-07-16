@@ -39,9 +39,10 @@ reference; grepping a script for its flags wastes a full source-read into your c
 "$SC/run_agy"   < prompt > raw 2> err        # Gemini seat (pins model/timeout/stdin)
 "$SC/run_seat" --seat <codex|gemini> --tag <tag> --prompt <f> --raw <f> --parsed <f> [--label L]  # dispatch a CLI seat + parse; parse status on stdout (no repair — you salvage a 4/5, see "Salvage")
 "$SC/await_seats" --id <id> --tag <tag> --prompt <f> [--seat-timeout S] --seat <s> --raw <f> --parsed <f> --status <f> [--label L] [ --seat ... ] --done <f>  # BARRIER: run ALL CLI seats concurrently (each via run_seat) in ONE job, write each seat's status + a combined --done summary, exit. You never background this yourself — the panel-review-cli-barrier Agent runs it (see the long-running-seats rule); never poll.
-"$SC/parse_block" <tag> <raw> [label]        # ```<tag> block -> validated JSONL; exit 4 = NO block (down), 5 = malformed (you salvage — "Salvage")
+"$SC/parse_block" [--response <round0|debate>] <tag> <raw> [label]  # block -> validated JSONL; --response also enforces the phase's complete block set
 "$SC/parse_block" --diagnose <tag> <raw>     # WHY each item was rejected (reason + offending line); use it to guide a salvage rewrite on exit 5
 "$SC/check_draft" <tag> [file]               # SEAT-FACING pre-emit validator (thin wrapper over parse_block --diagnose); spliced into the seat prompt as {{CHECK}}, not called by the referee
+"$SC/seat_contract.py" render <round0|debate> --panel-size <2|3> --check-command <command>  # authoritative seat-facing output contract (exceptional manual prompt assembly only; round uses the same module)
 "$SC/write_seat_raw" --id <id> --round <0|N> [--batch <name>] < raw  # CLAUDE-SEAT ONLY: validate every required block and atomically install the derived raw path
 "$SC/round" prepare-round0 <id> <configured seats...>               # resolve/snapshot/assemble both prompts + write the CLI barrier command; compact JSON result
 "$SC/round" collect-round0 <id> [--final]                            # parse Claude raw + compact engagement/count summary; --final verifies/restores the guard
@@ -70,34 +71,15 @@ means the seat returned no block at all (down / malfunctioned), distinct from an
 block (ran, found nothing). **Run everything from cwd = `workdir` (repo root)** so seat
 working-tree reads, scratch paths, and `repo_guard` all resolve against the same tree.
 
-**CLI seats are long-running — wait for them through background Agents, never poll, never background
-the barrier yourself.** `run_codex` / `run_agy` routinely take several minutes, and `run_agy` can run
-up to ~34 min (its wall timeout). The Bash **tool's** foreground timeout defaults to **2 min** and
-maxes at **10 min** — shorter than a seat's worst case — so a foreground dispatch *will* be killed
-mid-pass, leaving a 0-byte raw that reads as a **down seat** (false degrade). And **a wait is a shell
-concern, not a reasoning concern**: every turn you take re-reads your whole context, so polling or
-narrating a slow seat is pure waste.
+**CLI seats are long-running.** Run their prepared command only through a background
+`panel-review-cli-barrier` Agent; never run or background `await_seats` yourself. Pass the Agent the
+`command`, `done`, and `sentinel` paths produced by `round prepare-*`. The barrier's own agent
+definition owns how it launches and waits; on return, consume only its `await_seats_rc` result and
+the status files through `round collect-*`.
 
-`await_seats` collapses the CLI wait into one event: it runs **all** CLI seats concurrently (each
-through `run_seat`, so dispatch + parse are unchanged) inside **one** job, waits for every seat
-with a per-seat outer timeout, writes each seat's status + a combined `--done` summary, and exits.
-**But you must not background `await_seats` directly.** A backgrounded **Bash** job does **not**
-re-invoke the sub-agent that launched it: when you (a sub-agent) stop with a pending background Bash
-job, the harness marks you complete to your parent and the job's completion is delivered to the root
-session, which has no step to handle it — so you stall forever. Only a background **Agent** reliably
-wakes its spawning sub-agent.
-
-So dispatch **two background Agents** per pass and then do nothing until they wake you:
-
-1. the **`panel-review-cli-barrier`** Agent — it runs `await_seats` detached and watches its
-   `--done` file, returning (and so waking you) only once every CLI seat has settled;
-2. the **`panel-review-claude-seat`** Agent — the Claude seat, which can't run inside `await_seats`.
-
-Each Agent completion re-invokes you exactly once, so a pass costs **two** wakes, not dozens. When a
-wake arrives, process only the seat(s) whose status is now on disk; if the other Agent is still
-running, **stop again and wait for its wake** — never poll (`date`/`ps`/`cat status.*`/"still
-waiting") between wakes. (A raised foreground `timeout` is only a last-resort fallback for a single
-seat you must run inline, and even the 10-min max cannot cover `run_agy`'s worst case.)
+Spawn the fresh Claude-seat Agent in parallel with the CLI barrier. Each Agent return is one wake.
+Between dispatch and those wakes, do not poll or narrate the wait. Process only completed results;
+if the other Agent is still running, stop and wait for its wake.
 
 ## The three seats
 
@@ -224,9 +206,9 @@ have produced* — write it to a **side file** (`<raw>.salvaged`, so the origina
 inspection), then re-run the same parse/ingest against the side file:
 
 - Re-home the substance the seat **already stated** into the correct fenced block(s) — do **not**
-  re-review, do **not** add, drop, or re-severity anything. The exact target shape is the single-source
-  schema fragment (`$PR/schema/findings.txt` for `findings`/`new_findings`, `$PR/schema/stances.txt`
-  for `stances`); `parse_block --diagnose <tag> <raw>` names each violation to fix. For `findings`/
+  re-review, do **not** add, drop, or re-severity anything. The seat-facing prompt contains the exact
+  shape rendered by `seat_contract.py`; `parse_block --diagnose <tag> <raw>` names each violation to
+  fix. For `findings`/
   `new_findings`, the evidence facts and any `precondition`/`impact` belong INSIDE a `points[]` entry
   alongside its `assertion` and `location`, never at the top level.
 - Emit an **empty** block (`[]`/no lines) if and only if the seat genuinely raised nothing. Never
@@ -266,174 +248,20 @@ the available peer seat(s), then call:
 ```
 
 Its compact JSON gives `prompt` for the CLI seats, `claude_prompt` for the fresh Claude Agent, and
-the CLI barrier's `command`/`done`/`sentinel` paths. It owns steps 1–3 below and the barrier command;
-do not repeat those mechanics. Exit 3 with `status=needs_auto_instructions` is the sole normal-path
-pause: compose the neutral auto guidance described in step 2 at the returned path, then call
-`prepare-round0` again. A diff-hash mismatch is a hard stop.
+the CLI barrier's `command`/`done`/`sentinel` paths. It owns diff resolution, the guard snapshot,
+absolute path anchors, seat-contract rendering, prompt assembly, and the barrier command; do not
+repeat those mechanics. Exit 3 with `status=needs_auto_instructions` is the sole normal-path pause:
+write a few neutral sentences based on branch name, commit subjects, and status—not an interpretation
+of the diff—to the returned path, then call `prepare-round0` again. A diff-hash mismatch is a hard
+stop.
 
 Spawn the CLI barrier from those returned paths and the fresh Claude seat with `claude_prompt`, then
 take no turns until both Agents have returned. Call `round collect-round0 "$id" --final` once; its
 JSON is the authoritative engagement/count/guard summary. A CLI parse status 4/5 may use the lazily
 loaded `salvage` phase and then be recollected. A missing Claude raw means the seat failed closed and
-is down—never salvage from its short Agent stub. Continue at step 4 (clustering).
+is down—never salvage from its short Agent stub. Continue with clustering below.
 
-Steps 1–3 retain the invariants implemented by `round prepare-round0`; they are reference material
-for exceptional diagnosis, not extra normal-path commands.
-
-1. **Resolve the diff** from `scope` via the shared `resolve_diff` script (the launching command —
-   `panel-review:start`/`resume`/`continue` — used the exact same script to hash the scope for the
-   resume check — never re-implement the git commands here, or the two will drift). Run from cwd = repo root. The `scope` token is already canonical
-   (`base=X` | `uncommitted` | `commit=SHA` | `question=<text>`):
-
-   ```bash
-   "$SC/resolve_diff" "$scope" > /tmp/$id/diff.txt
-   ```
-   A `question=` scope produces an empty diff (the question itself is the scope). For a diff scope,
-   if `/tmp/$id/diff.txt` is empty, stop and say so before running seats (never guess a base branch).
-
-   Then **snapshot the tracked tree** so any seat write can be detected and reverted (the seats now
-   run with write access — Codex's sandbox is bypassed for MCP/tilth + scratch — so this guard, not a
-   per-seat sandbox, protects the code under review):
-
-   ```bash
-   "$SC/repo_guard" snapshot --id "$id" --workdir "$workdir"
-   ```
-
-2. **Resolve author instructions once** into `/tmp/$id/instructions.txt` (reused by every
-   seat, every round, and across resume — generate only if the file is absent). The two
-   deterministic cases (verbatim author text, or the empty "(none …)" line) are owned by
-   `resolve_instructions`; only the `auto` sentinel is yours to compose:
-
-   ```bash
-   if [ ! -f /tmp/$id/instructions.txt ]; then
-     instr="$("$SC/resolve_instructions" --id "$id")"; rc=$?
-     if [ "$rc" -eq 3 ]; then
-       # auto: compose a few NEUTRAL sentences of context the diff does NOT already contain —
-       # branch name, commit subjects on the branch (git log <base>..HEAD --format='%s'),
-       # `git status` summary. NEVER paraphrase the diff itself: that injects one
-       # interpretation into all three blind seats and defeats their independence. For an
-       # `uncommitted` scope there are no commits — fall back to branch + status only, and
-       # if nothing useful exists, write the "(none …)" line.
-       printf '%s\n' "<your neutral, externally-sourced context here>" > /tmp/$id/instructions.txt
-     elif [ "$rc" -eq 0 ]; then
-       printf '%s\n' "$instr" > /tmp/$id/instructions.txt          # verbatim author text or the none line
-     else
-       exit "$rc"   # no manifest / usage — a real error, not a review outcome
-     fi
-   fi
-   ```
-   Capture into a variable as shown — never redirect `resolve_instructions` straight into
-   `instructions.txt`, or the compose sentinel lands in the file on the `auto` path.
-
-3. **Assemble the review prompt** (same review task for all three seats; the Claude Agent receives
-   a delivery wrapper around it). Also prepare the **scratch dir** the
-   seats write throwaway scripts into — a git-ignored subtree of the run marker (`.panel-review/<id>/`
-   is already excluded), passed as the `{{SCRATCH}}` sentinel. The path is **relative** because every
-   seat runs from cwd = workdir:
-
-   ```bash
-   mkdir -p "$workdir/.panel-review/$id/work"
-   # ABSOLUTE scratch + review root: agy runs tools in its own sandbox and GUESSES
-   # the repo root, so a relative anchor drifts (a huge prompt once anchored it to
-   # /home/developer). Both are given to the seat as absolute paths.
-   printf '%s\n' "$workdir/.panel-review/$id/work" > /tmp/$id/scratch.txt   # {{SCRATCH}} (absolute)
-   printf '%s\n' "$workdir" > /tmp/$id/workdir.txt                          # {{WORKDIR}}: the absolute review root
-   echo "<one-line scope description>" > /tmp/$id/scope.txt   # or the question text for a question scope
-   printf '%s findings\n' "$SC/check_draft" > /tmp/$id/check.findings.txt   # {{CHECK}}: the seat's pre-emit self-validator (abs path + tag)
-   # Build the diff REFERENCE (not the diff body). Externalizing the diff keeps
-   # round0.prompt a few KB — a 240 KB inlined diff diluted attention and correlated
-   # with the Gemini seat emitting prose instead of a fenced block. /tmp/$id/diff.txt
-   # stays the CANONICAL bytes; the prompt carries its absolute path + size + sha256
-   # (a cooperative self-check that the whole file was read) + the range when the
-   # scope has one. {{DIFFINFO}} is one spliced file (assemble maps a whole line to
-   # one file's bytes — do NOT invent inline DIFFPATH=/DIFFMETA= variables).
-   {
-     case "$scope" in
-       base=*)   printf 'Range: %s..HEAD\n' "${scope#base=}" ;;
-       commit=*) printf 'Commit: %s\n' "${scope#commit=}" ;;
-     esac
-     printf 'Canonical diff (authoritative review bytes) — read this file: %s\n' "/tmp/$id/diff.txt"
-     printf 'Size: %s bytes   sha256: %s\n' \
-       "$(wc -c < /tmp/$id/diff.txt | tr -d ' ')" "$(sha256sum /tmp/$id/diff.txt | cut -d' ' -f1)"
-   } > /tmp/$id/diff_info.txt
-   "$SC/assemble" "$PR/blind_pass.tmpl" WORKDIR=/tmp/$id/workdir.txt SCOPE=/tmp/$id/scope.txt INSTRUCTIONS=/tmp/$id/instructions.txt DIFFINFO=/tmp/$id/diff_info.txt SCRATCH=/tmp/$id/scratch.txt CHECK=/tmp/$id/check.findings.txt SCHEMA_FINDINGS=$PR/schema/findings.txt TILTH=$PR/tilth_guide.txt > /tmp/$id/round0.prompt
-   ```
-
-4. **Dispatch all three in parallel — the two CLI seats via the `panel-review-cli-barrier` Agent, the
-   Claude seat as its own Agent.** `await_seats` runs every CLI seat through `run_seat` (dispatch +
-   `findings` parse, **no repair** — a non-engaged status is yours to salvage, see "Salvage"),
-   concurrently, in one job, and writes each seat's parse status. Write that `await_seats` command to a
-   one-line script, then spawn **two background
-   Agents**: the CLI barrier (runs the script, waits, wakes you) and the Claude seat. Do **not**
-   background `await_seats` yourself — a background Bash job won't re-invoke you (see the
-   long-running-seats rule). Then **stop** — take no turns until an Agent re-invokes you (no
-   `date`/`ps`/`cat status.*`/"still waiting" turns). Never append `|| true` — that would hide a down
-   seat:
-
-   ```bash
-   mkdir -p /tmp/$id/raw
-   # Write the barrier command ONCE (include only the CLI seats preflight reported
-   # available). Paths are space-free, so no inner quoting is needed. await_seats
-   # writes --done LAST, after every per-seat --status — but --done is a RESULT file
-   # (it appears only on a clean exit); the barrier waits on the sentinel it wraps
-   # around await_seats, never on --done (see the barrier spawn + note below).
-   printf '%s\n' "$SC/await_seats --id $id --tag findings --prompt /tmp/$id/round0.prompt --seat codex --raw /tmp/$id/raw/round0.codex.txt --parsed /tmp/$id/f.codex.json --status /tmp/$id/status.codex --seat gemini --raw /tmp/$id/raw/round0.gemini.txt --parsed /tmp/$id/f.gemini.json --status /tmp/$id/status.gemini --done /tmp/$id/await.round0.txt" > /tmp/$id/cli_barrier.round0.sh
-   ```
-
-   Spawn the **CLI barrier** as one background Agent (it `bash`-runs the script above, waits on the
-   **sentinel** it wraps around `await_seats`, and returns — waking you — once every CLI seat has
-   settled):
-
-   ```
-   subagent_type: panel-review:panel-review-cli-barrier   (run_in_background: true)
-   prompt: |
-     workdir=<repo root absolute path>
-     command=/tmp/<id>/cli_barrier.round0.sh
-     done=/tmp/<id>/await.round0.txt
-     sentinel=/tmp/<id>/await.round0.sentinel
-   ```
-   The barrier waits on the **sentinel** (which it writes with `await_seats`' exit code), not the
-   done-file, so a setup error surfaces at once instead of hanging the barrier's whole budget. On its
-   return, read the `await_seats_rc` it prints: `0` ⇒ the done-file + per-seat `status.*` are complete,
-   proceed below. **Nonzero or `absent`** ⇒ `await_seats` never ran the seats this pass — treat **both**
-   CLI seats as **down**, record the barrier/setup failure in the verdict's Process notes, and do not
-   wait for `status.*` files that will never arrive.
-
-   Spawn the **Claude seat** as its own background Agent (fresh `panel-review:panel-review-claude-seat`,
-   **never a fork**). `status.$seat` (written by the barrier): 0 engaged, 4 no block (down), 5
-   malformed, 124 outer-timeout (down; noted as a timeout in `--done` for Process notes).
-   On each wake, process only the seat(s) whose status is already on disk; if the other Agent is still
-   running, stop again and wait. The Claude Agent's fixed stub is only a wake signal; never write or
-   parse it. `write_seat_raw` has already installed the raw response, and `round collect-round0`
-   parses that file and writes `status.claude`.
-   A status of **4** or **5** on a CLI seat is yours to **salvage** — read that one
-   seat's raw and recover it per "Salvage" above (status 5: fix the shape; status 4: judge
-   stub-vs-review, recover a real review, leave a genuine stub down). A `124` (the barrier's outer
-   per-seat timeout) is a hung seat: it reads as **down** for engagement, and the `--done` summary
-   records the timeout so you surface it in the verdict's Process notes.
-
-   Read the **final** status after the retry. Exit **0** ⇒ engaged (an empty file here ⇒ the seat
-   ran and found nothing — counts as available). Exit **4** ⇒ the seat produced no findings block at
-   all ⇒ **down at Round 0**. Exit **5** *after the retry* ⇒ still malformed ⇒ also unavailable this
-   pass. A seat is **available/engaged at Round 0 only on a final exit 0**; anything else does not
-   count toward the available-seat count, birth unanimity, or `fully_vetted` (panel is degraded and
-   `fully_vetted` can never become true while a seat is unavailable). Don't confuse a down/malformed
-   seat with a clean empty review.
-
-   **Guard the tree once all three seats have returned.** `round collect-round0 --final` performs
-   this verification and restoration. A seat is supposed to touch only its own scratch subdir;
-   verify nothing else changed and auto-revert if it did:
-
-   ```bash
-   mkdir -p /tmp/$id/origins
-   "$SC/repo_guard" verify --id "$id" --workdir "$workdir" --restore > /tmp/$id/origins/guard.round0.txt || true
-   ```
-   Exit 0 ⇒ clean (the file is empty). Nonzero ⇒ the listed tracked files were modified and have been
-   restored from the snapshot; **keep that drift list** — every guard violation is surfaced verbatim
-   in the verdict's Process notes (it does not abort the review). `|| true` only stops `set -e` from
-   tripping on the expected nonzero; do not discard the captured list.
-
-4. **Merge findings into issues (your judgment — this is the one place you cluster).** Read every
+1. **Merge findings into issues (your judgment — this is the one place you cluster).** Read every
    finding. Two findings become one issue **only if** they are at the **same location/code-path
    AND the same failure mechanism**.
    - **Union** matching points' differing `precondition`/`impact` into one point — but only if
@@ -443,7 +271,7 @@ for exceptional diagnosis, not extra normal-path commands.
    - **Drop nothing and truncate nothing.** Show all materially-different points, both sides.
    - This is also the test for folding a later `new_findings` item into an existing issue.
 
-5. **Emit your clustered issues; `birth_index` assigns birth state.** Your merge (step 4) is the
+2. **Emit your clustered issues; `birth_index` assigns birth state.** Your merge (step 1) is the
    judgment; the *birth state* it implies is mechanical, so build a finding-to-issue **map** and hand
    it to `birth_index` rather than computing states by hand. For each clustered issue write one JSON
    object: `claim`, `location`, `category`, `severity`, `evidence_pro` (the merged points), the
@@ -463,7 +291,7 @@ for exceptional diagnosis, not extra normal-path commands.
    `detail_contested` from `detail_divergence`; otherwise `open`/`peer_reviewed=false` — and writes
    `evaluated_by` from each issue's raisers. The result is a complete index.
 
-6. **Install the index and project cards:**
+3. **Install the index and project cards:**
 
    ```bash
    "$SC/index" put "$id" < /tmp/$id/index.new.json      # birth_index already set evaluated_by:{issue_id:[Round-0 raisers]}
@@ -490,9 +318,9 @@ set rarely changes the outcome and burns tokens on confirmations. Instead:
 2. **Persist** the durable report with
    `write_verdict_artifact --id $id < /tmp/$id/verdict.new.md`, but **do NOT clean up.** Leave
    `/tmp/<id>` and the cards intact so the human can opt into the debate via a `mode=resume`
-   dispatch. Artifact persistence is required for delivery: on failure return only
-   `PANEL_VERDICT_WRITE_FAILED id=<id>` and leave the run intact.
-3. After the durable write succeeds, return only `PANEL_VERDICT_READY id=<id>`. The launching command
+   dispatch. Artifact persistence is required for delivery: on failure use the bootstrap's
+   persistence-failure return and leave the run intact.
+3. After the durable write succeeds, use the bootstrap's success return. The launching command
    validates the incomplete artifact plus canonical low-only state, presents its snapshot pointer,
    and asks the human whether to debate anyway. On "yes" it re-dispatches you in `mode=resume` (which
    always proceeds to the debate loop, reusing this Round 0 — no seat is re-run).
@@ -573,8 +401,13 @@ the common one-batch shape.
    # Absolute scratch + review root (recreate if a resume skipped Round 0), same as Round 0 step 3.
    [ -f /tmp/$id/scratch.txt ] || printf '%s\n' "$workdir/.panel-review/$id/work" > /tmp/$id/scratch.txt
    [ -f /tmp/$id/workdir.txt ] || printf '%s\n' "$workdir" > /tmp/$id/workdir.txt
-   printf '%s stances\n' "$SC/check_draft" > /tmp/$id/check.stances.txt   # {{CHECK}}: pre-emit self-validator for the stances block
-   "$SC/assemble" "$PR/debate.tmpl" WORKDIR=/tmp/$id/workdir.txt CARDS=/tmp/$id/cards.$round.txt INSTRUCTIONS=/tmp/$id/instructions.txt SCRATCH=/tmp/$id/scratch.txt CHECK=/tmp/$id/check.stances.txt SCHEMA_STANCES=$PR/schema/stances.txt SCHEMA_FINDINGS=$PR/schema/findings.txt TILTH=$PR/tilth_guide.txt > /tmp/$id/debate.$round.prompt
+   printf '%s stances\n' "$SC/check_draft" > /tmp/$id/check.stances.txt
+   "$SC/seat_contract.py" render debate --panel-size "$panel_size" \
+     --check-command "$SC/check_draft stances" > /tmp/$id/seat_contract.debate.md
+   "$SC/assemble" "$PR/debate.tmpl" WORKDIR=/tmp/$id/workdir.txt \
+     CARDS=/tmp/$id/cards.$round.txt INSTRUCTIONS=/tmp/$id/instructions.txt \
+     SCRATCH=/tmp/$id/scratch.txt SEAT_CONTRACT=/tmp/$id/seat_contract.debate.md \
+     TILTH=$PR/tilth_guide.txt > /tmp/$id/debate.$round.prompt
    # run each seat/batch -> /tmp/$id/raw/round$round.<seat>.<batch>.txt
    ```
    Spawn a **fresh** `panel-review:panel-review-claude-seat` subagent for the Claude seat each round.
@@ -775,9 +608,9 @@ the common one-batch shape.
     *"Debate stopped early — only low-severity findings remained open; continue/resume to debate
     them."*), persist the durable report
     (`write_verdict_artifact --id $id < /tmp/$id/verdict.new.md`), and leave `/tmp/<id>` and the cards
-    intact. Artifact persistence is required for delivery: on failure return only
-    `PANEL_VERDICT_WRITE_FAILED id=<id>` and keep the run. On success return only
-    `PANEL_VERDICT_READY id=<id>`. The launching command validates the low-only snapshot, presents its
+    intact. Artifact persistence is required for delivery: on failure use the bootstrap's
+    persistence-failure return and keep the run. On success use its success return. The launching
+    command validates the low-only snapshot, presents its
     filename, and asks whether to keep debating; on "yes" it re-dispatches you in `mode=resume`, which
     resumes the loop. If `debate-low=true`, skip this gate and continue the loop.
 
@@ -930,15 +763,15 @@ re-read those state files separately. Present **everything**, surfacing origins 
 
 ### Process notes
 - independent Round-0 support per accepted issue; notable field mutations ("high → low on agreement")
-- seat health: timeouts / retries / any peer seat (Codex or Gemini) down; any blind-leak-check result
+- seat health: timeouts, retries, or any configured seat down; any blind-leak-check result
 - **guard violations:** if `/tmp/$id/origins/guard.round0.txt` or `guard.debate.txt` is non-empty, list
   each drifted tracked file **loudly** here ("⚠ a seat modified `<file>` during review; reverted from
   the start-of-review snapshot") — the review continued, but a seat broke the read-only contract
 ```
 
 Before cleanup, persist the final verdict to the durable artifact that outlives cleanup/discard.
-Artifact persistence is required for delivery; if it fails, return only
-`PANEL_VERDICT_WRITE_FAILED id=<id>` and leave the run intact:
+Artifact persistence is required for delivery; if it fails, use the bootstrap's
+persistence-failure return and leave the run intact:
 
 ```bash
 "$SC/write_verdict_artifact" --id "$id" < /tmp/$id/verdict.new.md
@@ -952,11 +785,11 @@ persist the verdict but deliberately **skip cleanup** so the run survives:
 - **Leftovers to continue:** keep the run if the final index has any `unresolved` or `contested`
   issue, so the user can `panel-review:continue [unresolved|contested]` to debate them further.
 
-After persistence and conditional cleanup, return only `PANEL_VERDICT_READY id=<id>`. The launching
+After persistence and conditional cleanup, use the bootstrap's success return. The launching
 command derives gate/continuation status from the validated artifact and retained canonical index;
 never return the verdict body or a second copy of those counts.
 
-If you are returning without a final verdict (error/abort), also do **not** clean up — leave the
-state for resume.
+If an error or abort prevents verdict persistence, also do **not** clean up: leave the run state
+intact for `panel-review:resume` and use the bootstrap's review-failure return.
 
 <!-- /phase:verdict -->

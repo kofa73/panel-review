@@ -5,9 +5,9 @@
 Do not return the fenced block(s) or summary as your final Agent message. Assemble the complete
 requested fenced block(s) in one file under your own scratch directory, then pass that file on stdin
 to the command below. This is the Claude seat's single final validation-and-write step; it replaces
-the task prompt's separate per-block pre-emit validation command. For a debate response, put both
-`stances` and `new_findings` in that file and invoke this command once. The helper validates every
-requested block and atomically installs the raw response at the stated destination:
+the task prompt's separate per-block pre-emit validation command. For any multi-block response, put
+every requested block in that file and invoke this command once. The helper validates the complete
+response and atomically installs it at the stated destination:
 
 {{RAW_WRITE}}
 

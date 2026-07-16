@@ -15,6 +15,7 @@ ROUND = ROOT / "scripts" / "round"
 RESOLVE_DIFF = ROOT / "scripts" / "resolve_diff"
 SWEEP = ROOT / "scripts" / "sweep"
 WRITE_RAW = ROOT / "scripts" / "write_seat_raw"
+PARSE_BLOCK = ROOT / "scripts" / "parse_block"
 
 FINDING = {
     "claim": "new value is ignored",
@@ -90,8 +91,10 @@ class RoundTest(unittest.TestCase):
     def run_round(self, *args):
         return subprocess.run([str(ROUND), *map(str, args)], capture_output=True, text=True, check=False)
 
-    def prepare_round0(self):
-        result = self.run_round("prepare-round0", self.run_id, "claude", "codex")
+    def prepare_round0(self, *seats):
+        result = self.run_round(
+            "prepare-round0", self.run_id, *(seats or ("claude", "codex"))
+        )
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout)
 
@@ -121,6 +124,31 @@ class RoundTest(unittest.TestCase):
         self.assertIn("--seat codex", barrier)
         self.assertNotIn("--seat claude", barrier)
         self.assertTrue((self.run_dir / "guard" / "manifest.sha256").is_file())
+
+    def test_prepare_round0_renders_the_configured_panel_size(self):
+        prepared = self.prepare_round0("claude", "codex")
+        prompt = Path(prepared["prompt"]).read_text(encoding="utf-8")
+
+        self.assertIn("configured panel has 2 reviewer seats, including you", prompt)
+        self.assertNotIn("two other AIs", prompt)
+
+    def test_prepare_round0_renders_the_full_panel_size(self):
+        prepared = self.prepare_round0("claude", "codex", "gemini")
+        prompt = Path(prepared["prompt"]).read_text(encoding="utf-8")
+
+        self.assertIn("configured panel has 3 reviewer seats, including you", prompt)
+
+    def test_rendered_round0_contract_example_passes_runtime_validation(self):
+        prepared = self.prepare_round0()
+
+        parsed = subprocess.run(
+            [str(PARSE_BLOCK), "--diagnose", "findings", prepared["prompt"]],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(parsed.returncode, 0, parsed.stdout + parsed.stderr)
 
     def test_collect_round0_parses_claude_raw_and_returns_compact_summary(self):
         self.prepare_round0()
@@ -154,9 +182,9 @@ class RoundTest(unittest.TestCase):
         claude_prompt = Path(prepared["claude_prompt"]).read_text(encoding="utf-8")
         self.assertIn("## Stance output", claude_prompt)
         self.assertIn("## New findings (ALWAYS emit this block)", claude_prompt)
-        self.assertIn("For a debate response, put both", claude_prompt)
+        self.assertIn("For any multi-block response, put", claude_prompt)
         self.assertIn(
-            "`stances` and `new_findings` in that file and invoke this command once",
+            "every requested block in that file and invoke this command once",
             claude_prompt,
         )
         self.assertIn("CLAUDE_SEAT_RAW_WRITTEN", claude_prompt)
@@ -460,10 +488,22 @@ class RoundTest(unittest.TestCase):
         result = self.run_round("prepare-debate", self.run_id, "claude", "codex")
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        prompt = Path(json.loads(result.stdout)["prompt"]).read_text(encoding="utf-8")
+        prompt_path = json.loads(result.stdout)["prompt"]
+        prompt = Path(prompt_path).read_text(encoding="utf-8")
+        self.assertIn("configured panel has 2 reviewer seats, including you", prompt)
         self.assertIn("support|reject", prompt)
         self.assertIn("support may include a `revision`", prompt)
         self.assertNotIn("support_with_revision", prompt)
+
+        for tag in ("stances", "new_findings"):
+            with self.subTest(tag=tag):
+                parsed = subprocess.run(
+                    [str(PARSE_BLOCK), "--diagnose", tag, prompt_path],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(parsed.returncode, 0, parsed.stdout + parsed.stderr)
 
     def test_prepare_debate_does_not_redispatch_checkpointed_seats(self):
         self.prepare_round0()

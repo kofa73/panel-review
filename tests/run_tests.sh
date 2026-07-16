@@ -76,11 +76,10 @@ assert_eq "preflight calls codex login status" 'login status' "$(cat "$TMP/codex
 
 section "protocol and template contracts"
 protocol="$root/skills/panel-review-for-agent/references/protocol.md"
-# The emit schema is single-sourced in prompts/schema/ (Concern E): the category
-# revision field now lives in the stances fragment, not inline in debate.tmpl.
-assert_file_contains "stances schema fragment exposes category revision" '"category"' "$root/prompts/schema/stances.txt"
-assert_file_contains "debate template splices the stances schema" '{{SCHEMA_STANCES}}' "$root/prompts/debate.tmpl"
-assert_file_contains "template describes selective rationale promotion" 'plus the `rationale` from a `reject`' "$root/prompts/debate.tmpl"
+# Seat fields, block cardinality, and rendered instructions share one executable owner.
+assert_file_contains "blind template splices the seat contract" '{{SEAT_CONTRACT}}' "$root/prompts/blind_pass.tmpl"
+assert_file_contains "debate template splices the seat contract" '{{SEAT_CONTRACT}}' "$root/prompts/debate.tmpl"
+assert_file_contains "seat contract owns category revision" '"category": "correctness"' "$SC/seat_contract.py"
 assert_file_contains "protocol uses degraded decision script" 'decide_degraded_round' "$protocol"
 assert_file_contains "protocol delegates batch admission" 'sweep ingest-batch' "$protocol"
 assert_file_contains "protocol uses coarse debate salvage" 'round" salvage-debate' "$protocol"
@@ -111,9 +110,10 @@ do
     'mutate issue records' "$contract"
 done
 
-# Final-report delivery is artifact-only: the referee returns a fixed stub and the
+# Final-report delivery is artifact-only: the bootstrap owns the fixed return statuses and the
 # main-context commands validate the artifact through one deterministic reader mode.
-assert_file_contains "referee returns only the artifact-ready stub" 'PANEL_VERDICT_READY id=<id>' "$root/agents/panel-review-referee.md"
+assert_file_contains "bootstrap owns the artifact-ready stub" 'PANEL_VERDICT_READY id=<id>' "$root/skills/panel-review-for-agent/SKILL.md"
+assert_file_not_contains "referee agent does not restate return literals" 'PANEL_VERDICT_READY' "$root/agents/panel-review-referee.md"
 assert_file_contains "protocol requires durable artifact delivery" 'Artifact persistence is required for delivery' "$protocol"
 assert_file_not_contains "protocol has no legacy worktree verdict path" 'verdict-$id.md' "$protocol"
 assert_file_not_contains "cleanup has no legacy verdict special case" 'verdict-$id.md' "$SC/cleanup"
@@ -130,15 +130,15 @@ done
 
 # --- blind-pass robustness (design-notes/blind-pass-robustness.md) ---------------
 # Concern A: the diff body is EXTERNALIZED — blind_pass.tmpl references a file, it no
-# longer inlines the {{DIFF}} body, and the protocol builds/passes {{DIFFINFO}}.
+# longer inlines the {{DIFF}} body, and round builds/passes {{DIFFINFO}}.
 if grep -Fq -- '{{DIFF}}' "$root/prompts/blind_pass.tmpl"; then
   bad "blind_pass no longer inlines the diff body" "still carries the {{DIFF}} sentinel"
 else
   ok "blind_pass no longer inlines the diff body"
 fi
 assert_file_contains "blind_pass carries a diff REFERENCE sentinel" '{{DIFFINFO}}' "$root/prompts/blind_pass.tmpl"
-assert_file_contains "protocol builds the diff_info reference" 'diff_info.txt' "$protocol"
-assert_file_contains "protocol passes DIFFINFO to assemble" 'DIFFINFO=/tmp/$id/diff_info.txt' "$protocol"
+assert_file_contains "round builds the diff_info reference" 'diff_info.txt' "$SC/round"
+assert_file_contains "round passes DIFFINFO to assemble" '"DIFFINFO": directory / "diff_info.txt"' "$SC/round"
 if grep -Fq -- 'DIFF=/tmp/$id/diff.txt' "$protocol"; then
   bad "protocol drops the inline DIFF= assemble arg" "still passes DIFF=/tmp/\$id/diff.txt"
 else
@@ -153,27 +153,23 @@ assert_file_contains "debate directs agy to set the tool cwd"     'working-direc
 assert_file_contains "protocol writes an ABSOLUTE scratch anchor" '"$workdir/.panel-review/$id/work" > /tmp/$id/scratch.txt' "$protocol"
 assert_file_contains "protocol writes the review-root file" 'workdir.txt' "$protocol"
 assert_file_contains "protocol collects ABSOLUTE card paths" '<workdir>/.panel-review/<id>/issue-<oid>.md' "$protocol"
-# Concern C: the output contract is hoisted ABOVE the Files/Diff section in blind_pass.
-of_line="$(grep -nF '## Output format' "$root/prompts/blind_pass.tmpl" | head -1 | cut -d: -f1)"
+# Concern C: the rendered output-contract sentinel is ABOVE the Files/Diff section.
+of_line="$(grep -nF '{{SEAT_CONTRACT}}' "$root/prompts/blind_pass.tmpl" | head -1 | cut -d: -f1)"
 fd_line="$(grep -nF '## Files / Diff' "$root/prompts/blind_pass.tmpl" | head -1 | cut -d: -f1)"
 if [ -n "$of_line" ] && [ -n "$fd_line" ] && [ "$of_line" -lt "$fd_line" ]; then
   ok "blind_pass hoists the output contract above the diff"
 else
-  bad "blind_pass output-contract ordering" "Output format line=$of_line Files/Diff line=$fd_line"
+  bad "blind_pass output-contract ordering" "SEAT_CONTRACT line=$of_line Files/Diff line=$fd_line"
 fi
-# Concern E: single-sourced schema — sentinels in the templates, fragments exist and
-# VALIDATE through parse_block (parser-behavior drift check, not string equality).
-assert_file_contains "blind_pass splices the findings schema" '{{SCHEMA_FINDINGS}}' "$root/prompts/blind_pass.tmpl"
-assert_file_contains "debate splices the new-findings schema"  '{{SCHEMA_FINDINGS}}' "$root/prompts/debate.tmpl"
-for frag in findings stances; do
-  [ -f "$root/prompts/schema/$frag.txt" ] && ok "schema fragment $frag.txt exists" || bad "schema fragment $frag.txt exists"
-done
-printf '```findings\n%s\n```\n' "$(cat "$root/prompts/schema/findings.txt")" > "$TMP/frag.findings.txt"
-"$SC/parse_block" findings "$TMP/frag.findings.txt" x >/dev/null 2>&1
-assert_exit "findings schema fragment validates through parse_block" 0 "$?"
-printf '```stances\n%s\n```\n' "$(cat "$root/prompts/schema/stances.txt")" > "$TMP/frag.stances.txt"
-"$SC/parse_block" stances "$TMP/frag.stances.txt" x >/dev/null 2>&1
-assert_exit "stances schema fragment validates through parse_block" 0 "$?"
+# Concern E: each rendered contract validates through the runtime parser.
+"$SC/seat_contract.py" render round0 --panel-size 2 --check-command "$SC/check_draft findings" > "$TMP/contract.round0.txt"
+"$SC/parse_block" --response round0 findings "$TMP/contract.round0.txt" x >/dev/null 2>&1
+assert_exit "rendered round0 contract validates through parse_block" 0 "$?"
+"$SC/seat_contract.py" render debate --panel-size 3 --check-command "$SC/check_draft stances" > "$TMP/contract.debate.txt"
+"$SC/parse_block" --response debate stances "$TMP/contract.debate.txt" x >/dev/null 2>&1
+assert_exit "rendered debate stance contract validates through parse_block" 0 "$?"
+"$SC/parse_block" --response debate new_findings "$TMP/contract.debate.txt" x >/dev/null 2>&1
+assert_exit "rendered debate new-findings contract validates through parse_block" 0 "$?"
 # field-shuffled variant: an unknown revision subfield is normalized away, not rejected.
 printf '```stances\n%s\n```\n' '{"id":"i1","stance":"support","revision":{"bogus_field":"x","severity":"high"}}' > "$TMP/frag.shuffled.txt"
 shuf_out="$("$SC/parse_block" stances "$TMP/frag.shuffled.txt" x 2>/dev/null)"
@@ -184,7 +180,7 @@ case "$shuf_out" in *bogus_field*) bad "unknown revision subfield normalized awa
 printf '```new_findings\n[]\n```\n' > "$TMP/nf.empty-array.txt"
 "$SC/parse_block" new_findings "$TMP/nf.empty-array.txt" x >/dev/null 2>&1
 assert_exit "empty-array new_findings block is valid (F)" 0 "$?"
-assert_file_contains "debate asks to ALWAYS emit new_findings" 'ALWAYS emit this block' "$root/prompts/debate.tmpl"
+assert_file_contains "seat contract asks to ALWAYS emit new_findings" 'ALWAYS emit this block' "$SC/seat_contract.py"
 assert_file_contains "protocol treats new_findings as required-emptyable" 'required-emptyable' "$protocol"
 # Salvage is referee-owned (no script repair, no repair seat): the protocol carries the
 # extract-first-else-empty anti-hallucination rule, and repair.tmpl is retired.
@@ -212,8 +208,8 @@ if grep -Fq '570000' "$bar"; then bad "cli-barrier must not depend on raising th
 # still cite `timeout 540` as the anti-pattern it explains against.
 if grep -Fq 'timeout 540 bash' "$bar"; then bad "cli-barrier must not use a >2-min wait the Bash default truncates"; else ok "cli-barrier uses no >2-min blocking wait"; fi
 assert_file_contains "protocol dispatches the cli-barrier Agent" 'panel-review:panel-review-cli-barrier' "$spk"
-assert_file_contains "protocol writes the Round-0 barrier command to a script" 'cli_barrier.round0.sh' "$spk"
-assert_file_contains "protocol explains why background Bash cannot wake a sub-agent" 're-invoke the sub-agent that launched it' "$spk"
+assert_file_contains "round writes the Round-0 barrier command to a script" 'cli_barrier.round0.sh' "$SC/round"
+assert_file_contains "barrier owner explains why background Bash cannot wake a sub-agent" 're-invokes its spawning conversation' "$bar"
 # Regression guard: the OLD broken instruction (referee backgrounds await_seats itself) must be gone.
 if grep -Fq 'ONE background Bash call' "$spk"; then bad "protocol must not background await_seats as a bash job"; else ok "protocol no longer backgrounds await_seats directly"; fi
 if grep -Eq 'await_seats.*run_in_background' "$spk"; then bad "protocol must not pair await_seats with run_in_background"; else ok "await_seats is not backgrounded by the referee"; fi
@@ -228,7 +224,7 @@ assert_file_contains "cli-barrier captures await_seats' exit code into the senti
 assert_file_contains "cli-barrier waits on the sentinel, not the done-file"   'until [ -f "<sentinel>"' "$bar"
 assert_file_contains "cli-barrier reports await_seats_rc so the referee can tell setup-error from clean" 'await_seats_rc=' "$bar"
 assert_file_contains "cli-barrier best-effort reaps a wedged job on budget exhaustion" 'pkill -f' "$bar"
-assert_file_contains "protocol passes the Round-0 sentinel path to the barrier" 'sentinel=/tmp/<id>/await.round0.sentinel' "$spk"
+assert_file_contains "round returns the Round-0 sentinel path" 'await.round0.sentinel' "$SC/round"
 assert_file_contains "protocol reads await_seats_rc and treats nonzero/absent as CLI seats down" 'await_seats_rc' "$spk"
 
 # --- Packaging: every plugin agent the protocol dispatches must be TRACKED in git ---
@@ -258,14 +254,10 @@ assert_file_not_contains "Claude seat does not prefer multi-symbol lookup" 'one 
 assert_file_contains "Claude seat avoids redundant reads" 'Avoid redundant evidence reads' "$root/agents/panel-review-claude-seat.md"
 assert_file_contains "Claude seat stops after sufficient evidence" 'Stop exploratory calls once the output is supported' "$root/agents/panel-review-claude-seat.md"
 assert_file_contains "Claude seat has no hard call cap" 'hard tool-call' "$root/agents/panel-review-claude-seat.md"
-assert_file_contains "Claude seat requires both debate blocks" 'emit both a `stances` block and a required-emptyable `new_findings` block' "$root/agents/panel-review-claude-seat.md"
-claude_debate_summary="$(sed -n '/^- a \*\*debate pass\*\*/,/^$/p' "$root/agents/panel-review-claude-seat.md")"
-case "$claude_debate_summary" in
-  *optional*) bad "Claude seat does not describe either debate block as optional" ;;
-  *) ok "Claude seat does not describe either debate block as optional" ;;
-esac
-assert_file_contains "Claude delivery combines both debate blocks" 'For a debate response, put both' "$root/prompts/claude_delivery.tmpl"
-assert_file_contains "Claude delivery validates and writes both debate blocks once" '`stances` and `new_findings` in that file and invoke this command once' "$root/prompts/claude_delivery.tmpl"
+assert_file_contains "Claude seat defers phase requirements to the rendered contract" 'Do not infer or redefine its required blocks.' "$root/agents/panel-review-claude-seat.md"
+assert_file_not_contains "Claude seat does not restate new-findings rules" 'required-emptyable' "$root/agents/panel-review-claude-seat.md"
+assert_file_contains "Claude delivery combines every requested block" 'For any multi-block response, put' "$root/prompts/claude_delivery.tmpl"
+assert_file_contains "Claude delivery validates and writes the complete response once" 'every requested block in that file and invoke this command once' "$root/prompts/claude_delivery.tmpl"
 assert_file_contains "Claude delivery replaces redundant per-block validation" "the task prompt's separate per-block pre-emit validation command" "$root/prompts/claude_delivery.tmpl"
 case "$(grep -F 'codex exec' "$root/scripts/run_codex")" in
   *--sandbox\ read-only*) bad "run_codex must no longer pin --sandbox read-only" ;;
@@ -365,9 +357,16 @@ cat >/dev/null    # drain the prompt
 n=0; [ -f "${MOCK_COUNT:-/dev/null}" ] && n="$(cat "$MOCK_COUNT")"; n=$((n+1)); echo "$n" > "$MOCK_COUNT"
 good='{"claim":"c","location":"a.c:1","category":"correctness","severity":"high","points":[{"assertion":"x","location":"a.c:1"}]}'
 bad='{"location":"a.c:1","category":"correctness","severity":"high","points":[{"assertion":"x","location":"a.c:1"}]}'
+stance='{"id":"i1","stance":"support"}'
 case "$MOCK_MODE" in
   good)      printf '```%s\n%s\n```\n' "$MOCK_TAG" "$good" > "$out" ;;
-  malformed) printf '```%s\n%s\n```\n' "$MOCK_TAG" "$bad"  > "$out" ;;
+  malformed)
+    if [ "$MOCK_TAG" = new_findings ]; then
+      printf '```stances\n%s\n```\n```new_findings\n%s\n```\n' "$stance" "$bad" > "$out"
+    else
+      printf '```%s\n%s\n```\n' "$MOCK_TAG" "$bad" > "$out"
+    fi
+    ;;
   noblock)   printf 'I will not answer.\n' > "$out" ;;
 esac
 EOF

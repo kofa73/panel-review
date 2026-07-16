@@ -40,7 +40,8 @@ byte-exact.
   any missing companion is corrupt and fails closed. Don't reconstruct batch eligibility from raw
   files or hand-write the common plan.
 - `round` — the referee's coarse normal-path module over the owners in this list. It resolves and
-  assembles Round 0, prepares the common one-batch debate, collects compact engagement/guard status,
+  assembles Round 0 with the rendered seat contract, prepares the common one-batch debate, collects
+  compact engagement/guard status,
   installs a canonical CLI debate side file through `salvage-debate`, selects only complete
   active-plan batches for the normal or degraded decision and atomic commit with an optional referee
   addendum, and renders stable verdict input. It does not absorb judgment: clustering, prose-claim
@@ -68,14 +69,21 @@ byte-exact.
   fresh cold model with the same on-disk input the referee has, and judging stub-vs-review is an LLM
   call, not a grep heuristic (see SKILL "Salvage"). The Claude seat is a subagent, not a CLI, so the
   referee drives it directly (never via `run_seat`).
+- `seat_contract.py` — the authoritative seat-output contract. Its structured phase definitions,
+  stance values, examples, and validators drive both rendered Round-0/debate instructions and
+  runtime parsing. Use its `render` command only for exceptional manual prompt assembly; normal
+  prompt preparation goes through `round`. Do not add a second prompt schema or stance enum.
+- `check_contracts` — the repository-level consistency gate for the ownership map in `CONTRACTS.md`,
+  every phase/panel rendering, runtime-valid examples, and narrow forbidden legacy wording checks.
+  Failures name the invariant and location.
 - `check_draft` — the **seat-facing** pre-emit validator (spliced into prompts as `{{CHECK}}`; the
   referee never calls it). Thin wrapper over `parse_block --diagnose` — don't re-implement the
   finding/stance checks. Lets a seat catch bad items before emitting (closes `parse_block`'s
   silent-drop of individual malformed lines).
 - `write_seat_raw` — the Claude seat's sole write outside its scratch directory. It derives the
-  expected Round-0 or debate raw path from a validated run ID/round/batch, requires every requested
-  fenced block to pass `parse_block --diagnose`, and only then atomically installs the complete raw
-  response. It never accepts an arbitrary destination path.
+  expected Round-0 or debate raw path from a validated run ID/round/batch, requires the phase's exact
+  block set and every item to pass the shared seat-contract validation, and only then atomically
+  installs the complete raw response. It never accepts an arbitrary destination path.
 - `await_seats` — the barrier that owns CLI-seat waiting; runs every CLI seat concurrently (each via
   `run_seat`) in ONE job with a per-seat outer timeout, writes per-seat status + a combined `--done`
   summary. **Run it via the `panel-review-cli-barrier` Agent, never as a referee-backgrounded Bash

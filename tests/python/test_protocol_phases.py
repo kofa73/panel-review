@@ -9,6 +9,8 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 READER = ROOT / "scripts" / "read_protocol_phase"
 PROTOCOL = ROOT / "skills" / "panel-review-for-agent" / "references" / "protocol.md"
+REFEREE = ROOT / "agents" / "panel-review-referee.md"
+BOOTSTRAP = ROOT / "skills" / "panel-review-for-agent" / "SKILL.md"
 PHASES = ("common", "salvage", "round0", "debate", "degraded", "gate", "recovery", "verdict")
 
 
@@ -57,6 +59,16 @@ class ProtocolPhasesTest(unittest.TestCase):
         self.assertIn("materially conflicts with its current outcome", result.stdout)
         self.assertIn("remaining debate budget", result.stdout)
         self.assertNotIn("and a `set_state {open}` to", result.stdout)
+
+    def test_referee_return_contract_distinguishes_review_and_write_failures(self):
+        referee = REFEREE.read_text(encoding="utf-8")
+        bootstrap = BOOTSTRAP.read_text(encoding="utf-8")
+
+        self.assertIn("PANEL_VERDICT_WRITE_FAILED id=<id>", bootstrap)
+        self.assertIn("PANEL_REVIEW_FAILED id=<id>", bootstrap)
+        self.assertNotIn("PANEL_VERDICT_WRITE_FAILED", referee)
+        self.assertNotIn("PANEL_REVIEW_FAILED", referee)
+        self.assertIn("preloaded skill's fixed return contract", referee)
 
 
 if __name__ == "__main__":

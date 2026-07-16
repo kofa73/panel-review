@@ -10,6 +10,7 @@ import sys
 here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, here)
 import panel_common  # noqa: E402
+from seat_contract import STANCE_VALUES  # noqa: E402
 
 
 BLINDNESS_PATTERN = r"\b(codex|gpt|gemini|claude)\b|\b(an)?other (reviewer|seat|model|ai)s?\b|\b(all( ?(three|3))?|both|two|the other) (seats|reviewers|models|ais)\b|\b(seats?|reviewers?|models?|the others?|we|every(one|body)) (all )?(agree|disagree|concur)\b|\b[0-9]+ ?(/|of) ?(the )?(three|3) (seats|reviewers)\b"
@@ -90,7 +91,7 @@ def integrity_errors(index, stances, engaged, configured):
     open_ids = [issue.get("id") for issue in index.get("issues", []) if issue.get("state") == "open"]
     errors = []
     for stance in stances:
-        if stance.get("stance") not in {"support", "reject"}:
+        if stance.get("stance") not in STANCE_VALUES:
             errors.append(
                 f"invalid stance for seat={jq_display(stance.get('_source'))} "
                 f"issue={jq_display(stance.get('id'))}: {jq_display(stance.get('stance'))}"

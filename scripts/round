@@ -11,6 +11,7 @@ import subprocess
 import sys
 
 from panel_common import panel_atomic_write, panel_require_id
+from seat_contract import render_contract
 
 
 HERE = Path(__file__).resolve().parent
@@ -127,6 +128,16 @@ def assemble(template, destination, replacements):
     run_command(args, stdout_path=destination)
 
 
+def write_seat_contract(directory, phase, seats, check_path):
+    destination = directory / f"seat_contract.{phase}.md"
+    check_command = check_path.read_text(encoding="utf-8").strip()
+    panel_atomic_write(
+        str(destination),
+        render_contract(phase, len(seats), check_command),
+    )
+    return destination
+
+
 def write_claude_prompt(directory, task_path, round_number, batch=None):
     if round_number == 0:
         destination = directory / "raw" / "round0.claude.txt"
@@ -223,6 +234,9 @@ def cmd_prepare_round0(run_id, seats):
         ]
     )
     panel_atomic_write(str(directory / "diff_info.txt"), "\n".join(diff_info) + "\n")
+    contract = write_seat_contract(
+        directory, "round0", seats, directory / "check.findings.txt"
+    )
     prompt = directory / "round0.prompt"
     assemble(
         "blind_pass.tmpl",
@@ -233,8 +247,7 @@ def cmd_prepare_round0(run_id, seats):
             "INSTRUCTIONS": instructions,
             "DIFFINFO": directory / "diff_info.txt",
             "SCRATCH": directory / "scratch.txt",
-            "CHECK": directory / "check.findings.txt",
-            "SCHEMA_FINDINGS": PROMPTS / "schema" / "findings.txt",
+            "SEAT_CONTRACT": contract,
             "TILTH": PROMPTS / "tilth_guide.txt",
         },
     )
@@ -284,7 +297,7 @@ def cmd_collect_round0(run_id, final):
     claude_raw = directory / "raw" / "round0.claude.txt"
     claude_parsed = directory / "f.claude.json"
     result = run_command(
-        [HERE / "parse_block", "findings", claude_raw, "claude"],
+        [HERE / "parse_block", "--response", "round0", "findings", claude_raw, "claude"],
         stdout_path=claude_parsed,
         allow=(0, 1, 4, 5),
     )
@@ -383,6 +396,9 @@ def cmd_prepare_debate(run_id, seats):
     cards = [Path(workdir) / ".panel-review" / run_id / f"issue-{issue_id}.md" for issue_id in issue_ids]
     panel_atomic_write(str(directory / f"cards.{round_number}.txt"), "\n".join(map(str, cards)) + "\n")
     panel_atomic_write(str(directory / "check.stances.txt"), f"{HERE / 'check_draft'} stances\n")
+    contract = write_seat_contract(
+        directory, "debate", effective_seats, directory / "check.stances.txt"
+    )
     prompt = directory / f"debate.{round_number}.prompt"
     assemble(
         "debate.tmpl",
@@ -392,9 +408,7 @@ def cmd_prepare_debate(run_id, seats):
             "CARDS": directory / f"cards.{round_number}.txt",
             "INSTRUCTIONS": instructions,
             "SCRATCH": directory / "scratch.txt",
-            "CHECK": directory / "check.stances.txt",
-            "SCHEMA_STANCES": PROMPTS / "schema" / "stances.txt",
-            "SCHEMA_FINDINGS": PROMPTS / "schema" / "findings.txt",
+            "SEAT_CONTRACT": contract,
             "TILTH": PROMPTS / "tilth_guide.txt",
         },
     )

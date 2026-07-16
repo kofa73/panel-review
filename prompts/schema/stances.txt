@@ -1,1 +1,0 @@
-{"id":"i1","stance":"support","rationale":"<optional technical reason for a revision>","revision":{"severity":"high","location":"src/foo.py:42","category":"correctness","claim":"<optional corrected one-sentence claim>"},"new_evidence":{"location":"src/foo.py:42","assertion":"<optional one new technical fact>","precondition":"<optional>","impact":"<optional>"}}

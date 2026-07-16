@@ -6,10 +6,11 @@ Regression suite for the panel-review scripts. It has two layers:
   (`resolve_diff`, `preflight`, `birth_index`, `run_seat`, `resolve_instructions`,
   `cleanup`/`discard`) plus the protocol/template contracts. As its **final step**
   it runs the Python suite below, so this one command exercises the whole pipeline.
-- **`python/`** — `unittest` tests for the stateful scripts that were ported to
-  Python 3 (`index`, `parse_block`, `decide_round`, `decide_degraded_round`,
-  `merge_payload`, `sweep`). These drive each script through its CLI (and import
-  `panel_common` directly where useful).
+- **`python/`** — `unittest` tests for the Python script interfaces, including `index`,
+  `parse_block`, `seat_contract.py` through rendered `round` prompts, `check_contracts`,
+  `decide_round`, `decide_degraded_round`, `merge_payload`, `sweep`, `round`,
+  `write_seat_raw`, `read_protocol_phase`, and `read_verdict_artifact`. These drive public script
+  interfaces rather than private helpers (except `panel_common`'s shared primitives).
 
 Run it after touching any of those scripts, the `commit-sweep` validator, the debate
 decision logic, or the SKILL debate loop.
@@ -38,7 +39,12 @@ them up. No real run is touched.
 - **parse_block** (`test_parse_block.py`): normal-mode exit codes (empty→0,
   flat-shape→5, no-block→4); stances parse **byte-identical** to the stored
   fixtures; `--diagnose` pinpoints each failure reason (and exit 5/0); `revision`
-  sub-field stripping; empty-vs-real stances block idiom.
+  sub-field stripping; empty-vs-real stances block idiom; `--response` phase block
+  cardinality (missing and duplicate blocks).
+- **instruction contracts** (`test_contract_consistency.py`, `test_round.py`): every Round-0/debate
+  rendering for two- and three-seat panels uses the shared contract and runtime-valid examples;
+  known barrier/path/return/panel/health/delivery/stance drift is reintroduced one case at a time and
+  must fail with the invariant name.
 - **decide_round** (`test_decide_round.py`): round-1/round-2 transitions;
   effective-value enum convergence (stays-open, ceiling→detail_contested,
   true-unanimity→adopt); split support/reject cannot adopt a unilateral revision;
@@ -60,7 +66,8 @@ them up. No real run is touched.
   scaffold-to-plan round trip.
 - **protocol phases** (`test_protocol_phases.py`): every marked canonical phase
   is independently readable with no marker leakage; the debate interface keeps
-  settled folds terminal unless evidence conflicts and debate budget remains.
+  settled folds terminal unless evidence conflicts and debate budget remains; the bootstrap alone
+  owns the split success/persistence-failure/review-failure return literals.
 
 ## What the bash suite covers (`run_tests.sh`)
 
@@ -79,7 +86,8 @@ them up. No real run is touched.
   missing manifest → exit 1.
 - **cleanup / discard**: `PANEL_REVIEW_KEEP_TMP=true` preserves `/tmp/<id>` while
   removing the marker / `.panel-review`; the default still removes `/tmp/<id>`.
-- **Protocol/template contracts**: pins the documented batch-completeness,
+- **Protocol/template contracts**: runs `seat_contract.py render` through runtime parsing and pins
+  the documented batch-completeness,
   dropped-seat cleanup, low-only gate, coverage, prompt/schema requirements,
   the referee's agreement-gated-decision versus mechanical-update invariant,
   Claude-seat redundant-read and sufficient-evidence guidance without lookup

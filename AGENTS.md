@@ -16,9 +16,11 @@ code).
 
 ## Install / "build" / run
 
-There is no build or lint framework. Scripts are a mix of **bash and Python** (the debate-core scripts
-— `index`, `decide_round`, `decide_degraded_round`, `merge_payload`, `parse_block`, `sweep` — are
-Python; the rest bash); skills/agents are Markdown. `python3`, `jq`, `git` are required.
+There is no build or lint framework. Scripts are a mix of **bash and Python**. The Python scripts are
+`check_contracts`, `check_draft`, `decide_degraded_round`, `decide_round`, `index`, `merge_payload`,
+`parse_block`, `read_protocol_phase`, `read_verdict_artifact`, `round`, `seat_contract.py`, `sweep`,
+and `write_seat_raw`; `panel_common.py` is their shared library. The remaining scripts are bash;
+skills/agents are Markdown. `python3`, `jq`, `git` are required.
 
 - **Install (two paths):**
   - `./install.sh` copies the tree into `~/.claude/skills/panel-review` (override with
@@ -34,8 +36,9 @@ Python; the rest bash); skills/agents are Markdown. `python3`, `jq`, `git` are r
   "Using it" for flags (`--issue-rounds`, `--max-rounds`, `--debate-low`, `--instructions`).
 - **Tests:** `./tests/run_tests.sh` (`VERBOSE=1` lists each PASS) runs bash asserts then the Python
   `unittest` suite (`tests/python/`, fixtures in `tests/fixtures/`). Run it after changing
-  `parse_block`, `decide_round`, `merge_payload`, `sweep`, `index`'s `commit-sweep` validator, or the
-  SKILL debate loop. Single module: `python3 -m unittest tests.python.test_index -v` from repo root.
+  `seat_contract.py`, `check_contracts`, `parse_block`, `decide_round`, `merge_payload`, `sweep`,
+  `index`'s `commit-sweep` validator, or the SKILL debate loop. Single module:
+  `python3 -m unittest tests.python.test_index -v` from repo root.
 - **Smoke-test a script** by running the wrapper directly, e.g. `scripts/preflight`,
   `scripts/resolve_diff <scope>`, `scripts/inspect_run --id <ID> --workdir "$PWD"` (standalone; need
   `jq` + `git`). Beyond the suite, verify by running an actual review.
@@ -61,8 +64,9 @@ Four participants, strict role separation (full per-script map in `.claude/rules
   (a background Agent reliably re-wakes the referee; a background Bash job does not).
 - **Wrapper scripts** (`scripts/`) — the referee never hand-rolls flags, writes, index math, or
   parsing; it calls these so operations are byte-exact. The coarse `round` module owns normal-path
-  preparation, collection, commit, and verdict input. Prompt templates in `prompts/` are filled by
-  `assemble` (whole-line literal substitution).
+  preparation, collection, commit, and verdict input. `seat_contract.py` owns seat fields, stance
+  values, phase block cardinality, validation, and the rendered instruction fragments. Prompt
+  templates in `prompts/` are filled by `assemble` (whole-line literal substitution).
 
 **Issue lifecycle** (README "How an issue moves"): each seat takes a `support` / `reject` **stance**;
 support may independently propose revised issue fields. An issue is `open` → `accepted`/`rejected` when all

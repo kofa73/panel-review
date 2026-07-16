@@ -703,9 +703,12 @@ There are no staged changes. No commit or push was made.
     do not imply agreement. Focused and full verification passed. **Item 4 completed 2026-07-16:**
     the Claude role summary now requires both debate blocks, with `new_findings` required-emptyable;
     regressions cover the role wording, assembled Claude debate/delivery prompt, successful `[]`, and
-    fail-closed omission. Focused and full verification passed. Resume with item 5, the remaining
-    executable-contract work, followed by documentation, maintainability cleanup, and model
-    experimentation.
+    fail-closed omission. Focused and full verification passed. **Item 5 completed 2026-07-16:**
+    `seat_contract.py` now drives rendered seat instructions and runtime validation; `CONTRACTS.md`
+    assigns each executable invariant one owner; the protocol and agent layers defer to those owners;
+    and `check_contracts` catches all confirmed drift cases. Verdict-write failure is now distinct
+    from earlier review failure. Full verification passed (`PASS: 223   FAIL: 0`). Resume with item 6,
+    the repository documentation audit, followed by maintainability cleanup and model experimentation.
 
 ## Suggested skills
 

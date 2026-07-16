@@ -81,5 +81,5 @@ fi
 ## Notes
 
 - This command never writes — not a `.bak` repair, not a stale-marker cleanup, nothing.
-- It shows **machine state only**, not the last verdict text — that was already shown in the
-  transcript when the run produced it, and the files are on disk if you want to read them directly.
+- It shows **machine state only**, not the last verdict text. Completed delivery reports only the
+  durable artifact filename; `panel-review:result <ID>` is the read-only verdict retrieval path.

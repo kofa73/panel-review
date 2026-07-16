@@ -11,7 +11,7 @@
     {
       "name": "panel-review",
       "description": "Three-way symmetric BLIND debate across Claude + OpenAI Codex (GPT) + Google Gemini (agy CLI), via explicit start/status/resume/continue/result/discard subcommands.",
-      "version": "1.0.10",
+      "version": "1.0.11",
       "author": {
         "name": "Kofa"
       },

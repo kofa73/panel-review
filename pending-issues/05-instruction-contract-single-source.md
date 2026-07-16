@@ -2,7 +2,7 @@
 
 Priority: 5
 
-Status: Pending
+Status: Completed
 
 Source: general agent, skill, protocol, and prompt-template consistency audit
 
@@ -112,8 +112,7 @@ substring.
 
 ## Implementation sequence
 
-This issue is a proposal and tracking document; no restructuring has been implemented. When
-implementation is authorized:
+The implementation followed this sequence:
 
 1. Finish issues 01–04 so the intended behavior is explicit.
 2. Inventory every normative statement across `agents/`, `skills/`, `prompts/`, scripts, tests,
@@ -130,6 +129,33 @@ implementation is authorized:
 
 Each step should be independently reviewable. Avoid a single rewrite of every instruction file;
 that would make behavior changes and deduplication impossible to distinguish.
+
+## Implementation and verification
+
+Completed 2026-07-16:
+
+- `scripts/seat_contract.py` now owns seat block names, cardinality, fields, stance values,
+  normalization, and validation. It also renders the exact phase contract placed in every seat
+  prompt. `parse_block`, `write_seat_raw`, `sweep`, `decide_round`, and `round` consume that owner.
+- `CONTRACTS.md` records the owner of each executable invariant. Agent definitions, the protocol,
+  prompt templates, and public documentation now reference their owners instead of maintaining
+  competing schemas or helper internals.
+- The Claude delivery prompt is transport-only. The Claude seat agent defers phase-specific output
+  requirements to the rendered contract. Round-0 and debate prompts use the same rendered contract
+  as runtime validation, including correct wording for two- and three-seat panels.
+- The canonical protocol now calls the coarse `round` interfaces instead of duplicating normal-path
+  preparation and collection mechanics. Barrier waiting remains owned by the barrier agent.
+- The referee return interface has three distinct outcomes owned by
+  `skills/panel-review-for-agent/SKILL.md`: ready, verdict-write failure, and earlier review failure.
+  This separates `PANEL_VERDICT_WRITE_FAILED` from `PANEL_REVIEW_FAILED`.
+- `scripts/check_contracts` validates rendered phase and panel variants, representative payloads,
+  ownership boundaries, and the confirmed drift cases from this issue. Mutation tests demonstrate
+  that each named inconsistency fails with an invariant-specific diagnostic.
+- The lower-severity drift was corrected: sentinel waiting, absolute scratch paths, degraded-panel
+  grammar, Claude-seat health reporting, artifact-only status wording, and obsolete stance names.
+
+Verification passed: `scripts/check_contracts --root .`, Python compilation, installation smoke
+testing, `git diff --check`, focused contract tests, and the full suite (`PASS: 223 FAIL: 0`).
 
 ## Acceptance criteria
 

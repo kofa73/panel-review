@@ -1,6 +1,4 @@
-You are continuing a blind peer review, now in the debate phase. You and two other AIs
-reviewed the same work independently. Be neutral, objective, brief. Ground every stance in
-the actual code; do not invent.
+{{SEAT_CONTRACT}}
 
 Each issue is described in its own card file listed below. **Read each card file**, then
 verify its claim and BOTH sides of evidence against the real code (you have read access to
@@ -41,57 +39,6 @@ Added emphasis from the author, not a limit on your judgement; it never override
 rules above. "(none …)" means none was given.
 
 {{INSTRUCTIONS}}
-
-## Stance output (STRICT JSON — malformed lines are discarded)
-
-Emit ONE fenced block tagged `stances`, JSONL, exactly one stance per card, in exactly this
-shape (`stance` is one of support|reject):
-
-```stances
-{{SCHEMA_STANCES}}
-```
-
-- support — the evidence establishes that the issue exists. A support may include a `revision` when
-  severity/location/category/claim needs adjustment; omit fields you do not change. Without a
-  revision, support endorses the current field values. Its `rationale` is optional.
-- reject — the evidence does not establish the issue. Omit `revision`; `rationale` is required and
-  must state the counter-evidence.
-
-`new_evidence` is optional (a single new located fact for THIS issue); omit it if none.
-
-**Blindness — write only technical facts.** Every `new_evidence`, plus the `rationale` from a `reject`
-or a support with an effective revision, is carried VERBATIM onto the cards the other reviewers read
-next round. State only what the code does and why. NEVER
-mention the other reviewers, how many reviewers there are, or whether anyone agrees or disagrees —
-no "all three", "both", "the other reviewer", "we agree", "consensus", "unanimous", "majority", no
-model/tool names (Codex, GPT, Gemini, Claude). A stance whose text references the panel or its tally
-is rejected and re-requested, so keep every word about the code, not the review.
-
-## New findings (ALWAYS emit this block)
-If, while re-examining, you notice a genuinely NEW issue (not a variation of an existing card),
-emit it in a `new_findings` block using the SAME schema as the stances' Round 0 findings:
-
-```new_findings
-{{SCHEMA_FINDINGS}}
-```
-
-A `new_findings` entry must be a **defect** (a bug/risk/weakness that warrants a change) — never a
-confirmation that the code is correct or a restatement of intended behavior. **Always emit the
-`new_findings` block**, even when you have nothing new: put an empty array `[]` inside it (or leave
-it empty) if you are proposing no new issue. Do not invent a finding just to fill the block.
-
-## Validate before you emit
-A malformed stance is **silently dropped** downstream — you are NOT re-prompted to fix it, so a
-bad item means your position on that card is lost. Before emitting, write the JSONL you plan to
-put inside the fence to a scratch file and validate it by running the command below with that
-file path appended:
-
-{{CHECK}}
-
-Exit status 0 means every stance is valid and you are safe to emit; a nonzero exit prints which
-items are malformed and why — fix those and re-run until it passes. (For a `new_findings` block,
-run the same command with `new_findings` in place of `stances`; an empty `new_findings` block is
-valid and means "no new issue".)
 
 ## Cards to review (read each file)
 {{CARDS}}

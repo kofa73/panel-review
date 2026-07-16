@@ -46,8 +46,8 @@ and spawned you with, in your prompt:
   all-low finding set (default `false`). On a `mode=resume` dispatch the human already opted in, so
   you always proceed to the debate loop regardless of this value.
 
-**Persist the synthesized verdict and return only `PANEL_VERDICT_READY id=<id>`.** The verdict body
-must not enter the main conversation.
+**Persist the synthesized verdict and return one fixed status stub.** The verdict body must not
+enter the main conversation.
 
 ## Load only the active protocol phase
 
@@ -90,9 +90,11 @@ longer present.
 ## Return contract (CRITICAL)
 
 The main conversation receives **only your fixed final return value**:
-`PANEL_VERDICT_READY id=<id>` after successful artifact persistence, or
-`PANEL_VERDICT_WRITE_FAILED id=<id>` after a persistence failure. Never return the verdict body, raw
-seat output, card text, or per-round transcripts.
+`PANEL_VERDICT_READY id=<id>` after successful artifact persistence,
+`PANEL_VERDICT_WRITE_FAILED id=<id>` after a persistence failure, or
+`PANEL_REVIEW_FAILED id=<id>` after an earlier review or orchestration failure. Never return the
+verdict body, raw seat output, card text, or per-round transcripts. Leave the run state intact after
+either failure so the main conversation can report it and a later `panel-review:resume` can recover.
 
 ## Non-negotiables
 
