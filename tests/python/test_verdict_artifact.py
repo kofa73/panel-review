@@ -1,9 +1,11 @@
 """Black-box coverage for durable verdict writing and validated retrieval."""
 
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
+import tempfile
 import unittest
 import uuid
 
@@ -11,6 +13,8 @@ import uuid
 ROOT = Path(__file__).resolve().parents[2]
 WRITE_ARTIFACT = ROOT / "scripts" / "write_verdict_artifact"
 READ_ARTIFACT = ROOT / "scripts" / "read_verdict_artifact"
+CLEANUP = ROOT / "scripts" / "cleanup"
+DISCARD = ROOT / "scripts" / "discard"
 
 
 class VerdictArtifactTest(unittest.TestCase):
@@ -55,13 +59,14 @@ class VerdictArtifactTest(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def write_artifact(self, *extra):
+    def write_artifact(self, *extra, env=None):
         return subprocess.run(
             [str(WRITE_ARTIFACT), "--id", self.run_id, *extra],
             input=self.body,
             text=True,
             capture_output=True,
             check=False,
+            env=env,
         )
 
     def read_artifact(self, *extra):
@@ -74,6 +79,11 @@ class VerdictArtifactTest(unittest.TestCase):
 
     def deliver_artifact(self, *extra):
         return self.read_artifact("--delivery", *extra)
+
+    def default_lifecycle_env(self):
+        env = os.environ.copy()
+        env.pop("PANEL_REVIEW_KEEP_TMP", None)
+        return env
 
     def test_finished_artifact_is_validated_and_reader_emits_only_body(self):
         written = self.write_artifact()
@@ -104,6 +114,81 @@ class VerdictArtifactTest(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, f"Done. Final report: /tmp/{self.run_id}.md\n")
+
+    def test_unavailable_worktree_cache_does_not_block_artifact_delivery(self):
+        with tempfile.TemporaryDirectory() as workdir:
+            manifest_path = self.run_dir / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["workdir"] = workdir
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            (Path(workdir) / ".panel-review").write_text(
+                "not a writable cache directory", encoding="utf-8"
+            )
+
+            written = self.write_artifact()
+            delivered = self.deliver_artifact()
+
+        self.assertEqual(written.returncode, 0, written.stderr)
+        self.assertEqual(delivered.returncode, 0, delivered.stderr)
+        self.assertEqual(delivered.stdout, f"Done. Final report: /tmp/{self.run_id}.md\n")
+
+    def test_durable_write_failure_leaves_resumable_state_intact(self):
+        with tempfile.TemporaryDirectory() as workdir, tempfile.TemporaryDirectory() as mockbin:
+            marker = Path(workdir) / ".panel-review" / self.run_id
+            marker.mkdir(parents=True)
+            (marker / ".panel-run").write_text(self.run_id, encoding="utf-8")
+            failing_mktemp = Path(mockbin) / "mktemp"
+            failing_mktemp.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+            failing_mktemp.chmod(0o755)
+            env = os.environ.copy()
+            env["PATH"] = f"{mockbin}:{env['PATH']}"
+
+            result = self.write_artifact(env=env)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertTrue(self.run_dir.is_dir())
+            self.assertTrue(marker.is_dir())
+            self.assertFalse(self.artifact.exists())
+
+    def test_cleanup_leaves_exactly_the_durable_delivery_artifact(self):
+        self.assertEqual(self.write_artifact().returncode, 0)
+        with tempfile.TemporaryDirectory() as workdir:
+            marker = Path(workdir) / ".panel-review" / self.run_id
+            marker.mkdir(parents=True)
+            (marker / ".panel-run").write_text(self.run_id, encoding="utf-8")
+
+            result = subprocess.run(
+                [str(CLEANUP), "--id", self.run_id, "--workdir", workdir],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=self.default_lifecycle_env(),
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(self.run_dir.exists())
+            self.assertTrue(self.artifact.is_file())
+            self.assertEqual(list(Path(workdir).glob(".panel-review/verdict-*.md")), [])
+
+    def test_discard_leaves_exactly_the_durable_delivery_artifact(self):
+        self.assertEqual(self.write_artifact().returncode, 0)
+        with tempfile.TemporaryDirectory() as workdir:
+            marker = Path(workdir) / ".panel-review" / self.run_id
+            marker.mkdir(parents=True)
+            (marker / ".panel-run").write_text(self.run_id, encoding="utf-8")
+
+            result = subprocess.run(
+                [str(DISCARD), "--workdir", workdir],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=self.default_lifecycle_env(),
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(self.run_dir.exists())
+            self.assertTrue(self.artifact.is_file())
+            self.assertEqual(list(Path(workdir).glob(".panel-review/verdict-*.md")), [])
 
     def test_continuable_artifact_delivery_adds_only_leftover_status(self):
         self.write_index("contested")

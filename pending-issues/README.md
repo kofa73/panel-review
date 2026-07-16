@@ -12,7 +12,7 @@ Completing an item should update its status here, its issue file, and the corres
 | Priority | Status | Issue | Why it is ordered here |
 |---:|---|---|---|
 | 1 | Completed | [Define and enforce stance semantics](01-stance-contract-semantics.md) | Replaced the contradictory three-name contract with support/reject plus orthogonal revisions. |
-| 2 | Pending | [Remove the legacy worktree verdict dependency](02-artifact-only-verdict-persistence.md) | A redundant write can prevent delivery of the durable artifact. |
+| 2 | Completed | [Remove the legacy worktree verdict dependency](02-artifact-only-verdict-persistence.md) | Removed the redundant write so only the durable artifact controls delivery. |
 | 3 | Pending | [Correct the referee mutation contract](03-referee-mutation-contract.md) | A top-level agent instruction contradicts valid state transitions. |
 | 4 | Pending | [Require both Claude debate blocks](04-claude-debate-output-contract.md) | The Claude agent permits output rejected by its delivery path. |
 | 5 | Pending | [Establish one source of truth for executable instructions](05-instruction-contract-single-source.md) | Cross-layer duplication has already produced several contradictory contracts. |

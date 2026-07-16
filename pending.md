@@ -694,9 +694,12 @@ There are no staged changes. No commit or push was made.
     authoritative priority order for all remaining work. **Item 1 completed 2026-07-16:** stance is
     now the two-value existence decision `support`/`reject`; optional revisions are orthogonal to
     support, exact no-ops are inert, reject revisions are discarded, and retained legacy stance
-    names fail explicitly. Full verification passed (`PASS: 216   FAIL: 0`). Resume with item 2;
-    items 2-5 are the remaining correctness and contract work, followed by documentation,
-    maintainability cleanup, and model experimentation.
+    names fail explicitly. Full verification passed (`PASS: 216   FAIL: 0`). **Item 2 completed
+    2026-07-16:** the referee now writes only `/tmp/<ID>.md`; the obsolete worktree verdict write and
+    its special cleanup path are gone, while failed durable writes retain resumable state. Full
+    verification passed (`PASS: 218   FAIL: 0`). Resume with item 3; items 3-5 are the remaining
+    correctness and contract work, followed by documentation, maintainability cleanup, and model
+    experimentation.
 
 ## Suggested skills
 

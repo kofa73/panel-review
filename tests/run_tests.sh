@@ -95,6 +95,8 @@ assert_file_contains "protocol verifies + restores the tree" 'repo_guard" verify
 # main-context commands validate the artifact through one deterministic reader mode.
 assert_file_contains "referee returns only the artifact-ready stub" 'PANEL_VERDICT_READY id=<id>' "$root/agents/panel-review-referee.md"
 assert_file_contains "protocol requires durable artifact delivery" 'Artifact persistence is required for delivery' "$protocol"
+assert_file_not_contains "protocol has no legacy worktree verdict path" 'verdict-$id.md' "$protocol"
+assert_file_not_contains "cleanup has no legacy verdict special case" 'verdict-$id.md' "$SC/cleanup"
 assert_file_contains "start closes post-persistence cleanup crash window" 'artifact persistence succeeded but the referee' "$root/skills/start/SKILL.md"
 for command in start resume continue; do
   skill="$root/skills/$command/SKILL.md"

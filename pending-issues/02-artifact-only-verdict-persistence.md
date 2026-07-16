@@ -2,7 +2,7 @@
 
 Priority: 2
 
-Status: Pending
+Status: Completed
 
 Source: artifact-only delivery audit
 
@@ -53,3 +53,22 @@ recommended result is to remove it.
   one delivery artifact.
 - Run `tests/python/test_verdict_artifact.py`, related command tests, the full suite, and
   `git diff --check`.
+
+## Implementation and verification
+
+Completed 2026-07-16:
+
+- Removed the worktree verdict write from normal completion, the Round-0 low-only gate, and the
+  post-debate low-only gate. Each path now writes only `/tmp/<ID>.md` through
+  `write_verdict_artifact` before deciding whether to clean up or retain the run.
+- Removed `cleanup`'s legacy `verdict-<ID>.md` deletion. Its general removal of the empty
+  `.panel-review/` base remains unchanged.
+- Added protocol regressions that reject any return of the legacy verdict path.
+- Added black-box coverage proving that an unusable worktree cache does not block artifact writing or
+  retrieval, a durable-write failure preserves canonical state and the worktree marker, and cleanup
+  and discard leave only the durable delivery artifact.
+- Existing tests continue to cover normal completion, Round-0 and later low-only snapshots,
+  explicitly finalized low-only reports, continuable leftovers, resume epoch validation, and
+  `result` retrieval.
+- Focused artifact tests passed: 21 tests.
+- Full `./tests/run_tests.sh` passed: `PASS: 218   FAIL: 0`.

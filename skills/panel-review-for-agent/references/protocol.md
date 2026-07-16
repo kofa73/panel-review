@@ -487,10 +487,11 @@ set rarely changes the outcome and burns tokens on confirmations. Instead:
 1. **Synthesize the verdict now** over the Round-0 findings. They are **not yet peer-reviewed** —
    list the low items under **Minor** and add a Process note: *"Debate skipped — Round 0 surfaced
    only low-severity findings; re-run / continue to debate them."* Show every finding as usual.
-2. **Persist** it (`write_card … verdict-$id.md`) **but do NOT clean up.** Leave `/tmp/<id>` and the
-   cards intact so the human can opt into the debate via a `mode=resume` dispatch. Write the durable
-   copy with `write_verdict_artifact --id $id < verdict.new.md`. Artifact persistence is required for
-   delivery: on failure return only `PANEL_VERDICT_WRITE_FAILED id=<id>` and leave the run intact.
+2. **Persist** the durable report with
+   `write_verdict_artifact --id $id < /tmp/$id/verdict.new.md`, but **do NOT clean up.** Leave
+   `/tmp/<id>` and the cards intact so the human can opt into the debate via a `mode=resume`
+   dispatch. Artifact persistence is required for delivery: on failure return only
+   `PANEL_VERDICT_WRITE_FAILED id=<id>` and leave the run intact.
 3. After the durable write succeeds, return only `PANEL_VERDICT_READY id=<id>`. The launching command
    validates the incomplete artifact plus canonical low-only state, presents its snapshot pointer,
    and asks the human whether to debate anyway. On "yes" it re-dispatches you in `mode=resume` (which
@@ -772,9 +773,9 @@ the common one-batch shape.
     that whittles the open set down to all-low doesn't keep burning tokens. Then, exactly as the
     Round-0 gate: synthesize the verdict so far (open low items under **Minor**, with a Process note
     *"Debate stopped early — only low-severity findings remained open; continue/resume to debate
-    them."*), persist it (`write_card … verdict-$id.md`) and the durable copy
-    (`write_verdict_artifact --id $id < verdict.new.md`), and leave `/tmp/<id>` and the cards intact.
-    Artifact persistence is required for delivery: on failure return only
+    them."*), persist the durable report
+    (`write_verdict_artifact --id $id < /tmp/$id/verdict.new.md`), and leave `/tmp/<id>` and the cards
+    intact. Artifact persistence is required for delivery: on failure return only
     `PANEL_VERDICT_WRITE_FAILED id=<id>` and keep the run. On success return only
     `PANEL_VERDICT_READY id=<id>`. The launching command validates the low-only snapshot, presents its
     filename, and asks whether to keep debating; on "yes" it re-dispatches you in `mode=resume`, which
@@ -935,15 +936,9 @@ re-read those state files separately. Present **everything**, surfacing origins 
   the start-of-review snapshot") — the review continued, but a seat broke the read-only contract
 ```
 
-Before cleanup, persist the final verdict so a crash after cleanup but before return
-does not lose the result:
-
-```bash
-"$SC/write_card" "$workdir/.panel-review/verdict-$id.md" < /tmp/$id/verdict.new.md
-```
-
-Also write the durable copy that outlives cleanup/discard. Artifact persistence is required for
-delivery; if it fails, return only `PANEL_VERDICT_WRITE_FAILED id=<id>` and leave the run intact:
+Before cleanup, persist the final verdict to the durable artifact that outlives cleanup/discard.
+Artifact persistence is required for delivery; if it fails, return only
+`PANEL_VERDICT_WRITE_FAILED id=<id>` and leave the run intact:
 
 ```bash
 "$SC/write_verdict_artifact" --id "$id" < /tmp/$id/verdict.new.md
