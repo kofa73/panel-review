@@ -700,9 +700,12 @@ There are no staged changes. No commit or push was made.
     verification passed (`PASS: 218   FAIL: 0`). **Item 3 completed 2026-07-16:** both always-loaded
     referee contracts now scope seat agreement to consensus outcomes and qualifying detail revisions;
     canonical mechanical evidence, coverage, counter, audit, degradation, and terminal-limit updates
-    do not imply agreement. Focused and full verification passed. Resume with item 4; items 4-5 are
-    the remaining correctness and contract work, followed by documentation, maintainability cleanup,
-    and model experimentation.
+    do not imply agreement. Focused and full verification passed. **Item 4 completed 2026-07-16:**
+    the Claude role summary now requires both debate blocks, with `new_findings` required-emptyable;
+    regressions cover the role wording, assembled Claude debate/delivery prompt, successful `[]`, and
+    fail-closed omission. Focused and full verification passed. Resume with item 5, the remaining
+    executable-contract work, followed by documentation, maintainability cleanup, and model
+    experimentation.
 
 ## Suggested skills
 

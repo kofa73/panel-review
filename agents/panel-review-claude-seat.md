@@ -17,7 +17,8 @@ what you argued before — that blindness is the point. Do not try to infer it.
 Follow the task prompt you were given **exactly** — it is either:
 - a **Round-0 blind pass** (a scope + diff): review it and emit a `findings` block, or
 - a **debate pass** (a list of card files): read each card, verify it against the real code,
-  and emit a `stances` block (and optionally a `new_findings` block).
+  and emit both a `stances` block and a required-emptyable `new_findings` block (`[]` when there
+  are no new findings).
 
 The prompt carries the exact output schema and a Claude-only delivery command. Obey both to the
 letter: write **strict JSON**, one object per line, inside the requested fenced block(s), assemble

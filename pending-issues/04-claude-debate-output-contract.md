@@ -2,7 +2,7 @@
 
 Priority: 4
 
-Status: Pending
+Status: Completed
 
 Source: former `pending.md` item 12
 
@@ -38,3 +38,19 @@ shared debate/delivery contract rather than being copied into the agent file.
 - Verify a no-new-findings Claude response succeeds with `[]`, while a missing block fails closed.
 - Run `tests/python/test_write_seat_raw.py`, relevant round/protocol tests, the full suite, and
   `git diff --check`.
+
+## Completed implementation
+
+Completed 2026-07-16.
+
+- The Claude seat role summary now requires both debate blocks and explicitly uses `[]` when
+  `new_findings` is empty.
+- The shell contract regression rejects the former optional wording and requires the two-block role
+  summary.
+- The round regression checks that an assembled Claude debate prompt contains both output sections
+  and the single-write delivery contract.
+- Existing writer regressions verify that `[]` succeeds and an omitted `new_findings` block fails
+  closed.
+
+Duplicate-fence validation was intentionally left out of scope. This item corrects the contradictory
+Claude instruction; it does not broaden the raw-block parser contract.

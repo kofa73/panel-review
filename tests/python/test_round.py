@@ -151,7 +151,15 @@ class RoundTest(unittest.TestCase):
         prepared_result = self.run_round("prepare-debate", self.run_id, "claude", "codex")
         self.assertEqual(prepared_result.returncode, 0, prepared_result.stderr)
         prepared = json.loads(prepared_result.stdout)
-        self.assertIn("CLAUDE_SEAT_RAW_WRITTEN", Path(prepared["claude_prompt"]).read_text(encoding="utf-8"))
+        claude_prompt = Path(prepared["claude_prompt"]).read_text(encoding="utf-8")
+        self.assertIn("## Stance output", claude_prompt)
+        self.assertIn("## New findings (ALWAYS emit this block)", claude_prompt)
+        self.assertIn("For a debate response, put both", claude_prompt)
+        self.assertIn(
+            "`stances` and `new_findings` in that file and invoke this command once",
+            claude_prompt,
+        )
+        self.assertIn("CLAUDE_SEAT_RAW_WRITTEN", claude_prompt)
         stance = json.dumps({"id": "i1", "stance": "support", "rationale": "confirmed"})
         raw = f"```stances\n{stance}\n```\n```new_findings\n[]\n```\n"
         claude_write = subprocess.run(

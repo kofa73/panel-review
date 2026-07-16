@@ -258,6 +258,12 @@ assert_file_not_contains "Claude seat does not prefer multi-symbol lookup" 'one 
 assert_file_contains "Claude seat avoids redundant reads" 'Avoid redundant evidence reads' "$root/agents/panel-review-claude-seat.md"
 assert_file_contains "Claude seat stops after sufficient evidence" 'Stop exploratory calls once the output is supported' "$root/agents/panel-review-claude-seat.md"
 assert_file_contains "Claude seat has no hard call cap" 'hard tool-call' "$root/agents/panel-review-claude-seat.md"
+assert_file_contains "Claude seat requires both debate blocks" 'emit both a `stances` block and a required-emptyable `new_findings` block' "$root/agents/panel-review-claude-seat.md"
+claude_debate_summary="$(sed -n '/^- a \*\*debate pass\*\*/,/^$/p' "$root/agents/panel-review-claude-seat.md")"
+case "$claude_debate_summary" in
+  *optional*) bad "Claude seat does not describe either debate block as optional" ;;
+  *) ok "Claude seat does not describe either debate block as optional" ;;
+esac
 assert_file_contains "Claude delivery combines both debate blocks" 'For a debate response, put both' "$root/prompts/claude_delivery.tmpl"
 assert_file_contains "Claude delivery validates and writes both debate blocks once" '`stances` and `new_findings` in that file and invoke this command once' "$root/prompts/claude_delivery.tmpl"
 assert_file_contains "Claude delivery replaces redundant per-block validation" "the task prompt's separate per-block pre-emit validation command" "$root/prompts/claude_delivery.tmpl"
