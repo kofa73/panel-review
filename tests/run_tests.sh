@@ -28,6 +28,11 @@ assert_eq() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "expected [$2] got
 assert_exit() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "want exit $2 got $3"; fi; }
 assert_file_contains() { if grep -Fq -- "$2" "$3"; then ok "$1"; else bad "$1" "missing [$2] in $3"; fi; }
 assert_file_not_contains() { if grep -Fq -- "$2" "$3"; then bad "$1" "unexpected [$2] in $3"; else ok "$1"; fi; }
+assert_file_contains_text() {
+  local normalized
+  normalized="$(tr '\n' ' ' < "$3" | sed 's/[[:space:]][[:space:]]*/ /g')"
+  case "$normalized" in *"$2"*) ok "$1";; *) bad "$1" "missing normalized text [$2] in $3";; esac
+}
 section() { echo; echo "## $1"; }
 
 # ---------------------------------------------------------------------------
@@ -90,6 +95,21 @@ assert_file_contains "debate template carries the scratch sentinel"     '{{SCRAT
 assert_file_contains "protocol passes SCRATCH to assemble" 'SCRATCH=/tmp/$id/scratch.txt' "$protocol"
 assert_file_contains "protocol snapshots the tracked tree" 'repo_guard" snapshot' "$protocol"
 assert_file_contains "protocol verifies + restores the tree" 'repo_guard" verify' "$protocol"
+
+# Both always-loaded referee contracts must distinguish agreement-gated decisions
+# from mechanical updates while leaving transition details to the canonical protocol.
+for contract in \
+  "$root/agents/panel-review-referee.md" \
+  "$root/skills/panel-review-for-agent/SKILL.md"
+do
+  label="${contract#"$root/"}"
+  assert_file_contains_text "$label scopes seat agreement to canonical decisions" \
+    'Seat agreement controls consensus outcomes and detail revisions where required by the canonical transition rules.' "$contract"
+  assert_file_contains_text "$label permits canonical mechanical updates" \
+    'Mechanical evidence, coverage, counter, audit, degradation, and terminal-limit updates follow those rules and do not imply agreement.' "$contract"
+  assert_file_not_contains "$label has no broad mutation prohibition" \
+    'mutate issue records' "$contract"
+done
 
 # Final-report delivery is artifact-only: the referee returns a fixed stub and the
 # main-context commands validate the artifact through one deterministic reader mode.

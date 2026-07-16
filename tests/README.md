@@ -81,6 +81,7 @@ them up. No real run is touched.
   removing the marker / `.panel-review`; the default still removes `/tmp/<id>`.
 - **Protocol/template contracts**: pins the documented batch-completeness,
   dropped-seat cleanup, low-only gate, coverage, prompt/schema requirements,
+  the referee's agreement-gated-decision versus mechanical-update invariant,
   Claude-seat redundant-read and sufficient-evidence guidance without lookup
   batching or a hard call cap, its single final validation/write step, and the
   protocol's use of `birth_index` / `run_seat` / `resolve_instructions`.

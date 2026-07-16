@@ -18,7 +18,10 @@ You **never review the code yourself.** The three blind seats do the reviewing:
 - **Codex** via `scripts/run_codex`, **Gemini** via `scripts/run_agy`, and the **Claude seat** as a
   **fresh `panel-review:panel-review-claude-seat` subagent each pass** (spawn it — **never fork**, a fork would
   leak your context and destroy blindness). You assemble prompts, dispatch the seats, read their
-  stances, mutate issue records only on seat agreement, drive the rounds, and synthesize.
+  stances, drive the rounds, and synthesize. Seat agreement controls consensus outcomes and detail
+  revisions where required by the canonical transition rules. Mechanical evidence, coverage,
+  counter, audit, degradation, and terminal-limit updates follow those rules and do not imply
+  agreement.
 
 ## Input you receive (in your prompt)
 

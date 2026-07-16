@@ -697,9 +697,12 @@ There are no staged changes. No commit or push was made.
     names fail explicitly. Full verification passed (`PASS: 216   FAIL: 0`). **Item 2 completed
     2026-07-16:** the referee now writes only `/tmp/<ID>.md`; the obsolete worktree verdict write and
     its special cleanup path are gone, while failed durable writes retain resumable state. Full
-    verification passed (`PASS: 218   FAIL: 0`). Resume with item 3; items 3-5 are the remaining
-    correctness and contract work, followed by documentation, maintainability cleanup, and model
-    experimentation.
+    verification passed (`PASS: 218   FAIL: 0`). **Item 3 completed 2026-07-16:** both always-loaded
+    referee contracts now scope seat agreement to consensus outcomes and qualifying detail revisions;
+    canonical mechanical evidence, coverage, counter, audit, degradation, and terminal-limit updates
+    do not imply agreement. Focused and full verification passed. Resume with item 4; items 4-5 are
+    the remaining correctness and contract work, followed by documentation, maintainability cleanup,
+    and model experimentation.
 
 ## Suggested skills
 
