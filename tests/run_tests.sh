@@ -153,7 +153,7 @@ printf '```stances\n%s\n```\n' "$(cat "$root/prompts/schema/stances.txt")" > "$T
 "$SC/parse_block" stances "$TMP/frag.stances.txt" x >/dev/null 2>&1
 assert_exit "stances schema fragment validates through parse_block" 0 "$?"
 # field-shuffled variant: an unknown revision subfield is normalized away, not rejected.
-printf '```stances\n%s\n```\n' '{"id":"i1","stance":"support_with_revision","revision":{"bogus_field":"x","severity":"high"}}' > "$TMP/frag.shuffled.txt"
+printf '```stances\n%s\n```\n' '{"id":"i1","stance":"support","revision":{"bogus_field":"x","severity":"high"}}' > "$TMP/frag.shuffled.txt"
 shuf_out="$("$SC/parse_block" stances "$TMP/frag.shuffled.txt" x 2>/dev/null)"
 assert_exit "field-shuffled stance still validates (normalized)" 0 "$?"
 case "$shuf_out" in *bogus_field*) bad "unknown revision subfield normalized away" "leaked: $shuf_out";; *) ok "unknown revision subfield normalized away";; esac

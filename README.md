@@ -297,16 +297,20 @@ Blindness is the whole point, and two choices enforce it:
 An issue's **state** follows the **stances** the seats take on it, never whether an evidence array
 is populated. Two small vocabularies drive everything below.
 
-Each engaged seat takes one of three **stances** on an issue:
+Each engaged seat takes one of two **stances** on an issue:
 
-- `support` — valid as stated.
-- `support_with_revision` — valid, but a detail (severity, claim, or location) should change.
-- `reject` — not valid.
+- `support` — the issue exists. It may include a `revision` proposing different severity, claim,
+  category, or location values; without one, it endorses the current values.
+- `reject` — the issue is not valid. It requires counter-evidence in `rationale`; any `revision` is
+  discarded because a rejected issue has no fields to revise.
+
+Revision fields equal to the current issue are no-ops. Other revision values are adopted only under
+the convergence rules below.
 
 An issue occupies one of five **states**:
 
 - **open** — not yet settled; carries into the next round.
-- **accepted** — settled: every engaged seat supported it (`support` or `support_with_revision`).
+- **accepted** — settled: every engaged seat supported it.
 - **rejected** — settled: every engaged seat rejected it.
 - **contested** — still split at the round limit, but reviewed (≥1 round with the 2-seat quorum) — handed to you.
 - **unresolved** — unsettled at the round limit and never reviewed (the 2-seat quorum was never met) — handed to you.
@@ -314,11 +318,11 @@ An issue occupies one of five **states**:
 Each round, for the seats that engaged (returned a parseable stance — at least 2 are needed to
 settle an issue), the state advances:
 
-- supported by all seats (stance: `support` / `support_with_revision`) → **accepted**
+- supported by all seats (stance: `support`) → **accepted**
 - rejected by all seats (stance: `reject`) → **rejected**
 - mix stances → stays **open** and carries to the next round; at the per-issue threshold or global ceiling
   it becomes **contested** (had ≥1 review pass) or **unresolved** (none)
-- an issue's *existence* can be **accepted** while a *detail* (severity / claim / location) is
+- an issue's *existence* can be **accepted** while a *detail* (severity / claim / category / location) is
   **contested** — flagged for you
 - a genuinely new finding that emerges mid-review is treated like a Round-0 finding, not penalized
   for arriving late — though one raised near the global ceiling may run out of rounds to reach the
@@ -369,7 +373,7 @@ fenced block).
 | `run_seat` | Dispatch one **CLI** seat (Codex or Gemini) for a tag, parse the block, and print the parse status (0 engaged · 4 no block · 5 malformed). **It does not repair.** Salvaging a slipped CLI block — a malformed fence, or a real review the seat forgot to fence — is the **referee's** job, not a script's: the seat that wrote the block has exited, so any "repair" re-dispatch is a fresh cold model whose only input is the raw file the referee already has, and deciding *"real review or down-seat stub?"* is an LLM judgment, not a grep heuristic. On a 4/5 the referee reads that one CLI seat's raw and rewrites it well-formed (see "Salvage" in the referee protocol); debate salvage is installed through `round salvage-debate`, which requires the canonical `.salvaged` side path and never overwrites the original. The Claude seat instead writes through `write_seat_raw`, which validates before installation and fails closed. **CLI seats are long-running** (minutes; `run_agy` up to ~34 min across its two 15-min model attempts), longer than the Bash tool's foreground timeout (2 min default, 10 min max), so the seats run **in the background**, never foreground (a foreground dispatch is killed mid-pass and the empty raw file reads as a down seat) |
 | `await_seats` | **Barrier** over the CLI seats: runs them all concurrently (each through `run_seat`, so dispatch + parse are unchanged — neither repairs) inside **one** job, waits for every seat with a configurable per-seat outer timeout (`--seat-timeout`, default 2400s — the backstop `run_codex` otherwise lacks), writes each seat's final status plus one combined `--done` summary, and exits. It is run by the **`panel-review-cli-barrier` Agent**, not backgrounded by the referee directly: a background **Bash** job does **not** re-invoke the sub-agent that launched it (its completion is routed to the root session and dropped, stalling the referee), whereas a background **Agent** reliably wakes its spawner. So a pass spawns two background Agents — the CLI barrier and the Claude seat — for two reliable wakes instead of the per-seat polling loop that made the referee burn turns re-reading its whole context |
 | `panel-review-cli-barrier` (agent) | Thin, non-reviewing helper subagent the referee spawns **background** each pass: it `bash`-runs the `await_seats` command the referee wrote — wrapped so `await_seats`' exit code is always written to a **completion sentinel** — then watches that sentinel (not the `--done` file, which exists only on a clean run) via bounded foreground waits in its own tiny context, and returns once `await_seats` has fully exited. Its return is the event that wakes the referee; the sentinel's exit code tells the referee whether the seats actually ran (`0`) or hit a setup error / wedged (nonzero / absent → CLI seats down for the pass, no false "settled" and no late writes). Exists solely because a background Agent — unlike a background Bash job — reliably re-invokes its spawning sub-agent |
-| `extract_block` / `parse_block` | Pull a `findings` / `stances` / `new_findings` block → validated JSONL; `parse_block` exit 4 = no block (down seat), exit 0 = a valid block (including an empty or explicit `[]` block — a legitimate "nothing", e.g. a `new_findings` with no new issue), exit 5 = malformed (content present but wholly unparseable). `parse_block --diagnose` reports *why* each item was rejected (reason + offending line) to guide the referee's salvage rewrite |
+| `extract_block` / `parse_block` | Pull a `findings` / `stances` / `new_findings` block → validated JSONL; stance parsing accepts only `support`/`reject`, normalizes optional support revisions, discards revisions attached to reject, and requires reject counter-evidence. `parse_block` exit 4 = no block (down seat), exit 0 = a valid block (including an empty or explicit `[]` block — a legitimate "nothing", e.g. a `new_findings` with no new issue), exit 5 = malformed (content present but wholly unparseable). `parse_block --diagnose` reports *why* each item was rejected (reason + offending line) to guide the referee's salvage rewrite |
 | `check_draft` | **Seat-facing** pre-emit validator, spliced into each seat prompt as `{{CHECK}}` (never called by the referee): a seat runs it on the JSONL it is about to fence so it can fix malformed items *before* emitting. A thin wrapper over `parse_block --diagnose` (same validator, no second schema to drift). Closes the silent-drop gap: `parse_block`'s normal mode discards individual malformed lines with only an unseen stderr note (it fails hard only when the *whole* block is unparseable), so a seat that emits some good and some bad items would otherwise lose the bad ones with no repair |
 | `birth_index` | Turn the referee's clustered Round-0 finding-to-issue map into the full `index.json` — assigns each issue's birth state, vetting flags, and `evaluated_by` coverage by the birth-unanimity rule (the deterministic half of clustering; the referee still owns the merge itself) |
 | `decide_round` / `decide_degraded_round` | Build normal (≥2 seats) and degraded (0–1 seat) debate payloads. Both update private `evaluated_by` coverage in the same atomic commit; the degraded path only emits terminal unresolved/contested states and eligible `fully_vetted` flags |

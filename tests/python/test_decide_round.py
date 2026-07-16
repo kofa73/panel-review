@@ -60,9 +60,8 @@ class DecideRoundTest(unittest.TestCase):
     def write_stances(self, entries):
         self.stances_path.write_text("".join(json.dumps(entry) + "\n" for entry in entries), encoding="utf-8")
 
-    def run_decide(self, *, round_number=1, configured="codex gemini claude", engaged="codex gemini claude"):
-        return subprocess.run(
-            [
+    def run_decide(self, *, round_number=1, configured="codex gemini claude", engaged="codex gemini claude", advice=None):
+        command = [
                 str(DECIDE),
                 "--id",
                 self.run_id,
@@ -74,7 +73,11 @@ class DecideRoundTest(unittest.TestCase):
                 engaged,
                 "--stances",
                 str(self.stances_path),
-            ],
+            ]
+        if advice is not None:
+            command.extend(["--advice", str(advice)])
+        return subprocess.run(
+            command,
             text=True,
             capture_output=True,
             check=False,
@@ -105,7 +108,7 @@ class DecideRoundTest(unittest.TestCase):
         self.write_run([issue("i4", rounds=1), issue("i6", rounds=1)], limits={"issue_rounds": 2, "max_rounds": 4})
         self.write_stances(
             [
-                *(stance("i4", seat, "support_with_revision", revision={"severity": "low"}) for seat in ("codex", "gemini", "claude")),
+                *(stance("i4", seat, revision={"severity": "low"}) for seat in ("codex", "gemini", "claude")),
                 stance("i6", "codex", "reject"),
                 stance("i6", "gemini"),
                 stance("i6", "claude"),
@@ -119,9 +122,9 @@ class DecideRoundTest(unittest.TestCase):
         self.write_run([issue("i1")])
         self.write_stances(
             [
-                stance("i1", "codex", "support_with_revision", revision={"severity": "low"}),
+                stance("i1", "codex", revision={"severity": "low"}),
                 stance("i1", "gemini"),
-                stance("i1", "claude", "support_with_revision", revision={"severity": "low"}),
+                stance("i1", "claude", revision={"severity": "low"}),
             ]
         )
         payload = self.payload(round_number=4)
@@ -132,17 +135,77 @@ class DecideRoundTest(unittest.TestCase):
     def test_true_unanimity_adopts_enum(self):
         self.write_stances(
             [
-                *(stance("i1", seat, "support_with_revision", revision={"severity": "low"}) for seat in ("codex", "gemini", "claude")),
+                *(stance("i1", seat, revision={"severity": "low"}) for seat in ("codex", "gemini", "claude")),
             ]
         )
         payload = self.payload()
         self.assertEqual(payload["set_state"], [{"id": "i1", "state": "accepted"}])
         self.assertEqual(payload["revise"], [{"id": "i1", "fields": {"severity": "low"}}])
 
+    def test_support_claim_revision_is_returned_for_referee_judgment(self):
+        revised_claim = "The concrete claim occurs only on the fallback path."
+        self.write_stances(
+            [
+                stance("i1", "codex", revision={"claim": revised_claim}),
+                stance("i1", "gemini"),
+                stance("i1", "claude"),
+            ]
+        )
+        advice_path = self.run_dir / "advice.json"
+
+        result = self.run_decide(advice=advice_path)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        advice = json.loads(advice_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            advice,
+            {"prose_revisions": [{"id": "i1", "proposals": [{"seat": "codex", "claim": revised_claim}]}]},
+        )
+
+    def test_effective_support_revision_promotes_its_rationale(self):
+        rationale = "The failure requires a fallback and therefore has medium impact."
+        self.write_stances(
+            [
+                stance("i1", "codex", rationale=rationale, revision={"severity": "low"}),
+                stance("i1", "gemini"),
+                stance("i1", "claude"),
+            ]
+        )
+
+        payload = self.payload()
+
+        self.assertIn(
+            {"id": "i1", "side": "contra", "point": {"location": "analysis", "assertion": rationale}},
+            payload["add_evidence"],
+        )
+
+    def test_noop_revision_and_support_rationale_are_inert(self):
+        self.write_stances(
+            [
+                stance(
+                    "i1",
+                    "codex",
+                    rationale="all three seats agree",
+                    revision={"severity": "medium", "claim": "A concrete claim."},
+                ),
+                stance("i1", "gemini"),
+                stance("i1", "claude"),
+            ]
+        )
+        advice_path = self.run_dir / "advice.json"
+
+        result = self.run_decide(advice=advice_path)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertNotIn("revise", payload)
+        self.assertNotIn("add_evidence", payload)
+        self.assertEqual(json.loads(advice_path.read_text(encoding="utf-8")), {"prose_revisions": []})
+
     def test_split_support_reject_stays_open_without_revision(self):
         self.write_stances(
             [
-                stance("i1", "codex", "support_with_revision", revision={"severity": "low"}),
+                stance("i1", "codex", revision={"severity": "low"}),
                 stance("i1", "gemini", "reject"),
                 stance("i1", "claude"),
             ]
@@ -166,6 +229,35 @@ class DecideRoundTest(unittest.TestCase):
                 self.assertEqual(result.stdout, "")
                 self.assertIn("stance-integrity violation", result.stderr)
 
+    def test_integrity_gate_rejects_removed_stance_in_retained_checkpoint(self):
+        self.write_stances(
+            [
+                stance("i1", "codex", "support_with_revision", revision={"severity": "low"}),
+                stance("i1", "gemini"),
+                stance("i1", "claude"),
+            ]
+        )
+
+        result = self.run_decide()
+
+        self.assertEqual(result.returncode, 3)
+        self.assertIn("invalid stance", result.stderr)
+        self.assertIn("support_with_revision", result.stderr)
+
+    def test_integrity_gate_rejects_retained_reject_without_rationale(self):
+        self.write_stances(
+            [
+                stance("i1", "codex", "reject", rationale=""),
+                stance("i1", "gemini", "reject"),
+                stance("i1", "claude", "reject"),
+            ]
+        )
+
+        result = self.run_decide()
+
+        self.assertEqual(result.returncode, 3)
+        self.assertIn("reject requires non-empty rationale", result.stderr)
+
     def test_dropped_seat_decides_but_withholds_fully_vetted(self):
         self.write_stances([stance("i1", "codex"), stance("i1", "claude")])
         payload = self.payload(engaged="codex claude")
@@ -185,6 +277,7 @@ class DecideRoundTest(unittest.TestCase):
                 first = stance("i1", "codex")
                 if field == "rationale":
                     first["rationale"] = value
+                    first["revision"] = {"severity": "low"}
                 else:
                     evidence = {"location": "src/file.py:2", "assertion": "the loop stops early"}
                     evidence[field] = value

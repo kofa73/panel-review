@@ -176,10 +176,11 @@ A **point**: `{"location":"file:line"|["file:line",...]|"analysis","assertion":"
 - `stances.<round>.json` — **JSONL**, one stance object per line, assembled by `round commit` from the
   active plan's complete engaged-seat checkpoints. Per line:
   ```json
-  {"id":"i3","stance":"support|support_with_revision|reject","_source":"codex","fid":"codex-1","revision":{"severity":"…","category":"…","claim":"…"},"evidence":<point>,"new_evidence":<point>}
+  {"id":"i3","stance":"support|reject","_source":"codex","fid":"codex-1","revision":{"severity":"…","location":"…","category":"…","claim":"…"},"rationale":"…","evidence":<point>,"new_evidence":<point>}
   ```
-  `id`, `stance`, `_source`, `fid` are always present; `revision`/`evidence`/`new_evidence` are
-  optional. It is a stream of objects, **not** an array — read it line-by-line (`while read` /
+  `id`, `stance`, `_source`, `fid` are always present. `revision` is optional on support and is
+  discarded from reject; reject requires a non-empty `rationale`, while support rationale is
+  optional. `evidence`/`new_evidence` are optional. It is a stream of objects, **not** an array — read it line-by-line (`while read` /
   `[json.loads(l) for l in f]`), the way `decide_round` does; `jq '.[]'` over it is wrong.
 
 **Origins are yours alone.** Keep origin seats, Round-0 agreement count, original raw wording, and
@@ -672,15 +673,18 @@ the common one-batch shape.
    convergence, **and the forced-terminal-at-limits rule**) to the open issues and emits ONE
    commit-sweep payload, carrying every `reject`/revision rationale and `new_evidence` as evidence
    **verbatim, stripped of seat identity and any tally** — that is what keeps the accumulated
-   evidence blind. Do **not** hand-build this payload or concatenate stance files: `round commit`
+   evidence blind. A support rationale is promoted only when at least one proposed revision differs
+   from the canonical issue; exact no-op revisions and their rationale do not change the card. Do
+   **not** hand-build this payload or concatenate stance files: `round commit`
    selects only complete active-plan batches and invokes `decide_round` (without mutating
    `index.json` until the complete payload is ready).
    `--configured` is the panel from `preflight`; `--engaged` is the subset that engaged this round
-   (step 8). `decide_round` **validates** the stances against `--engaged`: exactly one stance per
-   (engaged seat, open issue), no unknown/duplicate `_source`, no omissions — a violation is a hard
+   (step 8). `decide_round` **validates** the stances against `--engaged`: exactly one canonical
+   `support`/`reject` stance per (engaged seat, open issue), non-empty rationale on reject, no
+   unknown/duplicate `_source`, no omissions — a violation is a hard
    error (exit 3) and means a seat block was incomplete/garbled, so **salvage or re-dispatch that
    seat** (don't hand-edit the stances). It also runs a **blindness scan** over the free text it
-   promotes verbatim onto cards (`rationale`, `new_evidence`): a stance that names a seat, references
+   promotes verbatim onto cards (reject/effective-revision `rationale`, `new_evidence`): a stance that names a seat, references
    the other reviewers, or states a tally is a hard error (**exit 5**, no payload). Re-dispatch that
    one seat asking it to restate the **same technical substance** with no reference to other
    reviewers / their count / their agreement — a content reword (a genuine re-review by the seat),
@@ -688,8 +692,9 @@ the common one-batch shape.
    `decide_round`. Cumulative per-issue `evaluated_by` is private index metadata:
    initialize it from Round-0 engaged seats, then `decide_round`/`decide_degraded_round` include the
    update in their payload and `index commit-sweep` persists it atomically. `decide_round`
-   does **no judgment**: it never picks a winning value for the prose `claim` field, and a plain
-   `support` is read as endorsing the issue *as stated* (so an enum change is adopted only when
+   does **no judgment**: it never picks a winning value for the prose `claim` field. A `support`
+   without a revision endorses the current values; one with a revision proposes different effective
+   values, so an enum change is adopted only when
    **every** supporting seat's effective value agrees). It never clusters new findings — that is
    step 11. (It is the single builder of the round payload, the way `parse_block` is the single
    parser; keeping the whole round in one uncommitted payload is what makes a crash before step 12
@@ -785,7 +790,7 @@ the common one-batch shape.
 # Transitions — unanimity, otherwise the human
 
 Per open issue, on the stances of the seats that **engaged this round** (returned a parseable
-stance). `support_with_revision` counts as **support for existence**. This table is the **spec
+stance). `support` affirms issue existence and may independently propose revised fields. This table is the **spec
 `decide_round` implements** (the way the per-tag schema is the spec `parse_block` enforces): the
 script decides every row mechanically except the two prose calls it cannot make — synthesizing a
 merged `claim`, and clustering new findings — which it hands to you (step 10).
@@ -793,7 +798,7 @@ merged `claim`, and clustering new findings — which it hands to you (step 10).
 | Condition | Result |
 |-----------|--------|
 | New issue, **all available seats (≥2)** raised it in one pass | **accepted** (terminal — birth) |
-| ≥2 engaged, all `support` / `support_with_revision` | existence **accepted**; `peer_reviewed=true` |
+| ≥2 engaged, all `support` | existence **accepted**; `peer_reviewed=true` |
 | ≥2 engaged, all `reject` | **rejected** (terminal); `peer_reviewed=true` |
 | Existence accepted; engaged seats converge on a revised detail | adopt the new value (audit-logged) |
 | Existence accepted; a detail not yet converged, under limits | stays **open** |

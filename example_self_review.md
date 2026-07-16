@@ -120,7 +120,7 @@
   Process notes
 
   - Round 0: all three seats engaged (Claude 4, Gemini 4, Codex 6 = 14 raw → 12 issues after 2 merges). No birth-unanimity, so all 11 non-style issues entered debate as open.
-  - Round 1: all three seats engaged on all 11 cards; every issue reached unanimous support/support_with_revision → accepted and peer_reviewed=true. The full configured panel evaluated each, so all 11 are fully_vetted=true.
+  - Round 1: all three seats engaged on all 11 cards; every issue reached unanimous support → accepted and peer_reviewed=true. Some support stances also proposed field revisions. The full configured panel evaluated each, so all 11 are fully_vetted=true.
   - Field mutations adopted: none. Three severity/wording revisions were proposed but did not converge to a single value, so the original field was retained and detail_contested set instead (no majority-rule override).
   - Seat health: no timeouts, no retries, no malformed blocks, no peer down. Codex emitted a non-fatal WARNING: run 'codex login' at preflight but ran cleanly. Blindness preserved — cards carried no origins or stance tally.
   - Strongest findings: index:94-123 (corroborated by a live failure in issues.md:4), run_agy:20-26 (confirmed sandbox asymmetry vs run_codex), reopen:30-35 and init_run:62-68 (concrete crash/race windows).

@@ -25,9 +25,11 @@ byte-exact.
   `peer_reviewed`/`fully_vetted`, enum convergence, forced-terminal). Normal path carries evidence
   verbatim with no seat identity/tally (blind); degraded path does not promote evidence. They do **no**
   judgment: prose `claim` revisions and new-finding clustering come back as "advice" for the referee.
-  They **validate** input (exactly one stance per engaged-seat × open-issue; no unknown/duplicate
-  `_source`); a plain `support` endorses the issue *as stated* (enum change adopted only on full
-  effective-value agreement).
+  They **validate** input (exactly one canonical `support`/`reject` stance per engaged-seat ×
+  open-issue; reject rationale present; no unknown/duplicate `_source`); `support` affirms issue
+  existence and may independently propose revised fields (enum
+  change adopted only on full effective-value agreement). Exact no-op revisions do not mutate the
+  issue or promote their rationale.
 - `sweep` — owns batch plans, including generating the common single-batch shape from open issue IDs
   and the referee-supplied current panel; reports the exact rejected plan field, safely extends an
   interrupted common plan by adding unplanned seats or reactivating already-planned dropped seats

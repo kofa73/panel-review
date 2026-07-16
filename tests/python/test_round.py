@@ -445,6 +445,18 @@ class RoundTest(unittest.TestCase):
         self.assertEqual(collected.returncode, 0, collected.stderr)
         self.assertNotIn("claude", json.loads(collected.stdout)["engaged"])
 
+    def test_prepare_debate_renders_two_stance_contract(self):
+        self.prepare_round0()
+        self.install_open_index()
+
+        result = self.run_round("prepare-debate", self.run_id, "claude", "codex")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        prompt = Path(json.loads(result.stdout)["prompt"]).read_text(encoding="utf-8")
+        self.assertIn("support|reject", prompt)
+        self.assertIn("support may include a `revision`", prompt)
+        self.assertNotIn("support_with_revision", prompt)
+
     def test_prepare_debate_does_not_redispatch_checkpointed_seats(self):
         self.prepare_round0()
         self.install_open_index()
@@ -615,7 +627,7 @@ class RoundTest(unittest.TestCase):
         stance = json.dumps(
             {
                 "id": "i1",
-                "stance": "support_with_revision",
+                "stance": "support",
                 "rationale": "the mechanism is narrower",
                 "revision": {"claim": "narrower claim"},
             }

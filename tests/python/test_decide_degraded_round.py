@@ -45,7 +45,7 @@ class TestDecideDegradedRound(unittest.TestCase):
         }
         stances = [
             {"_source": "gemini", "id": "old", "stance": "support"},
-            {"_source": "gemini", "id": "new", "stance": "reject"}
+            {"_source": "gemini", "id": "new", "stance": "reject", "rationale": "The issue is not established."}
         ]
 
         args = [
@@ -140,7 +140,7 @@ class TestDecideDegradedRound(unittest.TestCase):
         }
         stances = [
             {"_source": "codex", "id": "old", "stance": "support"},
-            {"_source": "codex", "id": "old", "stance": "reject"}
+            {"_source": "codex", "id": "old", "stance": "reject", "rationale": "The issue is not established."}
         ]
         args = [
             "--id", "test5",

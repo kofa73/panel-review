@@ -72,16 +72,16 @@ class TestSweep(unittest.TestCase):
         partial = self.ingest(self.raw("partial.txt", "```stances\n{\"id\":\"i1\",\"stance\":\"support\"}\n```\n"))
         self.assertEqual(partial.stdout, '{"status":"partial"}\n')
         self.assertEqual(self.run_sweep("has", self.run_id, "1", "codex", "b1").returncode, 1)
-        duplicate = self.ingest(self.raw("duplicate.txt", "```stances\n{\"id\":\"i1\",\"stance\":\"support\"}\n{\"id\":\"i1\",\"stance\":\"reject\"}\n```\n"))
+        duplicate = self.ingest(self.raw("duplicate.txt", "```stances\n{\"id\":\"i1\",\"stance\":\"support\"}\n{\"id\":\"i1\",\"stance\":\"reject\",\"rationale\":\"The issue is not established.\"}\n```\n"))
         self.assertEqual(duplicate.stdout, '{"status":"wrong_ids"}\n')
-        wrong = self.ingest(self.raw("wrong.txt", "```stances\n{\"id\":\"i1\",\"stance\":\"support\"}\n{\"id\":\"i3\",\"stance\":\"reject\"}\n```\n"))
+        wrong = self.ingest(self.raw("wrong.txt", "```stances\n{\"id\":\"i1\",\"stance\":\"support\"}\n{\"id\":\"i3\",\"stance\":\"reject\",\"rationale\":\"The issue is not established.\"}\n```\n"))
         self.assertEqual(wrong.stdout, '{"status":"wrong_ids"}\n')
-        missing_new_findings = self.ingest(self.raw("missing-nf.txt", "```stances\n{\"id\":\"i1\",\"stance\":\"support\"}\n{\"id\":\"i2\",\"stance\":\"reject\"}\n```\n"))
+        missing_new_findings = self.ingest(self.raw("missing-nf.txt", "```stances\n{\"id\":\"i1\",\"stance\":\"support\"}\n{\"id\":\"i2\",\"stance\":\"reject\",\"rationale\":\"The issue is not established.\"}\n```\n"))
         self.assertEqual(missing_new_findings.stdout, '{"status":"missing_new_findings"}\n')
         self.assertEqual(self.run_sweep("has", self.run_id, "1", "codex", "b1").returncode, 1)
         self.assertFalse((self.run_dir / "sweeps" / "round-1" / "codex.b1.stances.json").exists())
         self.assertFalse((self.run_dir / "nf.1.codex.b1.json").exists())
-        complete = self.ingest(self.raw("complete.txt", "```stances\n{\"id\":\"i1\",\"stance\":\"support\"}\n{\"id\":\"i2\",\"stance\":\"reject\"}\n```\n```new_findings\n[]\n```\n"))
+        complete = self.ingest(self.raw("complete.txt", "```stances\n{\"id\":\"i1\",\"stance\":\"support\"}\n{\"id\":\"i2\",\"stance\":\"reject\",\"rationale\":\"The issue is not established.\"}\n```\n```new_findings\n[]\n```\n"))
         self.assertEqual(complete.stdout, '{"status":"complete"}\n')
         self.assertEqual(self.run_sweep("has", self.run_id, "1", "codex", "b1").returncode, 0)
         source = json.loads(
@@ -92,7 +92,7 @@ class TestSweep(unittest.TestCase):
 
     def test_resume_drop_and_commit(self):
         self.begin_and_plan()
-        complete = self.raw("complete.txt", "```stances\n{\"id\":\"i1\",\"stance\":\"support\"}\n{\"id\":\"i2\",\"stance\":\"reject\"}\n```\n```new_findings\n[]\n```\n")
+        complete = self.raw("complete.txt", "```stances\n{\"id\":\"i1\",\"stance\":\"support\"}\n{\"id\":\"i2\",\"stance\":\"reject\",\"rationale\":\"The issue is not established.\"}\n```\n```new_findings\n[]\n```\n")
         self.assertEqual(self.ingest(complete).returncode, 0)
         resume = json.loads(self.run_sweep("resume-plan", self.run_id).stdout)
         self.assertEqual([batch["status"] for batch in resume["batches"]], ["complete", "missing"])
@@ -107,7 +107,7 @@ class TestSweep(unittest.TestCase):
 
     def test_published_checkpoint_with_missing_companion_is_corrupt(self):
         self.begin_and_plan()
-        complete = self.raw("complete.txt", "```stances\n{\"id\":\"i1\",\"stance\":\"support\"}\n{\"id\":\"i2\",\"stance\":\"reject\"}\n```\n```new_findings\n[]\n```\n")
+        complete = self.raw("complete.txt", "```stances\n{\"id\":\"i1\",\"stance\":\"support\"}\n{\"id\":\"i2\",\"stance\":\"reject\",\"rationale\":\"The issue is not established.\"}\n```\n```new_findings\n[]\n```\n")
         self.assertEqual(self.ingest(complete).returncode, 0)
         (self.run_dir / "sweeps" / "round-1" / "codex.b1.stances.json").unlink()
 

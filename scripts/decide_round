@@ -15,6 +15,7 @@ import panel_common  # noqa: E402
 BLINDNESS_PATTERN = r"\b(codex|gpt|gemini|claude)\b|\b(an)?other (reviewer|seat|model|ai)s?\b|\b(all( ?(three|3))?|both|two|the other) (seats|reviewers|models|ais)\b|\b(seats?|reviewers?|models?|the others?|we|every(one|body)) (all )?(agree|disagree|concur)\b|\b[0-9]+ ?(/|of) ?(the )?(three|3) (seats|reviewers)\b"
 BLINDNESS_RE = re.compile(BLINDNESS_PATTERN, re.IGNORECASE)
 ENUM_FIELDS = ("severity", "location", "category")
+REVISION_FIELDS = ENUM_FIELDS + ("claim",)
 
 
 def compact(value):
@@ -66,6 +67,17 @@ def revision_value(stance, issue, field):
     return issue.get(field)
 
 
+def effective_revision(stance, issue):
+    revision = stance.get("revision")
+    if not isinstance(revision, dict):
+        return {}
+    return {
+        field: revision[field]
+        for field in REVISION_FIELDS
+        if field in revision and revision[field] != issue.get(field)
+    }
+
+
 def unique_values(values):
     result = []
     for value in values:
@@ -77,6 +89,19 @@ def unique_values(values):
 def integrity_errors(index, stances, engaged, configured):
     open_ids = [issue.get("id") for issue in index.get("issues", []) if issue.get("state") == "open"]
     errors = []
+    for stance in stances:
+        if stance.get("stance") not in {"support", "reject"}:
+            errors.append(
+                f"invalid stance for seat={jq_display(stance.get('_source'))} "
+                f"issue={jq_display(stance.get('id'))}: {jq_display(stance.get('stance'))}"
+            )
+        if stance.get("stance") == "reject" and not (
+            isinstance(stance.get("rationale"), str) and stance["rationale"].strip()
+        ):
+            errors.append(
+                f"reject requires non-empty rationale for seat={jq_display(stance.get('_source'))} "
+                f"issue={jq_display(stance.get('id'))}"
+            )
     for seat in engaged:
         if seat not in configured:
             errors.append(f"engaged seat not in configured panel: {seat}")
@@ -96,11 +121,17 @@ def integrity_errors(index, stances, engaged, configured):
     return errors
 
 
-def blindness_errors(stances):
+def blindness_errors(index, stances):
     errors = []
+    issues = {issue.get("id"): issue for issue in index.get("issues", [])}
     for stance in stances:
         evidence = stance.get("new_evidence")
-        values = [("rationale", stance.get("rationale"))]
+        issue = issues.get(stance.get("id"))
+        values = []
+        if stance.get("stance") == "reject" or (
+            isinstance(issue, dict) and effective_revision(stance, issue)
+        ):
+            values.append(("rationale", stance.get("rationale")))
         if isinstance(evidence, dict):
             values.extend(
                 [
@@ -136,7 +167,7 @@ def decide(index, stances, round_number, issue_rounds, max_rounds, configured, e
         supporting = [
             stance
             for stance in issue_stances
-            if stance.get("stance") in ("support", "support_with_revision")
+            if stance.get("stance") == "support"
         ]
 
         fields = []
@@ -148,15 +179,15 @@ def decide(index, stances, round_number, issue_rounds, max_rounds, configured, e
 
         claim_props = []
         for stance in issue_stances:
-            revision = stance.get("revision")
-            if stance.get("stance") == "support_with_revision" and isinstance(revision, dict):
+            revision = effective_revision(stance, issue)
+            if stance.get("stance") == "support":
                 claim = revision.get("claim")
                 if claim is not None:
                     claim_props.append({"seat": stance.get("_source"), "claim": claim})
 
         evidence = []
         for stance in issue_stances:
-            if stance.get("stance") in ("reject", "support_with_revision"):
+            if stance.get("stance") == "reject" or effective_revision(stance, issue):
                 assertion = stance.get("rationale") or ""
                 if isinstance(assertion, str) and assertion:
                     evidence.append({"side": "contra", "point": {"location": "analysis", "assertion": assertion}})
@@ -171,7 +202,7 @@ def decide(index, stances, round_number, issue_rounds, max_rounds, configured, e
 
         peer_now = n >= 2
         all_reject = peer_now and all(name == "reject" for name in stance_names)
-        all_support = peer_now and all(name in ("support", "support_with_revision") for name in stance_names)
+        all_support = peer_now and all(name == "support" for name in stance_names)
         mixed = peer_now and not all_reject and not all_support
         post_rounds_debated = (issue.get("rounds_debated") or 0) + (1 if peer_now else 0)
         at_limit = post_rounds_debated >= issue_rounds or round_number >= max_rounds
@@ -303,7 +334,7 @@ def main():
             print(f"  - {error}", file=sys.stderr)
         raise SystemExit(3)
 
-    errors = blindness_errors(stances)
+    errors = blindness_errors(index, stances)
     if errors:
         print("decide_round: blindness violation(s) (seat identity / tally in promoted evidence):", file=sys.stderr)
         for error in errors:

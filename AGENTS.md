@@ -1,5 +1,7 @@
 # CLAUDE.md
 
+Read CONTEXT.md for terminology.
+
 ## What this repo is
 
 `panel-review` is a **Claude Code plugin** (not an app) that runs a three-way **blind** code/design
@@ -62,8 +64,8 @@ Four participants, strict role separation (full per-script map in `.claude/rules
   preparation, collection, commit, and verdict input. Prompt templates in `prompts/` are filled by
   `assemble` (whole-line literal substitution).
 
-**Issue lifecycle** (README "How an issue moves"): each seat takes a `support` /
-`support_with_revision` / `reject` **stance**; an issue is `open` → `accepted`/`rejected` when all
+**Issue lifecycle** (README "How an issue moves"): each seat takes a `support` / `reject` **stance**;
+support may independently propose revised issue fields. An issue is `open` → `accepted`/`rejected` when all
 engaged seats agree, else `contested` (got a ≥2-seat review pass) or `unresolved` (never did) at the
 round limit. Unanimity-or-human: no majority vote, no referee fact-checking inside the loop.
 

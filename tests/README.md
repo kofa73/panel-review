@@ -42,6 +42,8 @@ them up. No real run is touched.
 - **decide_round** (`test_decide_round.py`): round-1/round-2 transitions;
   effective-value enum convergence (stays-open, ceiling→detail_contested,
   true-unanimity→adopt); split support/reject cannot adopt a unilateral revision;
+  support claim revisions reach referee advice while exact no-op revisions and
+  unused support rationale remain inert;
   integrity gate (duplicate/missing/unknown `_source` → exit 3); dropped seat
   decides on the remainder and withholds `fully_vetted`; the blindness gate
   (rationale/assertion/precondition/impact/array-location markers → exit 5);

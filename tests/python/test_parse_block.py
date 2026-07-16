@@ -134,9 +134,65 @@ class TestParseBlock(unittest.TestCase):
         self.assertEqual(res.stderr.strip(), "parse_block --diagnose 'stances': 5 item(s), 0 invalid")
         self.assertEqual(res.stdout, '')
 
+    def test_removed_support_with_revision_stance_is_rejected(self):
+        content = """```stances
+{"id":"i1","stance":"support_with_revision","revision":{"severity":"low"}}
+```"""
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as tmp:
+            tmp.write(content)
+            tmp_path = tmp.name
+        try:
+            res = self.run_script(['--diagnose', 'stances', tmp_path])
+            self.assertEqual(res.returncode, 5)
+            self.assertIn("one of: support, reject", res.stdout)
+        finally:
+            os.remove(tmp_path)
+
+    def test_reject_requires_nonempty_rationale(self):
+        content = """```stances
+{"id":"i1","stance":"reject","rationale":"   "}
+```"""
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as tmp:
+            tmp.write(content)
+            tmp_path = tmp.name
+        try:
+            res = self.run_script(['--diagnose', 'stances', tmp_path])
+            self.assertEqual(res.returncode, 5)
+            self.assertIn("reject requires non-empty `rationale`", res.stdout)
+        finally:
+            os.remove(tmp_path)
+
+    def test_support_rationale_is_optional(self):
+        content = """```stances
+{"id":"i1","stance":"support"}
+```"""
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as tmp:
+            tmp.write(content)
+            tmp_path = tmp.name
+        try:
+            res = self.run_script(['stances', tmp_path])
+            self.assertEqual(res.returncode, 0, res.stderr)
+            self.assertEqual(json.loads(res.stdout), {"id": "i1", "stance": "support"})
+        finally:
+            os.remove(tmp_path)
+
+    def test_reject_revision_is_discarded(self):
+        content = """```stances
+{"id":"i1","stance":"reject","rationale":"The path is unreachable.","revision":{"severity":"low"}}
+```"""
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as tmp:
+            tmp.write(content)
+            tmp_path = tmp.name
+        try:
+            res = self.run_script(['stances', tmp_path])
+            self.assertEqual(res.returncode, 0, res.stderr)
+            self.assertNotIn("revision", json.loads(res.stdout))
+        finally:
+            os.remove(tmp_path)
+
     def test_stances_revision_invalid_subfield_stripped(self):
         content = """```stances
-{"id":"i1","stance":"support_with_revision","revision":{"severity":"low","category":"bogus","claim":123,"location":"f.c:1"}}
+{"id":"i1","stance":"support","revision":{"severity":"low","category":"bogus","claim":123,"location":"f.c:1"}}
 ```"""
         with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as tmp:
             tmp.write(content)
@@ -152,7 +208,7 @@ class TestParseBlock(unittest.TestCase):
 
     def test_stances_revision_empty_after_stripping(self):
         content = """```stances
-{"id":"i1","stance":"support_with_revision","revision":{"category":"bogus"}}
+{"id":"i1","stance":"support","revision":{"category":"bogus"}}
 ```"""
         with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as tmp:
             tmp.write(content)

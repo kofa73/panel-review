@@ -690,9 +690,13 @@ There are no staged changes. No commit or push was made.
     reconciliation. A returning already-planned seat is removed from `dropped_seats`, dispatched,
     retained in `panel.json`, and included in engagement after a valid response. Focused and full
     suites pass.
-12. Work through [`pending-issues/README.md`](pending-issues/README.md) in numeric order. It is the
-    authoritative priority order for all remaining work. The first five items are correctness and
-    contract work; documentation, maintainability cleanup, and model experimentation follow them.
+12. Work through [`pending-issues/README.md`](pending-issues/README.md) in numerical order. It is the
+    authoritative priority order for all remaining work. **Item 1 completed 2026-07-16:** stance is
+    now the two-value existence decision `support`/`reject`; optional revisions are orthogonal to
+    support, exact no-ops are inert, reject revisions are discarded, and retained legacy stance
+    names fail explicitly. Full verification passed (`PASS: 216   FAIL: 0`). Resume with item 2;
+    items 2-5 are the remaining correctness and contract work, followed by documentation,
+    maintainability cleanup, and model experimentation.
 
 ## Suggested skills
 

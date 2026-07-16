@@ -30,7 +30,11 @@ def ok_points(obj):
 
 def ok_id(obj): return isinstance(obj.get("id"), str)
 def ok_stance(obj):
-    return isinstance(obj.get("stance"), str) and bool(re.match(r"^(support|support_with_revision|reject)$", obj.get("stance", "")))
+    return isinstance(obj.get("stance"), str) and bool(re.match(r"^(support|reject)$", obj.get("stance", "")))
+def ok_reject_rationale(obj):
+    return obj.get("stance") != "reject" or (
+        isinstance(obj.get("rationale"), str) and bool(obj["rationale"].strip())
+    )
 
 def diag_findings(obj):
     if not ok_object(obj): return "not a JSON object"
@@ -52,14 +56,17 @@ def valid_findings(obj):
 def diag_stances(obj):
     if not ok_object(obj): return "not a JSON object"
     if not ok_id(obj): return "missing or non-string field `id`"
-    if not ok_stance(obj): return "missing/invalid `stance` (one of: support, support_with_revision, reject)"
+    if not ok_stance(obj): return "missing/invalid `stance` (one of: support, reject)"
+    if not ok_reject_rationale(obj): return "reject requires non-empty `rationale` counter-evidence"
     return "valid"
 
 def valid_stances(obj):
-    if not (ok_object(obj) and ok_id(obj) and ok_stance(obj)):
+    if not (ok_object(obj) and ok_id(obj) and ok_stance(obj) and ok_reject_rationale(obj)):
         return False, None
 
-    if "revision" in obj:
+    if obj["stance"] == "reject":
+        obj.pop("revision", None)
+    elif "revision" in obj:
         if isinstance(obj["revision"], dict):
             rev = obj["revision"]
             new_rev = {}

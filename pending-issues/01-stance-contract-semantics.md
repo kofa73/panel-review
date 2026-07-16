@@ -2,7 +2,7 @@
 
 Priority: 1
 
-Status: Pending
+Status: Completed
 
 Source: instruction-contract audit
 
@@ -30,23 +30,37 @@ not merely wording or diagnostics.
 - The current static prompt checks and full test suite pass despite this disagreement, so those tests
   do not establish semantic consistency.
 
+## Design decision
+
+Decision made 2026-07-16: remove `support_with_revision`. The old stance enum combined two separate
+decisions: whether the issue exists and whether one of its canonical fields should change. The
+executable contract now represents those decisions independently:
+
+| Stance | Required | Optional | Normalization |
+|---|---|---|---|
+| `support` | issue ID and stance | `revision`, `rationale`, `new_evidence` | Invalid revision fields are discarded; fields equal to the canonical issue are no-ops. |
+| `reject` | issue ID, stance, non-empty counter-evidence rationale | `new_evidence` | Any supplied `revision` is discarded because a rejected issue has no fields to revise. |
+
+`support` affirms issue existence, not necessarily every current field. An omitted revision endorses
+the current effective values. A populated revision proposes new severity, location, category, or
+claim values; the existing convergence rules still decide whether any proposal is adopted. When all
+revision fields are no-ops, the stance behaves exactly like support without a revision and does not
+change the card. A support rationale is optional and is promoted only when the stance contains an
+effective revision; `new_evidence` retains its existing independent meaning.
+
+The raw-input parser owns tolerant structural normalization. Decision code owns comparisons with the
+canonical issue because only that layer has the required context. Downstream code must see only the
+two canonical stance names and must never infer a revision from prose.
+
+No compatibility alias is retained for `support_with_revision`. Incompatible old review artifacts
+may be discarded under the project's existing artifact-compatibility decision.
+
 ## Required outcome
 
-Choose and document one executable contract. The recommended contract is:
-
-| Stance | Required | Forbidden |
-|---|---|---|
-| `support` | issue ID and stance | `revision`; rejection/revision rationale |
-| `support_with_revision` | non-empty supported revision and rationale | empty or irrelevant revision |
-| `reject` | rationale containing counter-evidence | `revision` |
-
-Then make the schema example, rendered prompt, parser, decision logic, and tests agree. Validation
-should fail at the earliest deterministic boundary rather than silently assigning meaning to an
-internally contradictory object.
-
-If a different contract is chosen, it must explicitly define whether plain support may revise fields
-and how that differs from `support_with_revision`; retaining both names with identical effects is not
-a coherent outcome.
+Make the schema example, rendered prompt, parser, decision logic, glossary, authoritative README,
+protocol, script-ownership rules, and tests agree with the design decision above. Validation and
+normalization should occur at the earliest deterministic layer without losing an otherwise
+unambiguous stance.
 
 ## Scope and non-goals
 
@@ -58,8 +72,27 @@ a coherent outcome.
 
 ## Verification
 
-- Add negative tests for every forbidden stance/field combination.
-- Add positive tests for all three valid stance shapes.
-- Prove that a plain support cannot silently revise canonical issue fields.
+- Add negative tests for the removed stance name and for reject without counter-evidence.
+- Add positive tests for support with and without revision and for reject.
+- Prove that support revisions participate in convergence, while no-op revisions cannot change
+  canonical issue fields or card evidence.
+- Prove that a revision attached to reject cannot change canonical issue fields.
+- Reject removed stance names and missing reject rationale again at the decision seam so retained
+  pre-change checkpoints fail explicitly rather than changing the outcome.
 - Verify the generated/rendered seat instructions, not only isolated source fragments.
 - Run focused parser/decision tests, then `./tests/run_tests.sh` and `git diff --check`.
+
+## Implementation and verification
+
+Completed 2026-07-16:
+
+- `parse_block` accepts only `support` and `reject`, requires reject counter-evidence, normalizes
+  optional support revisions, and discards revisions attached to reject.
+- `decide_round` treats revisions as orthogonal support proposals, filters exact no-ops from enum
+  mutation, claim advice, rationale promotion, and blindness checks, and fails explicitly on removed
+  stance names or invalid reject checkpoints retained from an older run.
+- The rendered debate prompt, schema fragment, README, glossary, canonical protocol, script rules,
+  repository instructions, examples, fixtures, and test documentation now use the same contract.
+- Focused parser/check-draft/decision/round tests passed.
+- Full `./tests/run_tests.sh` passed: `PASS: 216   FAIL: 0`.
+- Python compilation and `git diff --check` passed.

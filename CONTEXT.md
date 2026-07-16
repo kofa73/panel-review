@@ -119,17 +119,13 @@ origins or stance tally.
 _Avoid_: Issue record, transcript
 
 **Stance**:
-A seat's position on one issue during a debate round: support, support with revision, or reject. A
-stance concerns issue existence first and may also propose changes to issue details.
+A seat's position on one issue during a debate round: support or reject. A stance concerns issue
+existence; a supporting stance may independently propose changes to issue details.
 _Avoid_: Vote
 
 **Support**:
-A stance affirming that an issue is valid as currently stated.
-
-**Support with revision**:
-A stance affirming the issue's existence while proposing a change to its severity, claim, category,
-or location. It counts as support for existence, not as rejection.
-_Avoid_: Partial rejection
+A stance affirming the issue's existence. It may include a revision proposing a change to severity,
+claim, category, or location; without a revision, it endorses the current values.
 
 **Reject**:
 A stance denying that the issue is valid.
