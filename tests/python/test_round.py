@@ -44,6 +44,13 @@ def issue():
     }
 
 
+def debate_response(stance):
+    return (
+        f"```stances\n{json.dumps(stance)}\n```\n"
+        "```new_findings\n[]\n```\n"
+    )
+
+
 class RoundTest(unittest.TestCase):
     def setUp(self):
         self.run_id = f"py-round-{uuid.uuid4().hex}"
@@ -91,6 +98,21 @@ class RoundTest(unittest.TestCase):
     def run_round(self, *args):
         return subprocess.run([str(ROUND), *map(str, args)], capture_output=True, text=True, check=False)
 
+    def install_claude_debate(self, raw):
+        result = subprocess.run(
+            [str(WRITE_RAW), "--id", self.run_id, "--round", "1", "--batch", "1"],
+            input=raw,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def install_codex_debate(self, raw):
+        path = self.run_dir / "raw" / "round1.codex.1.txt"
+        path.write_text(raw, encoding="utf-8")
+        return path
+
     def prepare_round0(self, *seats):
         result = self.run_round(
             "prepare-round0", self.run_id, *(seats or ("claude", "codex"))
@@ -116,7 +138,7 @@ class RoundTest(unittest.TestCase):
         self.install_open_index()
         prepared = self.run_round("prepare-debate", self.run_id, "claude", "codex")
         self.assertEqual(prepared.returncode, 0, prepared.stderr)
-        stance = json.dumps(
+        raw = debate_response(
             {
                 "id": "i1",
                 "stance": "support",
@@ -124,16 +146,8 @@ class RoundTest(unittest.TestCase):
                 "revision": {"claim": "narrower claim"},
             }
         )
-        raw = f"```stances\n{stance}\n```\n```new_findings\n[]\n```\n"
-        written = subprocess.run(
-            [str(WRITE_RAW), "--id", self.run_id, "--round", "1", "--batch", "1"],
-            input=raw,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        self.assertEqual(written.returncode, 0, written.stderr)
-        (self.run_dir / "raw" / "round1.codex.1.txt").write_text(raw, encoding="utf-8")
+        self.install_claude_debate(raw)
+        self.install_codex_debate(raw)
         collected = self.run_round("collect-debate", self.run_id, "--final")
         self.assertEqual(collected.returncode, 0, collected.stderr)
 
@@ -219,17 +233,9 @@ class RoundTest(unittest.TestCase):
             claude_prompt,
         )
         self.assertIn("CLAUDE_SEAT_RAW_WRITTEN", claude_prompt)
-        stance = json.dumps({"id": "i1", "stance": "support", "rationale": "confirmed"})
-        raw = f"```stances\n{stance}\n```\n```new_findings\n[]\n```\n"
-        claude_write = subprocess.run(
-            [str(WRITE_RAW), "--id", self.run_id, "--round", "1", "--batch", "1"],
-            input=raw,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        self.assertEqual(claude_write.returncode, 0, claude_write.stderr)
-        (self.run_dir / "raw" / "round1.codex.1.txt").write_text(raw, encoding="utf-8")
+        raw = debate_response({"id": "i1", "stance": "support", "rationale": "confirmed"})
+        self.install_claude_debate(raw)
+        self.install_codex_debate(raw)
 
         collected_result = self.run_round("collect-debate", self.run_id, "--final")
         self.assertEqual(collected_result.returncode, 0, collected_result.stderr)
@@ -259,17 +265,10 @@ class RoundTest(unittest.TestCase):
         self.install_open_index()
         prepared = self.run_round("prepare-debate", self.run_id, "claude", "codex")
         self.assertEqual(prepared.returncode, 0, prepared.stderr)
-        stance = json.dumps({"id": "i1", "stance": "support", "rationale": "confirmed"})
-        valid = f"```stances\n{stance}\n```\n```new_findings\n[]\n```\n"
-        subprocess.run(
-            [str(WRITE_RAW), "--id", self.run_id, "--round", "1", "--batch", "1"],
-            input=valid,
-            text=True,
-            capture_output=True,
-            check=True,
-        )
+        stance = {"id": "i1", "stance": "support", "rationale": "confirmed"}
+        self.install_claude_debate(debate_response(stance))
         (self.run_dir / "raw" / "round1.codex.1.txt").write_text(
-            f"```stances\n{stance}\n```\n",
+            f"```stances\n{json.dumps(stance)}\n```\n",
             encoding="utf-8",
         )
 
@@ -287,17 +286,11 @@ class RoundTest(unittest.TestCase):
         self.install_open_index()
         prepared = self.run_round("prepare-debate", self.run_id, "claude", "codex")
         self.assertEqual(prepared.returncode, 0, prepared.stderr)
-        stance = json.dumps({"id": "i1", "stance": "support", "rationale": "confirmed"})
-        valid = f"```stances\n{stance}\n```\n```new_findings\n[]\n```\n"
-        subprocess.run(
-            [str(WRITE_RAW), "--id", self.run_id, "--round", "1", "--batch", "1"],
-            input=valid,
-            text=True,
-            capture_output=True,
-            check=True,
-        )
+        stance = {"id": "i1", "stance": "support", "rationale": "confirmed"}
+        valid = debate_response(stance)
+        self.install_claude_debate(valid)
         raw = self.run_dir / "raw" / "round1.codex.1.txt"
-        malformed = f"```stances\n{stance}\n```\n```new_findings\nnot-json\n```\n"
+        malformed = f"```stances\n{json.dumps(stance)}\n```\n```new_findings\nnot-json\n```\n"
         raw.write_text(malformed, encoding="utf-8")
 
         first_collection = self.run_round("collect-debate", self.run_id)
@@ -308,7 +301,10 @@ class RoundTest(unittest.TestCase):
         self.assertEqual(codex["status"], "malformed_new_findings")
 
         salvaged = Path(f"{raw}.salvaged")
-        salvaged.write_text(valid, encoding="utf-8")
+        salvaged.write_text(
+            f"```stances\n{json.dumps(stance)}\n```\n```new_findings\n[]\n```\n",
+            encoding="utf-8",
+        )
         salvage_result = self.run_round("salvage-debate", self.run_id, "codex", "1", salvaged)
         self.assertEqual(salvage_result.returncode, 0, salvage_result.stderr)
         self.assertEqual(json.loads(salvage_result.stdout)["status"], "complete")
@@ -353,18 +349,11 @@ class RoundTest(unittest.TestCase):
         self.install_open_index()
         prepared = self.run_round("prepare-debate", self.run_id, "claude", "codex")
         self.assertEqual(prepared.returncode, 0, prepared.stderr)
-        stance = json.dumps({"id": "i1", "stance": "support", "rationale": "confirmed"})
-        valid = f"```stances\n{stance}\n```\n```new_findings\n[]\n```\n"
-        subprocess.run(
-            [str(WRITE_RAW), "--id", self.run_id, "--round", "1", "--batch", "1"],
-            input=valid,
-            text=True,
-            capture_output=True,
-            check=True,
-        )
+        stance = {"id": "i1", "stance": "support", "rationale": "confirmed"}
+        self.install_claude_debate(debate_response(stance))
         raw = self.run_dir / "raw" / "round1.codex.1.txt"
         raw.write_text(
-            f"```stances\n{stance}\n```\n```new_findings\nnot-json\n```\n",
+            f"```stances\n{json.dumps(stance)}\n```\n```new_findings\nnot-json\n```\n",
             encoding="utf-8",
         )
         first_collection = self.run_round("collect-debate", self.run_id)
@@ -372,7 +361,7 @@ class RoundTest(unittest.TestCase):
 
         salvaged = Path(f"{raw}.salvaged")
         salvaged.write_text(
-            f"```stances\n{stance}\n```\n```new_findings\nstill-not-json\n```\n",
+            f"```stances\n{json.dumps(stance)}\n```\n```new_findings\nstill-not-json\n```\n",
             encoding="utf-8",
         )
         salvage_result = self.run_round("salvage-debate", self.run_id, "codex", "1", salvaged)
@@ -541,16 +530,9 @@ class RoundTest(unittest.TestCase):
         self.install_open_index()
         first = self.run_round("prepare-debate", self.run_id, "claude", "codex")
         self.assertEqual(first.returncode, 0, first.stderr)
-        stance = json.dumps({"id": "i1", "stance": "support", "rationale": "confirmed"})
-        raw = f"```stances\n{stance}\n```\n```new_findings\n[]\n```\n"
-        subprocess.run(
-            [str(WRITE_RAW), "--id", self.run_id, "--round", "1", "--batch", "1"],
-            input=raw,
-            text=True,
-            capture_output=True,
-            check=True,
-        )
-        (self.run_dir / "raw" / "round1.codex.1.txt").write_text(raw, encoding="utf-8")
+        raw = debate_response({"id": "i1", "stance": "support", "rationale": "confirmed"})
+        self.install_claude_debate(raw)
+        self.install_codex_debate(raw)
         self.assertEqual(self.run_round("collect-debate", self.run_id).returncode, 0)
 
         resumed = self.run_round("prepare-debate", self.run_id, "claude", "codex")
@@ -565,15 +547,8 @@ class RoundTest(unittest.TestCase):
         self.install_open_index()
         first = self.run_round("prepare-debate", self.run_id, "claude", "codex")
         self.assertEqual(first.returncode, 0, first.stderr)
-        stance = json.dumps({"id": "i1", "stance": "support", "rationale": "confirmed"})
-        raw = f"```stances\n{stance}\n```\n```new_findings\n[]\n```\n"
-        subprocess.run(
-            [str(WRITE_RAW), "--id", self.run_id, "--round", "1", "--batch", "1"],
-            input=raw,
-            text=True,
-            capture_output=True,
-            check=True,
-        )
+        raw = debate_response({"id": "i1", "stance": "support", "rationale": "confirmed"})
+        self.install_claude_debate(raw)
         self.assertEqual(self.run_round("collect-debate", self.run_id).returncode, 0)
 
         resumed = self.run_round("prepare-debate", self.run_id, "claude", "gemini")
@@ -606,15 +581,8 @@ class RoundTest(unittest.TestCase):
         self.install_open_index()
         first = self.run_round("prepare-debate", self.run_id, "claude", "codex")
         self.assertEqual(first.returncode, 0, first.stderr)
-        stance = json.dumps({"id": "i1", "stance": "support", "rationale": "confirmed"})
-        raw = f"```stances\n{stance}\n```\n```new_findings\n[]\n```\n"
-        subprocess.run(
-            [str(WRITE_RAW), "--id", self.run_id, "--round", "1", "--batch", "1"],
-            input=raw,
-            text=True,
-            capture_output=True,
-            check=True,
-        )
+        raw = debate_response({"id": "i1", "stance": "support", "rationale": "confirmed"})
+        self.install_claude_debate(raw)
         self.assertEqual(self.run_round("collect-debate", self.run_id).returncode, 0)
 
         resumed_without_codex = self.run_round(
@@ -655,7 +623,7 @@ class RoundTest(unittest.TestCase):
         panel = json.loads((self.run_dir / "panel.json").read_text(encoding="utf-8"))
         self.assertEqual(panel["configured"], ["claude", "codex", "gemini"])
 
-        (self.run_dir / "raw" / "round1.codex.1.txt").write_text(raw, encoding="utf-8")
+        self.install_codex_debate(raw)
         collected = self.run_round("collect-debate", self.run_id)
         self.assertEqual(collected.returncode, 0, collected.stderr)
         self.assertEqual(json.loads(collected.stdout)["engaged"], ["claude", "codex"])
@@ -665,17 +633,9 @@ class RoundTest(unittest.TestCase):
         self.install_open_index()
         first = self.run_round("prepare-debate", self.run_id, "claude", "codex")
         self.assertEqual(first.returncode, 0, first.stderr)
-        stance = json.dumps({"id": "i1", "stance": "support", "rationale": "confirmed"})
-        raw = f"```stances\n{stance}\n```\n```new_findings\n[]\n```\n"
-        subprocess.run(
-            [str(WRITE_RAW), "--id", self.run_id, "--round", "1", "--batch", "1"],
-            input=raw,
-            text=True,
-            capture_output=True,
-            check=True,
-        )
-        codex_raw = self.run_dir / "raw" / "round1.codex.1.txt"
-        codex_raw.write_text(raw, encoding="utf-8")
+        raw = debate_response({"id": "i1", "stance": "support", "rationale": "confirmed"})
+        self.install_claude_debate(raw)
+        codex_raw = self.install_codex_debate(raw)
         self.assertEqual(self.run_round("collect-debate", self.run_id).returncode, 0)
 
         resumed = self.run_round("prepare-debate", self.run_id, "claude", "gemini")

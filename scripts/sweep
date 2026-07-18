@@ -71,6 +71,13 @@ def sorted_ids(values):
     return sorted(values, key=lambda value: value.encode("utf-8"))
 
 
+def _sorted_open_issue_ids(index):
+    return sorted_ids([
+        issue.get("id") for issue in index.get("issues", [])
+        if type(issue) is dict and issue.get("state") == "open" and type(issue.get("id")) is str
+    ])
+
+
 def write_atomic(path, data):
     panel_atomic_write(path, data)
 
@@ -264,10 +271,7 @@ def cmd_plan_scaffold(idx, seats):
         index = read_index(idx)
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return fail("sweep plan-scaffold: index not found or invalid", 1)
-    issue_ids = sorted_ids([
-        issue.get("id") for issue in index.get("issues", [])
-        if type(issue) is dict and issue.get("state") == "open" and type(issue.get("id")) is str
-    ])
+    issue_ids = _sorted_open_issue_ids(index)
     if not issue_ids:
         return fail("sweep plan-scaffold: no open issues", 1)
     plan = {"batches": [
@@ -300,10 +304,7 @@ def cmd_extend_plan(sd, idx, epoch, seats):
     valid, reason = validate_plan({"batches": plan.get("batches")})
     if not valid or plan.get("epoch") != int(epoch) or type(plan.get("dropped_seats")) is not list:
         return fail(f"sweep extend-plan: invalid stored plan: {reason or 'metadata'}", 1)
-    issue_ids = sorted_ids([
-        issue.get("id") for issue in index.get("issues", [])
-        if type(issue) is dict and issue.get("state") == "open" and type(issue.get("id")) is str
-    ])
+    issue_ids = _sorted_open_issue_ids(index)
     if not issue_ids:
         return fail("sweep extend-plan: no open issues", 1)
     if any(entry["batch"] != "1" or sorted_ids(entry["expected_ids"]) != issue_ids for entry in plan["batches"]):
