@@ -28,5 +28,5 @@ final model response.
 - [`docs/evolution.md`, milestone 5](../evolution.md#5-verdict-delivery-moved-from-conversation-text-to-a-durable-report-boundary)
 - Commits `8d4c8ed`, `c32936e`, `65762e0`, `b845d9f`, and `177f48f`
 - [`docs/superpowers/specs/2026-06-21-verdict-artifact.md`](../superpowers/specs/2026-06-21-verdict-artifact.md)
-- [`pending-issues/02-artifact-only-verdict-persistence.md`](../../pending-issues/02-artifact-only-verdict-persistence.md)
+- [`issues/02-artifact-only-verdict-persistence.md`](../../issues/02-artifact-only-verdict-persistence.md)
 

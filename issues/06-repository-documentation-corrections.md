@@ -116,7 +116,7 @@ creating another normative copy of contracts already owned by `CONTRACTS.md`,
 ## Scope boundaries
 
 - `docs/superpowers/`, `design-notes/`, completed issue records, and
-  `pending-issues/referee-context-cost-history.md` are historical/design evidence. Do not rewrite
+  `issues/referee-context-cost-history.md` are historical/design evidence. Do not rewrite
   their past-tense claims to match current code. Their consolidation and archival treatment belongs
   to issue 07.
 - Do not add behavior changes, new security controls, or compatibility aliases under this ticket.

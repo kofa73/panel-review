@@ -30,5 +30,5 @@ referee actions.
 - [`docs/evolution.md`, milestones 6 and 10](../evolution.md#6-deterministic-modules-replaced-model-mediated-mechanics)
 - Commits `764c60b^..e8571a8`, `60686f4^..907c7ad`, `65762e0`, `40792f9`, and `31c4baa`
 - [`CONTRACTS.md`](../../CONTRACTS.md)
-- [`pending-issues/referee-context-cost-history.md`](../../pending-issues/referee-context-cost-history.md)
+- [`issues/referee-context-cost-history.md`](../../issues/referee-context-cost-history.md)
 

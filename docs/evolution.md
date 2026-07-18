@@ -205,7 +205,7 @@ but exhaust or misformat its final Agent response; delivery therefore had to be 
 validated independently of that model return. The worktree copy was then removed because it was not
 a delivery surface yet could prevent the durable write. Sources:
 [`docs/superpowers/specs/2026-06-21-verdict-artifact.md`](superpowers/specs/2026-06-21-verdict-artifact.md),
-[`pending-issues/02-artifact-only-verdict-persistence.md`](../pending-issues/02-artifact-only-verdict-persistence.md),
+[`issues/02-artifact-only-verdict-persistence.md`](../issues/02-artifact-only-verdict-persistence.md),
 [`scripts/write_verdict_artifact`](../scripts/write_verdict_artifact),
 [`scripts/read_verdict_artifact`](../scripts/read_verdict_artifact), and
 [`tests/python/test_verdict_artifact.py`](../tests/python/test_verdict_artifact.py).
@@ -215,7 +215,7 @@ the required status with prose, causing completed raw review or verdict summarie
 context even though the final command still delivered only the validated filename. The hook keeps the
 same subagent running and asks it to correct the response, avoiding repeated review or persistence
 work. Source:
-[`pending-issues/13-enforce-agent-status-stub-boundaries.md`](../pending-issues/13-enforce-agent-status-stub-boundaries.md).
+[`issues/13-enforce-agent-status-stub-boundaries.md`](../issues/13-enforce-agent-status-stub-boundaries.md).
 
 **Inference.** Artifact-only delivery is also a context-budget decision because it keeps verdict and
 raw-seat bodies out of parent model contexts. The repository records both correctness/recovery and
@@ -244,8 +244,8 @@ and parsing. The plan-scaffold history records a concrete failure where an opaqu
 made the referee inspect `sweep` and reconstruct JSON, enlarging context and risking another invalid
 plan. The addendum issue records a later live run in which duplicate high- and low-level instructions
 caused the referee to merge the same addendum manually and then ask `round` to do it again. Sources:
-[`pending-issues/referee-context-cost-history.md`](../pending-issues/referee-context-cost-history.md),
-[`pending-issues/14-remove-duplicate-addendum-commit-instructions.md`](../pending-issues/14-remove-duplicate-addendum-commit-instructions.md),
+[`issues/referee-context-cost-history.md`](../issues/referee-context-cost-history.md),
+[`issues/14-remove-duplicate-addendum-commit-instructions.md`](../issues/14-remove-duplicate-addendum-commit-instructions.md),
 [`scripts/round`](../scripts/round), and [`scripts/sweep`](../scripts/sweep).
 
 **Inference.** The architecture is a deliberate judgment/mechanics split, not an attempt to remove
@@ -322,7 +322,7 @@ interpretation.
 
 **Status:** implemented and retained. Later measurements found the barriers to be a small cost center
 with a material reliability role, so the project explicitly chose not to optimize them first. See
-[`pending-issues/referee-context-cost-history.md`](../pending-issues/referee-context-cost-history.md).
+[`issues/referee-context-cost-history.md`](../issues/referee-context-cost-history.md).
 
 ## 9. Referee context-cost reduction without changing review semantics
 
@@ -346,7 +346,7 @@ completion notification and a referee write. A later working-tree report, `analy
 measured 10,108,204 input-context tokens in another run, 54.2% in the referee, while the CLI barriers
 used 4.3%; it recommended coarse operations, phase-specific protocol loading, validated artifact
 recovery, and seat-owned raw writes before model substitution. The checked-in synthesis is
-[`pending-issues/referee-context-cost-history.md`](../pending-issues/referee-context-cost-history.md).
+[`issues/referee-context-cost-history.md`](../issues/referee-context-cost-history.md).
 
 The untracked working analyses `analysis-2026-07-14-04-15-56.md` and
 `analysis-2026-07-15-16-21-30.md` corroborate the same conclusions and explicitly caution that the
@@ -360,7 +360,7 @@ exact saving attributable to each change cannot be isolated from the available m
 **Status:** implemented for coarse operations, phased loading, and Claude raw delivery. Most of the
 former “judgment offload” idea was superseded because transitions and payload mechanics are now
 deterministic. A fresh helper for Round-0 clustering remains **proposed and conditional**, not
-accepted architecture: [`pending-issues/09-referee-judgment-offload-experiment.md`](../pending-issues/09-referee-judgment-offload-experiment.md)
+accepted architecture: [`issues/09-referee-judgment-offload-experiment.md`](../issues/09-referee-judgment-offload-experiment.md)
 requires a controlled measurement showing a material net saving without worse clustering, origins,
 quality, or reliability. Debate-judgment offload is conditional on that first experiment succeeding.
 
@@ -386,16 +386,16 @@ rendered instructions; the phase protocol plus transition scripts own orchestrat
 the barrier owns waiting; verdict scripts own report persistence and delivery; agent definitions own
 identity and role limits; README owns public explanation. `check_contracts` tests assembled variants
 and runtime payloads instead of relying only on phrase scans. Sources:
-[`pending-issues/05-instruction-contract-single-source.md`](../pending-issues/05-instruction-contract-single-source.md),
+[`issues/05-instruction-contract-single-source.md`](../issues/05-instruction-contract-single-source.md),
 [`CONTRACTS.md`](../CONTRACTS.md), [`scripts/seat_contract.py`](../scripts/seat_contract.py), and
 [`scripts/check_contracts`](../scripts/check_contracts).
 
 The stance rationale and implementation evidence are in
-[`pending-issues/01-stance-contract-semantics.md`](../pending-issues/01-stance-contract-semantics.md).
+[`issues/01-stance-contract-semantics.md`](../issues/01-stance-contract-semantics.md).
 The narrower referee mutation and Claude two-block corrections are documented in
-[`pending-issues/03-referee-mutation-contract.md`](../pending-issues/03-referee-mutation-contract.md)
+[`issues/03-referee-mutation-contract.md`](../issues/03-referee-mutation-contract.md)
 and
-[`pending-issues/04-claude-debate-output-contract.md`](../pending-issues/04-claude-debate-output-contract.md).
+[`issues/04-claude-debate-output-contract.md`](../issues/04-claude-debate-output-contract.md).
 
 **Inference.** This milestone makes the repository easier for both models and deterministic tests to
 navigate because a reader can follow ownership rather than reconcile copies. That maintainability
@@ -416,7 +416,7 @@ decision tests, and `tests/run_tests.sh`.
 - **Referee model selection:** a cheaper controller with short-lived higher-capability judgment
   helpers was recommended for A/B testing in the working analyses, but no quality comparison has
   established it as an accepted decision. It is tracked separately in
-  [`pending-issues/10-model-selection-ab-test.md`](../pending-issues/10-model-selection-ab-test.md).
+  [`issues/10-model-selection-ab-test.md`](../issues/10-model-selection-ab-test.md).
 
 ### Superseded
 

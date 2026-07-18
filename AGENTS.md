@@ -2,7 +2,7 @@
 
 ## Issue tracker
 
-Issues are tracked as indexed Markdown files under `pending-issues/`. See
+Issues are tracked as indexed Markdown files under `issues/`. See
 `docs/agents/issue-tracker.md`.
 
 ## Triage labels

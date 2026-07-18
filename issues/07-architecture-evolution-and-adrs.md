@@ -21,8 +21,8 @@ the whole sequence.
 First:
 
 > `$research` Reconstruct panel-review's architectural evolution from git history, the pending
-> worktree, `pending-issues/referee-context-cost-history.md`,
-> `pending-issues/09-referee-judgment-offload-experiment.md`, `docs/superpowers/`, `design-notes/`,
+> worktree, `issues/referee-context-cost-history.md`,
+> `issues/09-referee-judgment-offload-experiment.md`, `docs/superpowers/`, `design-notes/`,
 > `README.md`, `AGENTS.md`, tests, and working analysis files. Write `docs/evolution.md`. Group changes
 > into decision milestones, cite commit ranges and source files, distinguish explicit rationale from
 > inference, and identify superseded or still-proposed decisions.

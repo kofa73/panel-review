@@ -29,6 +29,6 @@ bounded parent context and deterministic recovery.
 
 - [`docs/evolution.md`, milestones 8 and 9](../evolution.md#8-reliable-asynchronous-seat-completion-without-referee-polling)
 - Commits `c32936e`, `65762e0`, and `177f48f`
-- [`pending-issues/referee-context-cost-history.md`](../../pending-issues/referee-context-cost-history.md)
-- [`pending-issues/13-enforce-agent-status-stub-boundaries.md`](../../pending-issues/13-enforce-agent-status-stub-boundaries.md)
+- [`issues/referee-context-cost-history.md`](../../issues/referee-context-cost-history.md)
+- [`issues/13-enforce-agent-status-stub-boundaries.md`](../../issues/13-enforce-agent-status-stub-boundaries.md)
 
