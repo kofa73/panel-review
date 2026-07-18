@@ -26,6 +26,13 @@ class ContractConsistencyTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("instruction contracts: OK", result.stdout)
 
+    def copy_contract_tree(self, root):
+        for name in ("agents", "skills", "prompts", "hooks"):
+            shutil.copytree(ROOT / name, root / name)
+        (root / "scripts").mkdir()
+        shutil.copy2(ROOT / "scripts/read_protocol_phase", root / "scripts/read_protocol_phase")
+        shutil.copy2(ROOT / "CONTRACTS.md", root / "CONTRACTS.md")
+
     def test_each_known_drift_is_reported_by_invariant_name(self):
         cases = [
             (
@@ -68,9 +75,7 @@ class ContractConsistencyTest(unittest.TestCase):
         for invariant, relative_path, bad_text in cases:
             with self.subTest(invariant=invariant), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
-                for name in ("agents", "skills", "prompts", "hooks"):
-                    shutil.copytree(ROOT / name, root / name)
-                shutil.copy2(ROOT / "CONTRACTS.md", root / "CONTRACTS.md")
+                self.copy_contract_tree(root)
                 target = root / relative_path
                 target.write_text(target.read_text(encoding="utf-8") + bad_text, encoding="utf-8")
 
@@ -78,6 +83,30 @@ class ContractConsistencyTest(unittest.TestCase):
 
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(invariant, result.stderr)
+
+    def test_direct_normal_debate_transaction_helpers_are_rejected(self):
+        commands = (
+            '"$SC/merge_payload" /tmp/base.json < /tmp/addendum.json',
+            '"$SC/sweep" commit "$id" "$round" "$epoch" < /tmp/payload.json',
+            '"$SC/regen_cards" --id "$id" --workdir "$workdir"',
+        )
+
+        for command in commands:
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.copy_contract_tree(root)
+                protocol = root / "skills/panel-review-for-agent/references/protocol.md"
+                text = protocol.read_text(encoding="utf-8")
+                injected = f"\n```bash\n{command}\n```\n\n<!-- /phase:debate -->"
+                prefix, marker, suffix = text.rpartition("<!-- /phase:debate -->")
+                self.assertTrue(marker)
+                text = prefix + injected + suffix
+                protocol.write_text(text, encoding="utf-8")
+
+                result = self.run_check(root)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("normal-debate-transaction-owner", result.stderr)
 
 
 if __name__ == "__main__":

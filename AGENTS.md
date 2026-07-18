@@ -1,8 +1,21 @@
-# CLAUDE.md
+# Agent skills
 
-Read CONTEXT.md for terminology.
+## Issue tracker
 
-## What this repo is
+Issues are tracked as indexed Markdown files under `pending-issues/`. See
+`docs/agents/issue-tracker.md`.
+
+## Triage labels
+
+Local issues use the canonical triage roles in an optional `Triage:` field. See
+`docs/agents/triage-labels.md`.
+
+## Domain docs
+
+This is a single-context repository with `CONTEXT.md` at the root and ADRs under `docs/adr/`. See
+`docs/agents/domain.md`.
+
+# What this repo is
 
 `panel-review` is a **Claude Code plugin** (not an app) that runs a three-way **blind** code/design
 review: Claude, OpenAI Codex (GPT, via the `codex` CLI), and Google Gemini (via the `agy` CLI) each
@@ -145,6 +158,25 @@ workdir holds exactly one review; concurrent runs against the same workdir are u
 - Never pipe a command that can fail into one that succeeds on empty input (e.g. `resolve_diff |
   diff_hash` — resolve to a file and check the exit code separately).
 - Per user instructions (`~/.claude/CLAUDE.md`): do not commit or push unless explicitly asked.
+
+
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked as indexed Markdown files under `pending-issues/`. See
+`docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Local issues use the canonical triage roles in an optional `Triage:` field. See
+`docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This is a single-context repository with `CONTEXT.md` at the root and ADRs under `docs/adr/`. See
+`docs/agents/domain.md`.
+
 
 # Important reference material
 Claude Code documentation: ~/github-repos-for-agents/claude-code-docs/

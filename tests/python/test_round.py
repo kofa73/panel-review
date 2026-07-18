@@ -111,6 +111,37 @@ class RoundTest(unittest.TestCase):
             },
         )
 
+    def prepare_prose_judgment(self):
+        self.prepare_round0()
+        self.install_open_index()
+        prepared = self.run_round("prepare-debate", self.run_id, "claude", "codex")
+        self.assertEqual(prepared.returncode, 0, prepared.stderr)
+        stance = json.dumps(
+            {
+                "id": "i1",
+                "stance": "support",
+                "rationale": "the mechanism is narrower",
+                "revision": {"claim": "narrower claim"},
+            }
+        )
+        raw = f"```stances\n{stance}\n```\n```new_findings\n[]\n```\n"
+        written = subprocess.run(
+            [str(WRITE_RAW), "--id", self.run_id, "--round", "1", "--batch", "1"],
+            input=raw,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(written.returncode, 0, written.stderr)
+        (self.run_dir / "raw" / "round1.codex.1.txt").write_text(raw, encoding="utf-8")
+        collected = self.run_round("collect-debate", self.run_id, "--final")
+        self.assertEqual(collected.returncode, 0, collected.stderr)
+
+        needs_judgment = self.run_round("commit", self.run_id)
+        self.assertEqual(needs_judgment.returncode, 3, needs_judgment.stderr)
+        self.assertEqual(json.loads(needs_judgment.stdout)["status"], "needs_judgment_addendum")
+        return needs_judgment
+
     def test_prepare_round0_builds_common_and_claude_delivery_prompts(self):
         prepared = self.prepare_round0()
 
@@ -667,43 +698,44 @@ class RoundTest(unittest.TestCase):
         self.assertEqual(collected.returncode, 0, collected.stderr)
         self.assertEqual(json.loads(collected.stdout)["engaged"], ["claude", "codex"])
 
-    def test_commit_requires_explicit_addendum_when_prose_needs_judgment(self):
-        self.prepare_round0()
-        self.install_open_index()
-        prepared = self.run_round("prepare-debate", self.run_id, "claude", "codex")
-        self.assertEqual(prepared.returncode, 0, prepared.stderr)
-        stance = json.dumps(
-            {
-                "id": "i1",
-                "stance": "support",
-                "rationale": "the mechanism is narrower",
-                "revision": {"claim": "narrower claim"},
-            }
-        )
-        raw = f"```stances\n{stance}\n```\n```new_findings\n[]\n```\n"
-        subprocess.run(
-            [str(WRITE_RAW), "--id", self.run_id, "--round", "1", "--batch", "1"],
-            input=raw,
-            text=True,
-            capture_output=True,
-            check=True,
-        )
-        (self.run_dir / "raw" / "round1.codex.1.txt").write_text(raw, encoding="utf-8")
-        self.assertEqual(self.run_round("collect-debate", self.run_id, "--final").returncode, 0)
-
-        needs_judgment = self.run_round("commit", self.run_id)
-
-        self.assertEqual(needs_judgment.returncode, 3, needs_judgment.stderr)
-        self.assertEqual(json.loads(needs_judgment.stdout)["status"], "needs_judgment_addendum")
+    def test_commit_addendum_merges_judgment_commits_once_and_regenerates_cards(self):
+        self.prepare_prose_judgment()
         index = json.loads((self.run_dir / "index.json").read_text(encoding="utf-8"))
         self.assertEqual(index["round"], 0)
         self.assertEqual(index["committed_rounds"], [])
+        card = self.workdir / ".panel-review" / self.run_id / "issue-i1.md"
+        self.assertNotIn("synthesized claim", card.read_text(encoding="utf-8"))
 
         addendum = self.run_dir / "addendum.1.json"
-        addendum.write_text("{}\n", encoding="utf-8")
+        self.write_json(
+            addendum,
+            {"revise": [{"id": "i1", "fields": {"claim": "synthesized claim"}}]},
+        )
         committed = self.run_round("commit", self.run_id, "--addendum", addendum)
+
         self.assertEqual(committed.returncode, 0, committed.stderr)
         self.assertEqual(json.loads(committed.stdout)["states"], {"accepted": 1})
+        index = json.loads((self.run_dir / "index.json").read_text(encoding="utf-8"))
+        self.assertEqual(index["round"], 1)
+        self.assertEqual(index["committed_rounds"], [1])
+        self.assertEqual(index["issues"][0]["claim"], "synthesized claim")
+        self.assertIn("**Claim:** synthesized claim", card.read_text(encoding="utf-8"))
+
+    def test_failed_addendum_preserves_canonical_payload_and_index(self):
+        self.prepare_prose_judgment()
+        payload = self.run_dir / "payload.1.json"
+        payload_before = payload.read_bytes()
+        index = self.run_dir / "index.json"
+        index_before = index.read_bytes()
+        addendum = self.run_dir / "addendum.1.json"
+        self.write_json(addendum, {"revise": [{"id": "i1", "claim": "invalid shape"}]})
+
+        rejected = self.run_round("commit", self.run_id, "--addendum", addendum)
+
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn('addendum .revise entry missing "fields"', rejected.stderr)
+        self.assertEqual(payload.read_bytes(), payload_before)
+        self.assertEqual(index.read_bytes(), index_before)
 
 
 if __name__ == "__main__":

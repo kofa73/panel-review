@@ -5,6 +5,7 @@ import argparse
 import json
 from pathlib import Path
 import re
+import subprocess
 import sys
 
 from seat_contract import PHASES, get_rules, render_contract, response_problem
@@ -24,6 +25,23 @@ def read(root, relative):
         return path.read_text(encoding="utf-8")
     except OSError as error:
         raise RuntimeError(f"cannot read {relative}: {error}") from error
+
+
+def read_protocol_phase(root, phase):
+    reader = root / "scripts" / "read_protocol_phase"
+    try:
+        result = subprocess.run(
+            [str(reader), phase],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as error:
+        raise RuntimeError(f"cannot render protocol phase {phase}: {error}") from error
+    if result.returncode != 0:
+        detail = result.stderr.strip() or f"exit {result.returncode}"
+        raise RuntimeError(f"cannot render protocol phase {phase}: {detail}")
+    return result.stdout
 
 
 def check_rendered_contracts(errors):
@@ -81,6 +99,7 @@ def check_tree(errors, root):
     owner_map = read(root, "CONTRACTS.md")
     for owner in (
         "scripts/seat_contract.py",
+        "scripts/round",
         "skills/panel-review-for-agent/references/protocol.md",
         "agents/panel-review-cli-barrier.md",
         "scripts/write_verdict_artifact",
@@ -99,6 +118,36 @@ def check_tree(errors, root):
     agent_status_hook = read(root, "hooks/enforce_agent_status_stub")
     status = read(root, "skills/status/SKILL.md")
     executable_text = "\n".join([*templates.values(), protocol, referee, bootstrap])
+    debate = read_protocol_phase(root, "debate")
+
+    forbidden_debate_commands = (
+        (r'\$SC/merge_payload\b', "merge_payload"),
+        (r'\$SC/sweep"?[ \t]+commit\b', "sweep commit"),
+    )
+    for pattern, command in forbidden_debate_commands:
+        if re.search(pattern, debate):
+            fail(
+                errors,
+                "normal-debate-transaction-owner",
+                "rendered:debate",
+                f"directly invokes {command} instead of round commit",
+            )
+    decision_command = '"$SC/round" commit "$id"'
+    if decision_command not in debate:
+        fail(
+            errors,
+            "normal-debate-transaction-owner",
+            "rendered:debate",
+            "does not invoke round commit",
+        )
+    post_decision = debate.partition(decision_command)[2]
+    if re.search(r'\$SC/regen_cards\b', post_decision):
+        fail(
+            errors,
+            "normal-debate-transaction-owner",
+            "rendered:debate",
+            "directly invokes post-decision regen_cards instead of round commit",
+        )
 
     if re.search(r"(?i)`(findings|stances|new_findings)` block|required-emptyable", claude_seat):
         fail(errors, "seat-contract-owner", "agents/panel-review-claude-seat.md", "restates phase block rules")

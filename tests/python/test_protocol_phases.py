@@ -60,6 +60,18 @@ class ProtocolPhasesTest(unittest.TestCase):
         self.assertIn("remaining debate budget", result.stdout)
         self.assertNotIn("and a `set_state {open}` to", result.stdout)
 
+    def test_debate_contract_uses_only_the_coarse_commit_interface(self):
+        result = subprocess.run([str(READER), "debate"], capture_output=True, text=True)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        decision_command = '"$SC/round" commit "$id"'
+        self.assertIn(decision_command, result.stdout)
+        self.assertIn('round commit "$id" --addendum', result.stdout)
+        self.assertNotRegex(result.stdout, r'\$SC/merge_payload\b')
+        self.assertNotRegex(result.stdout, r'\$SC/sweep"?[ \t]+commit\b')
+        post_decision = result.stdout.partition(decision_command)[2]
+        self.assertNotRegex(post_decision, r'\$SC/regen_cards\b')
+
     def test_referee_return_contract_distinguishes_review_and_write_failures(self):
         referee = REFEREE.read_text(encoding="utf-8")
         bootstrap = BOOTSTRAP.read_text(encoding="utf-8")

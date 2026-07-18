@@ -531,9 +531,9 @@ the common one-batch shape.
    values, so an enum change is adopted only when
    **every** supporting seat's effective value agrees). It never clusters new findings — that is
    step 11. (It is the single builder of the round payload, the way `parse_block` is the single
-   parser; keeping the whole round in one uncommitted payload is what makes a crash before step 12
-   leave round N **wholly unapplied**.)
-11. **Add the judgment `decide_round` can't — as an ADDENDUM, merged in, never appended.**
+   parser; keeping the whole round in one uncommitted payload is what makes a crash before the coarse
+   commit completes leave round N **wholly unapplied**.)
+11. **Add the judgment `decide_round` can't — as an ADDENDUM supplied to `round commit`.**
    Build `/tmp/$id/addendum.$round.json` (a payload-shaped object) holding only your additions:
    - **Prose `claim` revisions** — read `/tmp/$id/advice.$round.json`. For each `prose_revisions`
      entry, your call: synthesize ONE merged `claim` → a `revise` for that id; or if the proposals
@@ -548,9 +548,9 @@ the common one-batch shape.
      **materially conflicts with its current outcome** and the issue has remaining debate budget
      under both limits. If conflicting evidence arrives after either limit is exhausted, preserve
      the forced-terminal rule: hand the issue off as `contested` when it has been peer reviewed,
-     otherwise `unresolved`, rather than leaving it open. This conflict test is referee judgment;
-     `merge_payload` and `index` cannot infer it from evidence text. Do not revise canonical issue
-     fields from one later finding alone; carry its detail in the evidence for the seats or verdict.
+     otherwise `unresolved`, rather than leaving it open. This conflict test is referee judgment.
+     Do not revise canonical issue fields from one later finding alone; carry its detail in the
+     evidence for the seats or verdict.
      For a genuinely new issue, apply the birth-unanimity check **only** among seats engaged in this
      pass: if every engaged seat (and ≥2) raised it, birth it `accepted` with `peer_reviewed=true`
      (`fully_vetted=true` only when those raisers cover the full configured panel); otherwise birth
@@ -558,48 +558,28 @@ the common one-batch shape.
      same-pass raisers, sorted and unique — including the single raiser of a non-unanimous open issue.
      `index commit-sweep` permits that coverage entry to target its same-transaction `add_issues`
      record while all other mutation types remain existing-only.
-   - **Addendum shape** (payload-shaped, so `merge_payload`/`commit-sweep` read the same keys). A
-     `revise` entry wraps the changed enum/prose fields under **`fields`** (a flat `claim` is
-     rejected — `merge_payload` exit 2); `set_state`/`set_flag` carry `id` (+ `flag`):
+   - **Addendum shape.** The addendum is payload-shaped for `round commit --addendum`. A `revise`
+     entry wraps the changed enum/prose fields under **`fields`** (a flat `claim` is rejected before
+     any mutation); `set_state`/`set_flag` carry `id` (+ `flag`):
 
      ```json
      {"revise":[{"id":"i4","fields":{"claim":"<merged prose>"}}],
       "set_state":[{"id":"i4","state":"open"}],
       "set_flag":[{"id":"i4","flag":"detail_contested","value":true}]}
      ```
-   - **Merge, don't append.** `decide_round` may already carry a `set_state`/`revise` for an issue
-     you are also touching (e.g. conflicting evidence requires reopening an issue it accepted, or
-     you add a `claim` where it set a `severity`). Appending a second entry makes `index commit-sweep`
-     reject the whole round (duplicate state/revise target). Let `merge_payload` reconcile them
-     (set_state: your addendum wins; revise: fields deep-merged). Guard the `mv` on merge success
-     (`&&`) — a rejected
-     addendum leaves an empty temp, and an unconditional `mv` would clobber the good `decide_round`
-     payload with it and commit an empty round:
-
-     ```bash
-     "$SC/merge_payload" /tmp/$id/payload.$round.json < /tmp/$id/addendum.$round.json > /tmp/$id/payload.merged.json \
-       && mv /tmp/$id/payload.merged.json /tmp/$id/payload.$round.json
-     # nonzero exit ⇒ fix the addendum shape and retry; payload.$round.json is untouched
-     ```
-     (If you have no additions, skip the merge — the `decide_round` payload is already complete.)
-12. **Commit atomically.** `round commit` performs this step after any required addendum is supplied.
-   The underlying payload from steps 10–11 is complete — `decide_round` already folded in
-   the forced-terminal rule — and the coarse module applies the whole round in one shot:
-
-   ```bash
-   "$SC/sweep" commit "$id" $round "$epoch" < /tmp/$id/payload.$round.json
-   "$SC/regen_cards" --id "$id" --workdir "$workdir"     # cards now carry this round's evidence/states
-   ```
-   `sweep commit` pipes the payload to `index commit-sweep`, which is **idempotent** (guarded by
-   `.committed_rounds`): a re-run after a crash is a complete no-op — no double-bump, no duplicated
-   issue or evidence. Transitions, counters, evidence, and terminal states all take effect **only
-   here**, together. If the returned gate data has `low_only=true` and `debate-low` is false, load
-   `gate`; otherwise continue or finish without loading that phase.
+   - **Describe additions; do not merge or commit them yourself.** The deterministic decision may
+     already contain a `set_state` or `revise` for an issue you are also touching. The coarse command
+     reconciles those overlaps: the addendum's state wins, while revised fields are deep-merged.
+     After writing the addendum, return to step 10's `round commit --addendum` call. It exclusively
+     validates and merges the addendum, installs the complete payload atomically, commits the round
+     once, and regenerates the cards. If it rejects the addendum, fix the addendum and retry; the
+     canonical payload and index remain untouched. If the returned gate data has `low_only=true` and
+     `debate-low` is false, load `gate`; otherwise continue or finish without loading that phase.
 
 <!-- /phase:debate -->
 <!-- phase:gate -->
 
-13. **Low-severity stop gate (after each committed round).** Once the round commits, query
+12. **Low-severity stop gate (after each committed round).** Once the round commits, query
     `"$SC/index" gate-status "$id"`. If `low_only` is true and the run was **not** invoked with
     `debate-low=true`, **stop the loop** rather than spend the remaining
     budget confirming low items — the same rationale as the Round-0 gate, reapplied so a later round
