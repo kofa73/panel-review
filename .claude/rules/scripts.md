@@ -51,11 +51,10 @@ byte-exact.
   fold-reopen) into the `decide_round` payload with the per-key semantics `commit-sweep` needs
   (`set_state` replace, `revise` field-merge, `set_flag` dedup). It does not decide whether folded
   evidence materially conflicts with the current outcome; that judgment remains with the referee.
-  The referee must **never append** a second
-  `set_state`/`revise` for one id — merge through here or `commit-sweep` rejects the round. A
-  mis-shaped addendum (e.g. a `revise` entry with a flat `claim` instead of the `fields` wrapper) is a
-  hard error (**exit 2** + message), not a traceback — so the SKILL's `> tmp && mv tmp payload` guard
-  leaves the good `decide_round` payload untouched instead of committing an empty round.
+  `round commit --addendum` is its normal-path caller: the referee supplies only the judgment
+  addendum and never invokes this helper or appends a second `set_state`/`revise` itself. A mis-shaped
+  addendum (e.g. a `revise` entry with a flat `claim` instead of the `fields` wrapper) is a hard error
+  (**exit 2** + message), not a traceback; `round` leaves the canonical payload and index untouched.
 - `project_card` / `regen_cards` — the **only** way to render issue records → blind cards.
 - `run_codex` / `run_agy` — the **only** way to call the Codex / Gemini seats; they pin the
   model/profile and the flags that let MCP/tilth run (`run_codex` bypasses the Codex sandbox, `run_agy`

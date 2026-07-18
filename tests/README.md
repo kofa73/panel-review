@@ -9,8 +9,9 @@ Regression suite for the panel-review scripts. It has two layers:
 - **`python/`** — `unittest` tests for the Python script interfaces, including `index`,
   `parse_block`, `seat_contract.py` through rendered `round` prompts, `check_contracts`,
   `decide_round`, `decide_degraded_round`, `merge_payload`, `sweep`, `round`,
-  `write_seat_raw`, `read_protocol_phase`, and `read_verdict_artifact`. These drive public script
-  interfaces rather than private helpers (except `panel_common`'s shared primitives).
+  `write_seat_raw`, `read_protocol_phase`, `read_verdict_artifact`, and the
+  `enforce_agent_status_stub` hook. These drive public interfaces rather than private helpers
+  (except `panel_common`'s shared primitives).
 
 Run it after touching any of those scripts, the `commit-sweep` validator, the debate
 decision logic, or the SKILL debate loop.
@@ -31,20 +32,22 @@ them up. No real run is touched.
 ## What the python suite covers (`tests/python/`)
 
 - **index** (`test_index.py`): `gate-status` low-only predicate; `state` enum
-  validation + `card_rev` bump; `commit-sweep` happy path, idempotent re-commit
-  (no double bump), atomic `evaluated_by` coverage; and the rejection branches —
-  format errors → exit 2, transaction/semantic errors (duplicate target, stale
-  epoch, out-of-order, nonexistent id, invariant violation) → exit 1; `put`
-  invariant; `reopen`.
+  validation + `card_rev` bump; read-only `delivery-status` classification and index identity;
+  `commit-sweep` happy path, idempotent re-commit (no double bump), audit output, new-issue birth,
+  and atomic `evaluated_by` coverage; and the rejection branches — format errors → exit 2,
+  transaction/semantic errors (duplicate target, stale epoch, out-of-order, nonexistent id,
+  invariant violation) → exit 1; `put` invariant; `reopen`.
 - **parse_block** (`test_parse_block.py`): normal-mode exit codes (empty→0,
   flat-shape→5, no-block→4); stances parse **byte-identical** to the stored
   fixtures; `--diagnose` pinpoints each failure reason (and exit 5/0); `revision`
   sub-field stripping; empty-vs-real stances block idiom; `--response` phase block
   cardinality (missing and duplicate blocks).
-- **instruction contracts** (`test_contract_consistency.py`, `test_round.py`): every Round-0/debate
-  rendering for two- and three-seat panels uses the shared contract and runtime-valid examples;
-  known barrier/path/return/panel/health/delivery/stance drift is reintroduced one case at a time and
-  must fail with the invariant name.
+- **check_draft** (`test_check_draft.py`): valid bare JSONL and already-fenced input; empty drafts;
+  findings, stances, and new-findings validation; mixed valid/invalid item detection; file input;
+  invalid tags and missing arguments.
+- **instruction contracts** (`test_contract_consistency.py`): the live tree passes the ownership
+  checker; known barrier/path/return/panel/health/delivery/stance drift is reintroduced one case at a
+  time and must fail with the invariant name; direct normal-debate transaction helpers are rejected.
 - **decide_round** (`test_decide_round.py`): round-1/round-2 transitions;
   effective-value enum convergence (stays-open, ceiling→detail_contested,
   true-unanimity→adopt); split support/reject cannot adopt a unilateral revision;
@@ -58,16 +61,31 @@ them up. No real run is touched.
   terminal outcomes (`unresolved`/`contested`), `fully_vetted` only on full
   coverage, two-seat → exit 2, integrity → exit 3.
 - **merge_payload** (`test_merge_payload.py`): set_state-replace + revise
-  field-merge; merged payload commits; hand-appending is genuinely rejected.
+  field-merge; bump/coverage combination; malformed addendum errors remain clean exit-2 failures;
+  merged payload commits; hand-appending is genuinely rejected.
 - **sweep** (`test_sweep.py`): batch ingestion classification
   (missing/empty/malformed/partial/wrong_ids/complete); `has`/`resume-plan`;
   `drop-seat` exclusion; `done`/`commit` (incl. stale-epoch rejection); plan
-  validation with field-specific diagnostics; `plan-scaffold` validation and
-  scaffold-to-plan round trip.
+  validation with field-specific diagnostics; `plan-scaffold` validation and scaffold-to-plan round
+  trip; extending a live plan when a configured seat appears or returns.
+- **round** (`test_round.py`): every Round-0/debate rendering for two- and three-seat panels uses the
+  shared contract and runtime-valid examples; coarse prepare/collect behavior; strict Claude debate
+  delivery; canonical CLI salvage; checkpoint and changed-panel resume handling; verdict-input
+  filtering; and successful/failed `round commit --addendum` transaction boundaries.
+- **write_seat_raw** (`test_write_seat_raw.py`): derived Round-0/debate destinations; strict round and
+  batch shapes; complete phase-required block validation; atomic installation without replacing a
+  valid raw on invalid input.
 - **protocol phases** (`test_protocol_phases.py`): every marked canonical phase
   is independently readable with no marker leakage; the debate interface keeps
-  settled folds terminal unless evidence conflicts and debate budget remains; the bootstrap alone
-  owns the split success/persistence-failure/review-failure return literals.
+  settled folds terminal unless evidence conflicts and debate budget remains; the normal debate path
+  uses only the coarse commit interface; the bootstrap alone owns the split
+  success/persistence-failure/review-failure return literals.
+- **verdict artifacts** (`test_verdict_artifact.py`): durable write/read validation, artifact-only
+  delivery, cleanup/discard retention, continuable reports, low-gate snapshots and explicit
+  finalization, same-epoch freshness, metadata/hash rejection, and write-failure recovery.
+- **Agent status hook** (`test_agent_status_hook.py`): exact Claude/referee status admission,
+  prose/wrong-ID/malformed result rejection, retry behavior, unrelated-agent pass-through, plugin
+  hook registration, and executable installation through `install.sh`.
 
 ## What the bash suite covers (`run_tests.sh`)
 
@@ -92,7 +110,8 @@ them up. No real run is touched.
   the referee's agreement-gated-decision versus mechanical-update invariant,
   Claude-seat redundant-read and sufficient-evidence guidance without lookup
   batching or a hard call cap, its single final validation/write step, and the
-  protocol's use of `birth_index` / `run_seat` / `resolve_instructions`.
+  protocol's use of `birth_index` / `run_seat` / `resolve_instructions` and the coarse normal-debate
+  transaction owner.
 
 ## Fixtures
 

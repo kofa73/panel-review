@@ -37,8 +37,9 @@ Three rules govern how it treats the result:
 - **Nothing is hidden.** Every issue is shown, including rejected ones, with the reason it was
   dropped.
 - **Graceful degradation.** Either peer seat — Codex or Gemini — may be missing or fail mid-review.
-  The review runs with whatever seats engage (Claude plus at least one peer) and says which seat was
-  down. One dead seat never aborts the review.
+  A run is configured with Claude plus at least one available peer, but engagement is measured again
+  on every pass. Any two engaged seats form the normal quorum; a pass with zero or one engaged seat
+  takes the degraded terminal path. One dead seat never aborts the review.
 
 It extends the upstream `codex-peer-review` (Claude + Codex only); the additions are the Gemini
 seat, the blind debate, and crash-resumable state.
@@ -59,14 +60,16 @@ way), and register it with each host the seats run under:
 If `tilth` is missing a seat loses code navigation but still reviews from the diff;
 panel-review does not install or manage tilth.
 
-### Read-only by construction
+### Read-only review contract and tracked-tree restoration
 
 The seats may now **write throwaway scratch scripts** (to check arithmetic, parse, enumerate
 cases) under a git-ignored `.panel-review/<ID>/work/` subtree, and Codex runs with its sandbox
-bypassed so its MCP/tilth calls work. The **code under review is still never modified**: the referee
-snapshots the tracked tree at the start (`scripts/repo_guard`) and, after every seat pass, reverts
-any tracked-file change and flags it loudly in the verdict's Process notes. Integrity is enforced by
-that guard plus the disposable container the panel runs in — not by per-seat sandboxes.
+bypassed so its MCP/tilth calls work. Every seat is instructed not to modify version-controlled code,
+but the checkout is not preventively read-only: the referee snapshots the tracked tree at the start
+(`scripts/repo_guard`) and, after every seat pass, detects and reverts honest tracked-file drift and
+flags it loudly in the verdict's Process notes. This restores tracked repository content; it does not
+confine a seat, protect untracked files, or protect anything outside the repository. Safety rests on
+that restoration plus the disposable container the panel runs in — not on per-seat sandboxes.
 
 > **⚠️ Run this in an isolated environment (Docker container or a throwaway VM).** To let the seats
 > use tilth and run scratch scripts, all three run with **broad write/execute permissions**: Codex
@@ -84,8 +87,9 @@ that guard plus the disposable container the panel runs in — not by per-seat s
 Two independent ways to install, pick one:
 
 - **`./install.sh`** (script-based). Copies `.claude-plugin/`, `skills/`, `agents/`, `scripts/`,
-  `hooks/`, `prompts/`, `assets/` into `~/.claude/skills/panel-review` as a skills-directory plugin (override
-  target with `CLAUDE_DIR=/path ./install.sh`). Removes the old pre-plugin layout first. Run
+  `hooks/`, `prompts/`, `assets/`, and `CONTRACTS.md` into `~/.claude/skills/panel-review` as a
+  skills-directory plugin (override target with `CLAUDE_DIR=/path ./install.sh`). Removes the old
+  pre-plugin layout first. Run
   `/reload-plugins` (or restart Claude Code) afterward.
 - **`/plugin marketplace add` + `/plugin install`** (Claude Code's plugin manager). This repo's
   `.claude-plugin/marketplace.json` lists itself as a plugin whose `source` is `.` (the repo root),
@@ -176,11 +180,11 @@ Three more behaviors worth knowing before you run it:
 
 - **No scope, no guess.** With no scope argument `panel-review:start` prints the usage line and
   stops — it never guesses a base branch.
-- **Low-severity gate.** If Round 0 surfaces only `low`-severity items, the tool stops *before* the
-  debate, writes a report snapshot, shows its filename, and asks whether to debate them anyway —
-  debating an all-low set usually just burns tokens confirming non-issues. Continuing reuses Round 0
-  (no seat is re-run).
-  Pass `--debate-low` to skip the gate.
+- **Low-severity gate.** After Round 0 and after every committed debate round, if every remaining open
+  issue is `low`, the tool pauses before spending another round, writes a report snapshot, shows its
+  filename, and asks whether to keep debating or finish there — debating an all-low set usually just
+  burns tokens confirming non-issues. Continuing reuses all completed work; no completed pass is
+  re-run. Pass `--debate-low` to skip these stops.
 - **Resumable.** If a run is interrupted — crash, token exhaustion, you stop it — its state
   survives. `panel-review:status` shows it, and `panel-review:resume` picks it up from where it
   stopped. If the code under review changed since the interruption (**diverged**), neither `resume`
@@ -247,9 +251,11 @@ seat is abandoned mid-run and the review silently degrades to the seats that did
 | `skills/continue/SKILL.md` | skill | Re-debates a finished run's `unresolved`/`contested` leftovers. | you, via `panel-review:continue` |
 | `skills/result/SKILL.md` | skill | **Read-only.** Validates and retrieves a finished durable verdict by exact artifact ID; never resumes or re-runs seats. | you, via `panel-review:result <ID>` (also model-invocable) |
 | `skills/discard/SKILL.md` | skill | Deletes all saved sessions for this workdir (the reset). | you, via `panel-review:discard` |
-| `skills/panel-review-for-agent/SKILL.md` | skill | **The referee protocol.** The full blind-debate procedure. Preloaded into the referee agent (`user-invocable: false`); hidden from the `/` menu. | the referee agent (preloaded) |
+| `skills/panel-review-for-agent/SKILL.md` | skill | **The referee bootstrap and return contract.** Preloaded into the referee agent (`user-invocable: false`); validates its task, exposes narrow phase loading, and owns fixed referee returns. Hidden from the `/` menu. | the referee agent (preloaded) |
+| `skills/panel-review-for-agent/references/protocol.md` | reference | **The canonical phased procedure.** `read_protocol_phase` loads only the marked sections needed for the current state. | the referee bootstrap |
 | `agents/panel-review-referee.md` | agent | **The referee.** A separate context that runs the seats and never reviews code itself; it follows the referee-protocol skill. | `start`/`resume`/`continue` |
 | `agents/panel-review-claude-seat.md` | agent | **The Claude seat.** A cold, no-memory agent spawned fresh each pass. | the referee agent (never forked) |
+| `agents/panel-review-cli-barrier.md` | agent | **The CLI-seat wait barrier.** A thin non-reviewing background Agent that runs `await_seats` and reliably wakes the referee after the CLI seats settle. | the referee agent |
 
 `start`/`resume`/`continue`/`discard` are `disable-model-invocation: true` — only you trigger them
 (critical for `discard`, so the model never autonomously wipes a session). `status` and `result` are
@@ -349,8 +355,9 @@ Beyond its state, each issue record also carries three boolean **flags**, two **
 
 The referee never hand-rolls flags, writes, index math, or parsing. It calls wrappers in
 `${CLAUDE_PLUGIN_ROOT}/scripts/`, so those operations are byte-exact and can't be fat-fingered.
-Static prompt templates live in `${CLAUDE_PLUGIN_ROOT}/prompts/` (`blind_pass.tmpl` and
-`debate.tmpl`). A slipped block is not re-asked of the seat via a template — the seat has exited, so
+Static reviewer prompt templates live in `${CLAUDE_PLUGIN_ROOT}/prompts/` (`blind_pass.tmpl` and
+`debate.tmpl`); `claude_delivery.tmpl` adds only the Claude Agent's validated file-delivery
+instructions. A slipped block is not re-asked of the seat via a template — the seat has exited, so
 recovering it is the referee's job (see "Salvage" in the referee protocol), not a script's.
 `scripts/seat_contract.py` is the authoritative owner of seat blocks, fields, stance values,
 normalization, phase cardinality, and their rendered instructions. `round` renders that contract into
@@ -372,8 +379,8 @@ subagent after eight consecutive stop-hook blocks, so a model that ignores every
 escape the exact-result contract. `read_verdict_artifact --delivery` remains the independent,
 deterministic authority for user-visible report delivery.
 
-| Script | Job |
-|--------|-----|
+| Component | Job |
+|-----------|-----|
 | `preflight` | Check jq / git / work-tree / writable cwd and that ≥1 peer seat (`codex` or `agy`) is present; emit `CODEX:` / `GEMINI:` availability |
 | `resolve_diff` | Turn a scope token into the diff text — **one** place owns scope→diff (`start`/`resume`/`continue` hash it, referee reviews it) |
 | `diff_hash` | Stable hash of the resolved diff, for the manifest and the resume/diverged check |
@@ -386,7 +393,7 @@ deterministic authority for user-visible report delivery.
 | `run_agy` | The **only** way to call the Gemini seat — pins the model, a 15-min `--print-timeout` budget, and the flag-binding invocation (prompt on **stdin with no bare `--print`**, since agy's `--print` takes the prompt as its argument and would otherwise swallow `--model`); falls back from the primary Gemini model to a faster one if the primary fails or exhausts its `--print-timeout` (whose expiry prints `Error: timed out waiting for response`) |
 | `run_seat` | Dispatch one **CLI** seat (Codex or Gemini) for a tag, parse the block, and print the parse status (0 engaged · 4 no block · 5 malformed). **It does not repair.** Salvaging a slipped CLI block — a malformed fence, or a real review the seat forgot to fence — is the **referee's** job, not a script's: the seat that wrote the block has exited, so any "repair" re-dispatch is a fresh cold model whose only input is the raw file the referee already has, and deciding *"real review or down-seat stub?"* is an LLM judgment, not a grep heuristic. On a 4/5 the referee reads that one CLI seat's raw and rewrites it well-formed (see "Salvage" in the referee protocol); debate salvage is installed through `round salvage-debate`, which requires the canonical `.salvaged` side path and never overwrites the original. The Claude seat instead writes through `write_seat_raw`, which validates before installation and fails closed. **CLI seats are long-running** (minutes; `run_agy` up to ~34 min across its two 15-min model attempts), longer than the Bash tool's foreground timeout (2 min default, 10 min max), so the seats run **in the background**, never foreground (a foreground dispatch is killed mid-pass and the empty raw file reads as a down seat) |
 | `await_seats` | **Barrier** over the CLI seats: runs them all concurrently (each through `run_seat`, so dispatch + parse are unchanged — neither repairs) inside **one** job, waits for every seat with a configurable per-seat outer timeout (`--seat-timeout`, default 2400s — the backstop `run_codex` otherwise lacks), writes each seat's final status plus one combined `--done` summary, and exits. It is run by the **`panel-review-cli-barrier` Agent**, not backgrounded by the referee directly: a background **Bash** job does **not** re-invoke the sub-agent that launched it (its completion is routed to the root session and dropped, stalling the referee), whereas a background **Agent** reliably wakes its spawner. So a pass spawns two background Agents — the CLI barrier and the Claude seat — for two reliable wakes instead of the per-seat polling loop that made the referee burn turns re-reading its whole context |
-| `panel-review-cli-barrier` (agent) | Thin, non-reviewing helper subagent the referee spawns **background** each pass: it `bash`-runs the `await_seats` command the referee wrote — wrapped so `await_seats`' exit code is always written to a **completion sentinel** — then watches that sentinel (not the `--done` file, which exists only on a clean run) via bounded foreground waits in its own tiny context, and returns once `await_seats` has fully exited. Its return is the event that wakes the referee; the sentinel's exit code tells the referee whether the seats actually ran (`0`) or hit a setup error / wedged (nonzero / absent → CLI seats down for the pass, no false "settled" and no late writes). Exists solely because a background Agent — unlike a background Bash job — reliably re-invokes its spawning sub-agent |
+| `agents/panel-review-cli-barrier.md` | Thin, non-reviewing helper subagent the referee spawns **background** each pass: it `bash`-runs the `await_seats` command the referee wrote — wrapped so `await_seats`' exit code is always written to a **completion sentinel** — then watches that sentinel (not the `--done` file, which exists only on a clean run) via bounded foreground waits in its own tiny context, and returns once `await_seats` has fully exited. Its return is the event that wakes the referee; the sentinel's exit code tells the referee whether the seats actually ran (`0`) or hit a setup error / wedged (nonzero / absent → CLI seats down for the pass, no false "settled" and no late writes). Exists solely because a background Agent — unlike a background Bash job — reliably re-invokes its spawning sub-agent |
 | `extract_block` / `parse_block` | Pull a `findings` / `stances` / `new_findings` block → validated JSONL; stance parsing accepts only `support`/`reject`, normalizes optional support revisions, discards revisions attached to reject, and requires reject counter-evidence. `--response round0|debate` additionally enforces exactly one required block and rejects phase-inappropriate blocks. Exit 4 = a required block is absent, exit 0 = valid (including an empty or explicit `[]` block), and exit 5 = malformed or duplicate. `--diagnose` reports per-item failures to guide salvage |
 | `check_draft` | **Seat-facing** pre-emit validator, spliced into each seat prompt as `{{CHECK}}` (never called by the referee): a seat runs it on the JSONL it is about to fence so it can fix malformed items *before* emitting. A thin wrapper over `parse_block --diagnose` (same validator, no second schema to drift). Closes the silent-drop gap: `parse_block`'s normal mode discards individual malformed lines with only an unseen stderr note (it fails hard only when the *whole* block is unparseable), so a seat that emits some good and some bad items would otherwise lose the bad ones with no repair |
 | `birth_index` | Turn the referee's clustered Round-0 finding-to-issue map into the full `index.json` — assigns each issue's birth state, vetting flags, and `evaluated_by` coverage by the birth-unanimity rule (the deterministic half of clustering; the referee still owns the merge itself) |
@@ -407,6 +414,7 @@ deterministic authority for user-visible report delivery.
 | `write_verdict_artifact` | Write the canonical verdict to the `/tmp/<ID>.md` sibling of `/tmp/<ID>/` (outside it, so `cleanup`/`discard` never delete it), stamped with the continuation epoch, exact index hash, and `finished` only when the canonical index has no open issue or the user explicitly finishes at the low-only gate. This artifact is the only final-report delivery surface; write failure keeps the run resumable and blocks cleanup |
 | `read_verdict_artifact` | Validate a durable artifact's ID, metadata, and optional expected scope/diff hash/continuation epoch. Default mode requires a finished review and emits its body for `panel-review:result`; `--delivery` verifies retained state through `index delivery-status`, rejects a stale same-epoch snapshot, and emits only the validated filename plus minimal gate/continuation status for `start`/`resume`/`continue` |
 | `read_protocol_phase` | Emit one marked phase from the canonical referee procedure so normal runs load only common, active-mode, exceptional-on-demand, and final-synthesis instructions |
+| `_panel_common.sh` / `panel_common.py` | Parallel shared-helper libraries for Bash and Python entry points: validated run IDs, atomic writes, and git-exclude operations. Keep their equivalent primitives synchronized |
 
 ---
 
@@ -513,7 +521,7 @@ If the run turns out not to be finished-with-leftovers (still mid-debate), `cont
   only filters clear false positives; everything else is presented for you to decide.
 - **Explicit verbs, no intent-guessing.** `start`/`resume`/`continue`/`discard`/`status`/`result` each have one
   job and one precondition; the tool never infers fresh-vs-resume from on-disk state. The only
-  remaining `AskUserQuestion` is the low-severity gate (debate the all-low Round-0 set, or finish).
+  remaining `AskUserQuestion` is the low-severity gate (keep debating the all-low open set, or finish).
   `diverged`/`ambiguous` are deterministic exits, not prompts.
 - **Skills only — no command file.** The referee-protocol skill is `user-invocable: false`
   (preloadable into the referee agent, hidden from the `/` menu). The four side-effecting command
@@ -536,10 +544,11 @@ discipline.
 - **Never** hand-create, edit, or delete `~/.codex/config.toml`. `run_codex` owns
   `~/.codex/panel-review.config.toml` (auto-created from a shipped default); leave it and any other
   `~/.codex/*.config.toml` profile to their tools.
-- The code under review is **never modified**: `scripts/repo_guard` snapshots the tracked tree and
-  auto-reverts any tracked-file change after every seat pass. Seats write only to
-  `.panel-review/<ID>/work/`, except that the Claude seat passes its complete response to
-  `write_seat_raw`, which can write only the derived `/tmp/<ID>/raw/` path.
+- Seats must not modify version-controlled code. `scripts/repo_guard` snapshots the tracked tree and
+  detects and auto-reverts honest tracked-file drift after every seat pass. This restoration is not
+  confinement and does not protect untracked files or paths outside the repository. Intended seat
+  writes stay under `.panel-review/<ID>/work/`, except that the Claude seat passes its complete
+  response to `write_seat_raw`, which can write only the derived `/tmp/<ID>/raw/` path.
 - `index.json` is written **only** through the `index` / `sweep` scripts; cards **only** through
   `project_card` / `regen_cards`. Never hand-write state files.
 - The Claude seat is spawned as a fresh `panel-review:panel-review-claude-seat` subagent — **never forked**.

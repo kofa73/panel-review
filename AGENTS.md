@@ -50,7 +50,9 @@ skills/agents are Markdown. `python3`, `jq`, `git` are required.
 - **Tests:** `./tests/run_tests.sh` (`VERBOSE=1` lists each PASS) runs bash asserts then the Python
   `unittest` suite (`tests/python/`, fixtures in `tests/fixtures/`). Run it after changing
   `seat_contract.py`, `check_contracts`, `parse_block`, `decide_round`, `merge_payload`, `sweep`,
-  `index`'s `commit-sweep` validator, or the SKILL debate loop. Single module:
+  `round`, `write_seat_raw`, `read_protocol_phase`, `read_verdict_artifact`,
+  `hooks/enforce_agent_status_stub`, `index`'s `commit-sweep` validator, or the canonical protocol.
+  Single module:
   `python3 -m unittest tests.python.test_index -v` from repo root.
 - **Smoke-test a script** by running the wrapper directly, e.g. `scripts/preflight`,
   `scripts/resolve_diff <scope>`, `scripts/inspect_run --id <ID> --workdir "$PWD"` (standalone; need
@@ -58,7 +60,8 @@ skills/agents are Markdown. `python3`, `jq`, `git` are required.
 
 ## Architecture
 
-Four participants, strict role separation (full per-script map in `.claude/rules/scripts.md`):
+Four participants — three review seats and one referee — with strict role separation and supporting
+command/orchestration layers (full per-script map in `.claude/rules/scripts.md`):
 
 - **Command skills** (`skills/{start,status,resume,continue,result,discard}/SKILL.md`) — run in the **main
   conversation**; parse args, check preconditions, dispatch the referee. `start`/`resume`/`continue`/
@@ -104,8 +107,10 @@ workdir holds exactly one review; concurrent runs against the same workdir are u
 - Never hand-create/edit/delete `~/.codex/config.toml`; `run_codex` owns
   `~/.codex/panel-review.config.toml`.
 - `index.json` written only via `index`/`sweep`; cards only via `project_card`/`regen_cards`.
-- The code under review is never modified: `repo_guard snapshot` at the start, `verify --restore` after
-  every seat pass; reverted drift is flagged in the verdict's Process notes.
+- Seats are instructed not to modify tracked code. `repo_guard snapshot` records the initial tracked
+  tree and `verify --restore` detects and reverts honest tracked-file drift after every seat pass;
+  reverted drift is flagged in the verdict's Process notes. This is restoration, not confinement: it
+  does not protect untracked files or anything outside the repository.
 - Claude seat is spawned fresh (`panel-review:panel-review-claude-seat`), never forked.
 - The referee persists the synthesized verdict artifact and returns **only** a fixed ready/failure
   stub — never the verdict body, raw seat output, card text, or per-round transcripts. The main
@@ -137,12 +142,12 @@ workdir holds exactly one review; concurrent runs against the same workdir are u
   seat is re-dispatched every round; a seat that fails or times out one round is retried the next. The
   only persistent effect of a down-round is the informational `fully_vetted=false` label (never
   re-flipped). "Down" means down *for that pass*, not excluded from the run.
-- **`run_seat` repair overwrites the raw file — latent debate hazard.** Repair (fires on `parse_block`
-  exit 5 only, today) re-dispatches the seat and redirects `> "$raw"`, overwriting its output. In
-  **debate**, `stances` and `new_findings` come from **one** model call into **one** raw file (`sweep
-  ingest-batch` re-reads that same raw for stances). So any change that repairs a debate block must not
-  naively overwrite that raw, or it destroys the already-valid `stances`. `parse_block` exit codes:
-  **0** engaged · **4** no block (down) · **5** malformed (the only repairable case).
+- **CLI salvage is referee-owned.** `run_seat` dispatches and parses but never repairs or re-dispatches
+  a seat. On parse status 4 (missing block) or 5 (malformed block), the referee may salvage a genuine
+  completed CLI review without changing its conclusions. Debate salvage re-emits both required blocks
+  to the canonical `.salvaged` side file and installs it through `round salvage-debate`, so the
+  original raw is never overwritten. A failed Claude delivery is retried or dropped instead because
+  `write_seat_raw` validates the complete response before installation.
 - **Prompt size correlates with agy prose-not-JSONL failures.** Empirically, `round0.prompt` >~99 KB
   (a huge inlined diff diluting attention, contract buried at the end) yielded prose-without-fence from
   the Gemini seat; ≤~87 KB yielded valid blocks. Not code-proven, but keep prompts lean and the output
@@ -158,25 +163,6 @@ workdir holds exactly one review; concurrent runs against the same workdir are u
 - Never pipe a command that can fail into one that succeeds on empty input (e.g. `resolve_diff |
   diff_hash` — resolve to a file and check the exit code separately).
 - Per user instructions (`~/.claude/CLAUDE.md`): do not commit or push unless explicitly asked.
-
-
-## Agent skills
-
-### Issue tracker
-
-Issues are tracked as indexed Markdown files under `pending-issues/`. See
-`docs/agents/issue-tracker.md`.
-
-### Triage labels
-
-Local issues use the canonical triage roles in an optional `Triage:` field. See
-`docs/agents/triage-labels.md`.
-
-### Domain docs
-
-This is a single-context repository with `CONTEXT.md` at the root and ADRs under `docs/adr/`. See
-`docs/agents/domain.md`.
-
 
 # Important reference material
 Claude Code documentation: ~/github-repos-for-agents/claude-code-docs/

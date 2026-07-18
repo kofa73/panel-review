@@ -162,8 +162,8 @@ to be peer reviewed and settled; one seat alone cannot settle it.
 _Avoid_: Majority
 
 **Consensus**:
-Unanimous agreement among engaged seats on an issue's existence, or on the same proposed value for a
-revised issue detail. A numerical majority is not consensus.
+Unanimous agreement among at least two engaged seats on an issue's existence, or on the same proposed
+value for a revised issue detail. A numerical majority or a single-seat evaluation is not consensus.
 _Avoid_: Majority decision, winning value
 
 **Peer reviewed**:
@@ -177,8 +177,8 @@ stronger than peer reviewed but still does not express whether the issue was acc
 _Avoid_: Accepted, unanimous
 
 **Low-severity gate**:
-The decision point reached when every open issue after Round 0 is low severity, allowing the user to
-finish with the current report or spend the debate budget on those issues.
+The decision point reached after Round 0 or a committed debate round when every open issue is low
+severity, allowing the user to finish with the current report or spend more debate budget on them.
 _Avoid_: Low-severity outcome
 
 **Salvage**:
@@ -228,7 +228,8 @@ later continuation cycle.
 _Avoid_: Open issue, unfinished issue
 
 **Finished review**:
-A review run with no open issues. It may still contain leftovers available for continuation.
+A review run with no open issues, or one explicitly finalized at a low-severity gate. It may still
+contain leftovers available for continuation; a gate-finalized review may retain open low issues.
 _Avoid_: Fully accepted review, cleaned-up review
 
 ## Delivery
