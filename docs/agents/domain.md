@@ -14,6 +14,8 @@ files when terminology or architectural decisions are actually resolved.
 
 - `CONTEXT.md` is the shared glossary and domain model.
 - `docs/adr/` contains repository-wide architectural decisions.
+- `docs/evolution.md` is the evidence-backed historical sequence behind those decisions. It records
+  superseded and proposed work as history, not as current authority.
 - A root `CONTEXT-MAP.md` or per-package context documents are not used unless the repository later
   becomes a genuine multi-context monorepo.
 

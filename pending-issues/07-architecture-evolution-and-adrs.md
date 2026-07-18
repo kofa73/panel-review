@@ -2,7 +2,7 @@
 
 Priority: 7
 
-Status: Deferred
+Status: Completed
 
 Source: former `pending.md` item 14 and `doc updates`
 
@@ -43,3 +43,33 @@ undocumented guesses from becoming accepted ADR rationale.
 - Superseded and proposed decisions are not presented as accepted current architecture.
 - `CONTEXT.md`, if added, contains vocabulary rather than duplicated protocol or ADR content.
 - No documentation claims precede the correctness work they are meant to describe.
+
+## Implementation
+
+Completed 2026-07-18 as an evidence-reconstruction and domain-modeling change:
+
+- `docs/evolution.md` reconstructs ten architectural milestones through commit `5082f6e`. Every
+  milestone separates evidence, explicit rationale, inference, and current status, and the final
+  sections distinguish retained, superseded, and still-proposed decisions.
+- Seven accepted ADRs under `docs/adr/` record only decisions that are costly to reverse,
+  surprising without context, and the result of a documented trade-off: review/referee separation
+  and unanimity, symmetric peers, explicit lifecycle verbs and continuation cycles, deterministic
+  mechanics, the seat trust model, file-backed context boundaries, and artifact-only report
+  delivery.
+- No ADR was created for the CLI wake-barrier mechanism, prompt repair/schema iterations,
+  marketplace path, or optional model/helper experiments. They are replaceable mechanisms, lack
+  recorded rationale, or remain unmeasured proposals.
+- `docs/agents/domain.md` now routes historical questions to `docs/evolution.md` while retaining
+  `CONTEXT.md` as the vocabulary-only current domain glossary. `CONTEXT.md` required no change.
+- No grilling pass was needed. Research found no unresolved question that blocked ADR
+  classification; the undocumented marketplace rationale and unproven prompt-size causality were
+  explicitly excluded from accepted ADR rationale.
+
+## Completed verification
+
+- All 84 local Markdown links in `docs/evolution.md`, `docs/adr/`, and `docs/agents/domain.md`
+  resolve.
+- Every commit named by the ADRs resolves to a commit in the repository.
+- `scripts/check_contracts --root .`: `instruction contracts: OK`.
+- `./tests/run_tests.sh`: `PASS: 223`, `FAIL: 0`.
+- `git diff --check` and a trailing-whitespace scan passed.
