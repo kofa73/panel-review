@@ -68,7 +68,7 @@ class ContractConsistencyTest(unittest.TestCase):
         for invariant, relative_path, bad_text in cases:
             with self.subTest(invariant=invariant), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
-                for name in ("agents", "skills", "prompts"):
+                for name in ("agents", "skills", "prompts", "hooks"):
                     shutil.copytree(ROOT / name, root / name)
                 shutil.copy2(ROOT / "CONTRACTS.md", root / "CONTRACTS.md")
                 target = root / relative_path

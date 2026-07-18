@@ -85,6 +85,7 @@ def check_tree(errors, root):
         "agents/panel-review-cli-barrier.md",
         "scripts/write_verdict_artifact",
         "skills/panel-review-for-agent/SKILL.md",
+        "hooks/enforce_agent_status_stub",
     ):
         if owner not in owner_map:
             fail(errors, "contract-ownership-map", "CONTRACTS.md", f"missing owner {owner}")
@@ -95,6 +96,7 @@ def check_tree(errors, root):
     claude_seat = read(root, "agents/panel-review-claude-seat.md")
     claude_delivery = read(root, "prompts/claude_delivery.tmpl")
     bootstrap = read(root, "skills/panel-review-for-agent/SKILL.md")
+    agent_status_hook = read(root, "hooks/enforce_agent_status_stub")
     status = read(root, "skills/status/SKILL.md")
     executable_text = "\n".join([*templates.values(), protocol, referee, bootstrap])
 
@@ -126,6 +128,13 @@ def check_tree(errors, root):
             fail(errors, "referee-return-status", "bootstrap skill", f"missing {status_name}")
         if status_name in referee or status_name in protocol:
             fail(errors, "referee-return-status", "non-owner referee instructions", f"restate {status_name}")
+        if status_name not in agent_status_hook:
+            fail(errors, "referee-return-status", "Agent status hook", f"does not enforce {status_name}")
+    for status_name in ("CLAUDE_SEAT_RAW_WRITTEN", "CLAUDE_SEAT_RAW_FAILED"):
+        if status_name not in claude_delivery:
+            fail(errors, "claude-return-status", "Claude delivery prompt", f"missing {status_name}")
+        if status_name not in agent_status_hook:
+            fail(errors, "claude-return-status", "Agent status hook", f"does not enforce {status_name}")
 
     if re.search(r"(?i)two other AIs", executable_text):
         fail(errors, "configured-panel-wording", "seat-facing instructions", "hard-codes a three-seat panel")

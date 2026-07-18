@@ -58,7 +58,9 @@ Four participants, strict role separation (full per-script map in `.claude/rules
 - **Claude seat** (`agents/panel-review-claude-seat.md`) — a cold, no-memory reviewer subagent,
   **spawned fresh each pass, never forked** (a fork would inherit the referee's context and destroy
   blindness). It atomically writes its validated raw block through `write_seat_raw` and returns only
-  a fixed status stub. Codex and Gemini seats are external CLIs.
+  a fixed status stub. A plugin `SubagentStop` hook blocks non-exact returns and asks the same
+  subagent to correct them; Claude Code's eight-block cap makes this bounded conformance enforcement,
+  not an absolute security boundary. Codex and Gemini seats are external CLIs.
 - **CLI barrier** (`agents/panel-review-cli-barrier.md`) — a thin non-reviewing helper the referee
   spawns as a **background Agent** each pass to run `await_seats` and return when both CLI seats settle
   (a background Agent reliably re-wakes the referee; a background Bash job does not).

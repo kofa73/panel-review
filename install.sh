@@ -3,7 +3,7 @@
 # Installer for the panel-review plugin.
 #
 # Copies the whole plugin tree (.claude-plugin/, skills/, agents/, scripts/,
-# prompts/, assets/, CONTRACTS.md) into the user's Claude config dir as a single
+# hooks/, prompts/, assets/, CONTRACTS.md) into the user's Claude config dir as a single
 # skills-directory plugin, loaded as panel-review@skills-dir. Commands are
 # namespaced panel-review:<verb> (panel-review:start, :status, :resume,
 # :continue, :result, :discard).
@@ -53,7 +53,7 @@ done
 rm -rf -- "$PLUGIN_DST"
 mkdir -p "$PLUGIN_DST"
 
-for part in .claude-plugin skills agents scripts prompts assets CONTRACTS.md; do
+for part in .claude-plugin skills agents scripts hooks prompts assets CONTRACTS.md; do
   if [ -e "$REPO/$part" ]; then
     cp -a "$REPO/$part" "$PLUGIN_DST/$part"
   fi
@@ -64,6 +64,7 @@ done
 SCRIPTS_DST="$PLUGIN_DST/scripts"
 chmod +x "$SCRIPTS_DST"/*
 chmod -x "$SCRIPTS_DST/_panel_common.sh"
+chmod +x "$PLUGIN_DST/hooks/enforce_agent_status_stub"
 
 # Shadow check: a project- or user-level agents/panel-review-*.md outranks
 # the plugin's own agents of the same name (lowest priority), so either would

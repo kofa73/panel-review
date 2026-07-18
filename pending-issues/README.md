@@ -16,6 +16,7 @@ Completing an item should update its status here, its issue file, and the corres
 | 3 | Completed | [Correct the referee mutation contract](03-referee-mutation-contract.md) | Scoped seat agreement to consensus decisions and qualifying detail revisions without blocking canonical mechanical updates. |
 | 4 | Completed | [Require both Claude debate blocks](04-claude-debate-output-contract.md) | Aligned the Claude role summary with the required-emptyable two-block delivery contract. |
 | 5 | Completed | [Establish one source of truth for executable instructions](05-instruction-contract-single-source.md) | Centralized seat contracts, assigned invariant owners, and added semantic consistency checks. |
+| 13 | Completed | [Enforce fixed Agent status-stub boundaries](13-enforce-agent-status-stub-boundaries.md) | A `SubagentStop` hook now blocks non-exact Claude-seat/referee returns and validates the referee's expected run ID before either completion reaches its caller. |
 | 6 | Pending | [Correct repository documentation](06-repository-documentation-corrections.md) | Documentation must describe the settled implementation, after behavior contracts are fixed. |
 | 7 | Deferred | [Reconstruct architectural evolution and write qualifying ADRs](07-architecture-evolution-and-adrs.md) | Valuable design history, but it does not affect current runtime correctness. |
 | 8 | Optional | [Remove low-risk implementation and test duplication](08-maintainability-cleanups.md) | Maintainability-only cleanup with no known behavior defect. |

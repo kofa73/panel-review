@@ -84,7 +84,7 @@ that guard plus the disposable container the panel runs in — not by per-seat s
 Two independent ways to install, pick one:
 
 - **`./install.sh`** (script-based). Copies `.claude-plugin/`, `skills/`, `agents/`, `scripts/`,
-  `prompts/`, `assets/` into `~/.claude/skills/panel-review` as a skills-directory plugin (override
+  `hooks/`, `prompts/`, `assets/` into `~/.claude/skills/panel-review` as a skills-directory plugin (override
   target with `CLAUDE_DIR=/path ./install.sh`). Removes the old pre-plugin layout first. Run
   `/reload-plugins` (or restart Claude Code) afterward.
 - **`/plugin marketplace add` + `/plugin install`** (Claude Code's plugin manager). This repo's
@@ -361,6 +361,17 @@ can drift; and the blind prompt references the diff **file** rather than inlinin
 inlined diff diluted attention and correlated with the Gemini seat emitting prose instead of a
 fenced block).
 
+The plugin's `SubagentStop` hook gates the two model-return boundaries that carry fixed statuses:
+Claude seat → referee and referee → main command. It accepts only an exact Claude-seat status, or an
+exact referee status whose run ID matches the original Agent task prompt. Prose-prefixed, malformed,
+or wrong-ID responses stay in the subagent transcript; the same subagent receives a short correction
+and returns again, without repeating the Agent call or its completed file work. This preserves the
+background-Agent wake path and keeps raw review/verdict prose out of the caller context during normal
+correction. It is **bounded enforcement, not a security boundary**: Claude Code forcibly ends a
+subagent after eight consecutive stop-hook blocks, so a model that ignores every correction can still
+escape the exact-result contract. `read_verdict_artifact --delivery` remains the independent,
+deterministic authority for user-visible report delivery.
+
 | Script | Job |
 |--------|-----|
 | `preflight` | Check jq / git / work-tree / writable cwd and that ≥1 peer seat (`codex` or `agy`) is present; emit `CODEX:` / `GEMINI:` availability |
@@ -390,6 +401,7 @@ fenced block).
 | `project_card` / `regen_cards` | Render issue records → blind cards (no origins, no tally); rebuild all cards from the index on resume |
 | `write_card` | Atomic single-card write (temp + fsync + rename, `.bak` rotation) over `panel_atomic_write`, for the card writes `project_card`/`regen_cards` don't own |
 | `write_seat_raw` | Validate the Claude seat's complete phase-required block set and atomically install it at the derived `/tmp/<ID>/raw/` path; the seat then returns only a fixed status stub to the referee |
+| `hooks/enforce_agent_status_stub` | `SubagentStop` gate for Claude-seat and referee Agent results: allow only their exact fixed statuses, recover the referee's expected run ID from its original Agent task, and keep the same subagent running on any mismatch |
 | `round` | Coarse normal-path module: prepare Round 0/debate prompts and barriers from the current preflight panel, collect compact seat/guard status, install an explicitly supplied canonical CLI debate salvage through `salvage-debate`, select only complete active-plan batches for decision/atomic commit with an optional judgment addendum, and render stable compact verdict input |
 | `sweep` | Checkpointed debate sweeps — owns batch plans (including `plan-scaffold`, which emits one correctly shaped batch per supplied current-panel seat, and `extend-plan`, which adds unplanned seats or reactivates already-planned dropped seats when they return to the current panel), targeted plan-schema diagnostics, two-block (`stances` + `new_findings`) parse/ID validation, complete-bundle checkpoint retention/source provenance, dropped-seat cleanup, and resume plans. A published completion marker with any missing companion is corrupt state and fails closed; counters advance **only** on a committed sweep |
 | `write_verdict_artifact` | Write the canonical verdict to the `/tmp/<ID>.md` sibling of `/tmp/<ID>/` (outside it, so `cleanup`/`discard` never delete it), stamped with the continuation epoch, exact index hash, and `finished` only when the canonical index has no open issue or the user explicitly finishes at the low-only gate. This artifact is the only final-report delivery surface; write failure keeps the run resumable and blocks cleanup |
@@ -449,6 +461,12 @@ claim completion. The referee's fixed return distinguishes `PANEL_VERDICT_WRITE_
 that persistence failure from `PANEL_REVIEW_FAILED id=<ID>` for an earlier review/orchestration
 failure; successful persistence returns `PANEL_VERDICT_READY id=<ID>`. **`/tmp` is cleared on reboot
 — move the file somewhere permanent to keep it.**
+
+Before those Agent results enter their callers, the plugin's `SubagentStop` hook requires the exact
+fixed response and blocks prose-prefixed or wrong-ID variants for correction by the same subagent.
+The hook does not carry or reconstruct the verdict; the artifact reader below remains the delivery
+authority. Claude Code caps repeated stop-hook blocks at eight, so this mechanism is a bounded
+runtime conformance gate rather than an absolute isolation or security guarantee.
 
 After every referee Agent completion, including a failed final response, `start`, `resume`, and
 `continue` call `read_verdict_artifact --delivery` with the run's expected ID, scope, diff hash, and
