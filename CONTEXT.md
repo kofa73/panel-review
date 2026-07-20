@@ -80,7 +80,8 @@ _Avoid_: Configured seat, available seat, active seat
 
 **Down seat**:
 A configured seat that did not engage in the current pass because it was unavailable, failed, timed
-out, or returned an unusable response. A down seat may engage again in a later round.
+out, or returned an unusable response. Round 0 retries a down seat once before clustering; resume may
+retry it again while that Round 0 remains uncommitted. A down seat may also engage in a later round.
 _Avoid_: Removed seat, excluded seat
 
 **Blind review**:
@@ -145,7 +146,8 @@ _Avoid_: Low-severity issue
 
 **Round 0**:
 The initial blind pass in which every engaged seat reviews the same scope independently and produces
-findings from which issues are born.
+findings from which issues are born. Its configured panel and blind prompt are frozen on first
+preparation and reused for retry or resume attempts.
 _Avoid_: Debate round, round 1
 
 **Debate round**:

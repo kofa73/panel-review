@@ -44,8 +44,8 @@ reference; grepping a script for its flags wastes a full source-read into your c
 "$SC/check_draft" <tag> [file]               # SEAT-FACING pre-emit validator (thin wrapper over parse_block --diagnose); spliced into the seat prompt as {{CHECK}}, not called by the referee
 "$SC/seat_contract.py" render <round0|debate> --panel-size <2|3> --check-command <command>  # authoritative seat-facing output contract (exceptional manual prompt assembly only; round uses the same module)
 "$SC/write_seat_raw" --id <id> --round <0|N> [--batch <name>] < raw  # CLAUDE-SEAT ONLY: validate every required block and atomically install the derived raw path
-"$SC/round" prepare-round0 <id> <configured seats...>               # resolve/snapshot/assemble both prompts + write the CLI barrier command; compact JSON result
-"$SC/round" collect-round0 <id> [--final]                            # parse Claude raw + compact engagement/count summary; --final verifies/restores the guard
+"$SC/round" prepare-round0 <id> [--retry|--resume] <available seats...> # freeze/reuse the blind prompt + configured panel; recover complete checkpoints; record/select the allowed attempt
+"$SC/round" collect-round0 <id> [--final]                            # bind non-empty raw + zero parse status + parsed output; compact engagement/count summary; --final verifies/restores the guard
 "$SC/round" prepare-debate <id> <configured seats...>               # common single-batch plan/cards/prompts/barrier + Claude delivery prompt
 "$SC/round" collect-debate <id> [--final]                            # ingest batches/new findings + compact status; --final verifies/restores the guard
 "$SC/round" salvage-debate <id> <codex|gemini> <batch> <salvaged-raw> # validate/install one canonical CLI .salvaged side file as a complete batch checkpoint
@@ -248,20 +248,33 @@ the available peer seat(s), then call:
 "$SC/round" prepare-round0 "$id" <configured seats...>
 ```
 
-Its compact JSON gives `prompt` for the CLI seats, `claude_prompt` for the fresh Claude Agent, and
-the CLI barrier's `command`/`done`/`sentinel` paths. It owns diff resolution, the guard snapshot,
+Its compact JSON gives `prompt`, an optional `claude_prompt`, and optional CLI-barrier
+`command`/`done`/`sentinel` paths. It owns diff resolution, the guard snapshot,
 saved-review-profile validation/reference, absolute path anchors, seat-contract rendering, prompt
-assembly, and the barrier command; do not
-repeat those mechanics. Exit 3 with `status=needs_auto_instructions` is the sole normal-path pause:
-write a few neutral sentences based on branch name, commit subjects, and status—not an interpretation
-of the diff—to the returned path, then call `prepare-round0` again. A diff-hash mismatch is a hard
-stop.
+assembly, completed-seat checkpoint retention, and selective retry preparation; do not repeat those
+mechanics. Exit 3 with `status=needs_auto_instructions` is the sole normal-path pause: write a few
+neutral sentences based on branch name, commit subjects, and status—not an interpretation of the
+diff—to the returned path, then call `prepare-round0` again. A diff-hash mismatch is a hard stop.
 
-Spawn the CLI barrier from those returned paths and the fresh Claude seat with `claude_prompt`, then
-take no turns until both Agents have returned. Call `round collect-round0 "$id" --final` once; its
-JSON is the authoritative engagement/count/guard summary. A CLI parse status 4/5 may use the lazily
-loaded `salvage` phase and then be recollected. A missing Claude raw means the seat failed closed and
-is down—never salvage from its short Agent stub. Continue with clustering below.
+Issue every non-null returned Agent call together in one assistant response, then take no turns
+until they have returned. Call `round collect-round0 "$id" --final`; its JSON is the authoritative
+engagement/count/guard summary. A CLI parse status 4/5 may use the lazily loaded `salvage` phase and
+then be recollected. A missing Claude raw means the seat failed closed and is down—never salvage
+from its short Agent stub.
+
+**Retry each still-down seat once before clustering.** After salvage and recollection, call
+`"$SC/round" prepare-round0 "$id" --retry <current available seats...>`. The command freezes and
+reuses the original Round-0 configured panel and exact saved blind prompt, reconstructs a valid
+raw/status/parsed checkpoint when interruption landed after a seat write but before collection,
+preserves every complete seat pass, and clears only an originally configured, currently available
+seat that remains down or incomplete. It records the attempt in `round0.attempts.json` and refuses a
+second `--retry`. `status=complete` means every configured seat is complete; `status=unavailable`
+means incomplete seats exist but none can currently be dispatched. In either case there is no Agent
+call. Otherwise issue every non-null returned Agent call together, then collect and salvage once
+more. Record the attempt and its result in Process notes. If a retried seat is still down, continue
+with the final engaged subset. A later resume of this still-uncommitted Round 0 may use `--resume` to
+try that seat again because the failure condition may have gone away. Only after this retry boundary
+is settled may you continue with clustering below.
 
 1. **Merge findings into issues (your judgment — this is the one place you cluster).** Read every
    finding. Two findings become one issue **only if** they are at the **same location/code-path
@@ -286,9 +299,12 @@ is down—never salvage from its short Agent stub. Continue with clustering belo
    ```bash
    # /tmp/$id/issues.map.json = a JSON array of the clustered issues described above.
    "$SC/birth_index" --available "<seats that returned parseable findings>" \
-     --configured "<full panel from preflight>" < /tmp/$id/issues.map.json > /tmp/$id/index.new.json
+     --configured "<final configured seats from panel.json>" < /tmp/$id/issues.map.json > /tmp/$id/index.new.json
    ```
-   `birth_index` applies the birth-unanimity rule exactly — all available seats (and ≥2) raised it →
+   Use the frozen Round-0 configured panel in `/tmp/$id/panel.json`; current preflight controls which
+   of those seats can be dispatched but does not add or remove Round-0 seats. `birth_index` applies
+   the birth-unanimity rule exactly —
+   all available seats (and ≥2) raised it →
    `accepted`/`peer_reviewed=true`, `fully_vetted` only if that set is the whole configured panel,
    `detail_contested` from `detail_divergence`; otherwise `open`/`peer_reviewed=false` — and writes
    `evaluated_by` from each issue's raisers. The result is a complete index.
@@ -683,9 +699,21 @@ index diverge from its own just-rotated `.bak`, and that divergence *is* the tra
    seat that returns means `fully_vetted` can still complete later.)
 3. `"$SC/regen_cards" --id "$id" --workdir "$workdir"` — rebuild every card from the index
    (replaces stale cards, quarantines orphans). State is **never** read back from cards.
-4. **Round 0 recovery:** if the index has no issues, Round 0 never completed. Re-run only the seats
-   whose `/tmp/$id/raw/round0.<seat>.txt` is missing/empty, reuse the cached ones, then do the merge
-   + index build as in fresh mode.
+4. **Round 0 recovery:** if `index.phase` is still `round0`, Round 0 never committed its issue index.
+   Load the `round0` phase now for its collection and salvage rules, but prepare this recovery attempt
+   only after preserving any prior completed review: when the guard snapshot exists, call
+   `round collect-round0 "$id" --final`, salvage a status-4/5 CLI raw that contains a real review,
+   and recollect. Then prepare the new attempt
+   with `"$SC/round" prepare-round0 "$id" --resume <current available seats...>` rather than its
+   fresh/`--retry` forms. The command freezes and reuses the original configured panel and saved
+   blind prompt, reconstructs any valid raw written just before interruption, preserves every
+   complete Round-0 seat pass, records the resume attempt, and returns work only for a currently
+   available seat that remains down or incomplete within the original configured panel. A seat
+   whose retry failed in an earlier referee invocation is eligible again because the failure
+   condition may have gone away. Never rerun a complete seat pass. Record this attempt and its result
+   in Process notes. After the returned work settles, perform the merge and index build as in fresh
+   mode. Once `birth_index` has installed a `phase=debate` index, Round 0 is committed and must not be
+   rerun.
 5. **Debate recovery:** run `"$SC/sweep" resume-plan "$id"`. It validates the epoch and reports the
    next uncommitted round plus each planned batch as `complete`, `missing`, or `dropped`. Reuse only
    `complete` batches; dispatch only `missing` batches; treat `dropped` seats as down. Rebuild the
@@ -710,9 +738,10 @@ human's intent when they chose to continue. Do **not** re-apply the gate on resu
 # Verdict synthesis
 
 Run `"$SC/round" verdict-input "$id"` and read that single compact result. It contains the stable
-manifest, configured panel, final index, structured origins, and guard facts needed below; do not
-re-read those state files separately. Present **everything**, surfacing origins only here. Severity
-→ headings: `critical`/`high` → **Critical**, `medium` →
+manifest, configured panel, final index, structured origins, guard facts, and Round-0 attempt history
+plus final seat statuses needed below; do not re-read those state files separately. Use the Round-0
+summary to report every retry and final down-seat result in Process notes. Present **everything**,
+surfacing origins only here. Severity → headings: `critical`/`high` → **Critical**, `medium` →
 **Important**, `low` → **Minor**, `style` → **Style notes**.
 
 ```markdown

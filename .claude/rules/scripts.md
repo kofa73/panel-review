@@ -42,8 +42,12 @@ byte-exact.
   files or hand-write the common plan.
 - `round` — the referee's coarse normal-path module over the owners in this list. It resolves and
   assembles Round 0 with the rendered seat contract and validated saved review-profile reference,
-  prepares the common one-batch debate with that same profile, collects
-  compact engagement/guard status,
+  freezes that phase's configured panel and exact blind prompt, reconstructs and retains complete
+  Round-0 raw/status/parsed checkpoints, records the initial/single-retry/later-resume attempts, and
+  selectively prepares only originally configured, currently available down or incomplete seats.
+  `verdict-input` returns that attempt history with final Round-0 seat statuses so Process notes
+  survive resume and context compaction. It prepares the common one-batch debate with the same
+  profile, collects compact engagement/guard status,
   installs a canonical CLI debate side file through `salvage-debate`, selects only complete
   active-plan batches for the normal or degraded decision and atomic commit with an optional referee
   addendum, and renders stable verdict input. It does not absorb judgment: clustering, prose-claim

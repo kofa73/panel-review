@@ -19,7 +19,7 @@ ROOT = HERE.parent
 PROMPTS = ROOT / "prompts"
 SAFE_NAME_RE = re.compile(r"[A-Za-z0-9._-]+")
 USAGE = (
-    "usage: round {prepare-round0|collect-round0|prepare-debate|collect-debate|"
+    "usage: round {prepare-round0 [--retry|--resume]|collect-round0|prepare-debate|collect-debate|"
     "salvage-debate|commit|verdict-input} ID ..."
 )
 
@@ -89,12 +89,16 @@ def validate_seats(seats):
     return seats
 
 
-def configured_panel(directory):
-    value = load_json(directory / "panel.json")
+def load_configured_panel(path):
+    value = load_json(path)
     seats = value.get("configured") if isinstance(value, dict) else None
     if not isinstance(seats, list) or any(not isinstance(seat, str) for seat in seats):
         raise RoundError("missing or invalid configured panel")
     return validate_seats(seats)
+
+
+def configured_panel(directory):
+    return load_configured_panel(directory / "panel.json")
 
 
 def ensure_instructions(directory, manifest):
@@ -239,81 +243,212 @@ def barrier_command(directory, tag, prompt, round_number, batch, cli_seats):
     return script, done
 
 
-def cmd_prepare_round0(run_id, seats):
-    seats = validate_seats(seats)
-    directory, manifest, index, workdir = state(run_id)
-    if index.get("phase") != "round0":
-        raise RoundError("round 0 is already complete")
-    instructions = ensure_instructions(directory, manifest)
-    profile_info = ensure_review_profile(directory, manifest)
-    write_common_files(directory, manifest, workdir)
-    panel_atomic_write(str(directory / "panel.json"), compact({"configured": seats}) + "\n")
-
-    diff = run_command([HERE / "resolve_diff", manifest["scope"]], cwd=workdir).stdout
-    actual_hash = hashlib.sha256(diff).hexdigest()
-    if actual_hash != manifest.get("diff_hash"):
-        raise RoundError("resolved diff hash does not match the manifest")
-    panel_atomic_write(str(directory / "diff.txt"), diff)
-    run_command([HERE / "repo_guard", "snapshot", "--id", run_id, "--workdir", workdir])
-    panel_atomic_write(str(directory / "check.findings.txt"), f"{HERE / 'check_draft'} findings\n")
-
-    scope = manifest["scope"]
-    diff_info = []
-    if scope.startswith("base="):
-        diff_info.append(f"Range: {scope[5:]}..HEAD")
-    elif scope.startswith("commit="):
-        diff_info.append(f"Commit: {scope[7:]}")
-    diff_info.extend(
-        [
-            f"Canonical diff (authoritative review bytes) — read this file: {directory / 'diff.txt'}",
-            f"Size: {len(diff)} bytes   sha256: {actual_hash}",
-        ]
-    )
-    panel_atomic_write(str(directory / "diff_info.txt"), "\n".join(diff_info) + "\n")
-    contract = write_seat_contract(
-        directory, "round0", seats, directory / "check.findings.txt"
-    )
-    prompt = directory / "round0.prompt"
-    assemble(
-        "blind_pass.tmpl",
-        prompt,
-        {
-            "WORKDIR": directory / "workdir.txt",
-            "SCOPE": directory / "scope.txt",
-            "INSTRUCTIONS": instructions,
-            "PROFILEINFO": profile_info,
-            "DIFFINFO": directory / "diff_info.txt",
-            "SCRATCH": directory / "scratch.txt",
-            "SEAT_CONTRACT": contract,
-            "TILTH": PROMPTS / "tilth_guide.txt",
-        },
-    )
-    remove_files(
-        directory / "raw" / "round0.claude.txt",
-        directory / "f.claude.json",
-        directory / "status.claude",
-    )
-    claude_prompt = write_claude_prompt(directory, prompt, 0)
-    cli_seats = [seat for seat in seats if seat != "claude"]
-    barrier, done = barrier_command(directory, "findings", prompt, 0, None, cli_seats)
-    emit(
-        {
-            "status": "prepared",
-            "prompt": str(prompt),
-            "claude_prompt": str(claude_prompt),
-            "command": str(barrier),
-            "done": str(done),
-            "sentinel": str(directory / "await.round0.sentinel"),
-        }
-    )
-
-
 def read_status(path):
     try:
         value = path.read_text(encoding="utf-8").strip()
     except OSError:
         return None
     return int(value) if value.isdigit() else value
+
+
+def round0_checkpoint_complete(directory, seat):
+    # A valid empty finding set still has a non-empty fenced raw response; requiring
+    # those bytes prevents a stale success status from turning zero-byte output into
+    # an engaged seat. The parsed file may legitimately be empty when there are no findings.
+    raw = directory / "raw" / f"round0.{seat}.txt"
+    try:
+        has_raw = raw.is_file() and raw.stat().st_size > 0
+    except OSError:
+        has_raw = False
+    return (
+        read_status(directory / f"status.{seat}") == 0
+        and has_raw
+        and (directory / f"f.{seat}.json").is_file()
+    )
+
+
+def recover_round0_checkpoint(directory, seat):
+    if round0_checkpoint_complete(directory, seat):
+        return
+    raw = directory / "raw" / f"round0.{seat}.txt"
+    try:
+        has_raw = raw.is_file() and raw.stat().st_size > 0
+    except OSError:
+        has_raw = False
+    if not has_raw:
+        return
+    parsed = directory / f"f.{seat}.json"
+    result = run_command(
+        [HERE / "parse_block", "--response", "round0", "findings", raw, seat],
+        stdout_path=parsed,
+        allow=(0, 4, 5),
+    )
+    panel_atomic_write(str(directory / f"status.{seat}"), f"{result.returncode}\n")
+
+
+def round0_attempts(directory):
+    path = directory / "round0.attempts.json"
+    if not path.is_file():
+        return path, []
+    value = load_json(path)
+    attempts = value.get("attempts") if isinstance(value, dict) else None
+    if not isinstance(attempts, list) or any(not isinstance(item, dict) for item in attempts):
+        raise RoundError("missing or invalid Round-0 attempt history")
+    return path, attempts
+
+
+def check_round0_attempt(attempts, attempt_kind):
+    if attempt_kind == "initial" and any(item.get("kind") == "initial" for item in attempts):
+        raise RoundError("initial Round-0 preparation is already recorded; use --retry or --resume")
+    if attempt_kind == "retry" and any(item.get("kind") == "retry" for item in attempts):
+        raise RoundError("Round-0 retry is already prepared")
+
+
+def cmd_prepare_round0(run_id, seats, attempt_kind):
+    current_seats = validate_seats(seats)
+    directory, manifest, index, workdir = state(run_id)
+    if index.get("phase") != "round0":
+        raise RoundError("round 0 is already complete")
+    attempts_path, attempts = round0_attempts(directory)
+    check_round0_attempt(attempts, attempt_kind)
+    instructions = ensure_instructions(directory, manifest)
+    profile_info = ensure_review_profile(directory, manifest)
+    write_common_files(directory, manifest, workdir)
+    panel_path = directory / "panel.json"
+    round0_panel_path = directory / "round0.panel.json"
+    if round0_panel_path.is_file():
+        configured_seats = load_configured_panel(round0_panel_path)
+    elif panel_path.is_file():
+        configured_seats = configured_panel(directory)
+        panel_atomic_write(
+            str(round0_panel_path), compact({"configured": configured_seats}) + "\n"
+        )
+    else:
+        configured_seats = list(current_seats)
+        panel_atomic_write(
+            str(round0_panel_path), compact({"configured": configured_seats}) + "\n"
+        )
+    panel_atomic_write(str(panel_path), compact({"configured": configured_seats}) + "\n")
+
+    # A seat may have atomically installed a valid raw immediately before the
+    # referee was interrupted. Rebuild its parse checkpoint before selecting retry
+    # targets so resume never destroys a completed blind review.
+    for seat in configured_seats:
+        recover_round0_checkpoint(directory, seat)
+
+    diff = run_command([HERE / "resolve_diff", manifest["scope"]], cwd=workdir).stdout
+    actual_hash = hashlib.sha256(diff).hexdigest()
+    if actual_hash != manifest.get("diff_hash"):
+        raise RoundError("resolved diff hash does not match the manifest")
+    diff_path = directory / "diff.txt"
+    if diff_path.is_file():
+        if hashlib.sha256(diff_path.read_bytes()).hexdigest() != actual_hash:
+            raise RoundError("saved Round-0 diff does not match the manifest")
+    else:
+        panel_atomic_write(str(diff_path), diff)
+    # Retrying must retain the original tracked-tree baseline; replacing it here
+    # could legitimize drift that occurred during an earlier seat attempt.
+    if not (directory / "guard" / "manifest.sha256").is_file():
+        run_command([HERE / "repo_guard", "snapshot", "--id", run_id, "--workdir", workdir])
+    prompt = directory / "round0.prompt"
+    if not prompt.is_file():
+        panel_atomic_write(
+            str(directory / "check.findings.txt"), f"{HERE / 'check_draft'} findings\n"
+        )
+        scope = manifest["scope"]
+        diff_info = []
+        if scope.startswith("base="):
+            diff_info.append(f"Range: {scope[5:]}..HEAD")
+        elif scope.startswith("commit="):
+            diff_info.append(f"Commit: {scope[7:]}")
+        diff_info.extend(
+            [
+                f"Canonical diff (authoritative review bytes) — read this file: {diff_path}",
+                f"Size: {len(diff)} bytes   sha256: {actual_hash}",
+            ]
+        )
+        panel_atomic_write(str(directory / "diff_info.txt"), "\n".join(diff_info) + "\n")
+        contract = write_seat_contract(
+            directory, "round0", configured_seats, directory / "check.findings.txt"
+        )
+        assemble(
+            "blind_pass.tmpl",
+            prompt,
+            {
+                "WORKDIR": directory / "workdir.txt",
+                "SCOPE": directory / "scope.txt",
+                "INSTRUCTIONS": instructions,
+                "PROFILEINFO": profile_info,
+                "DIFFINFO": directory / "diff_info.txt",
+                "SCRATCH": directory / "scratch.txt",
+                "SEAT_CONTRACT": contract,
+                "TILTH": PROMPTS / "tilth_guide.txt",
+            },
+        )
+    dispatch_seats = [
+        seat
+        for seat in configured_seats
+        if seat in current_seats and not round0_checkpoint_complete(directory, seat)
+    ]
+    attempt_number = len(attempts) + 1
+    attempts.append(
+        {
+            "number": attempt_number,
+            "kind": attempt_kind,
+            "available": current_seats,
+            "dispatch": dispatch_seats,
+        }
+    )
+    # Publish the attempt before clearing a retry target. An interruption can then
+    # recover through --resume without losing whether the one fresh-pass retry was used.
+    panel_atomic_write(
+        str(attempts_path), compact({"version": 1, "attempts": attempts}) + "\n"
+    )
+    # Clear only retry targets. Complete checkpoints are the recovery boundary and
+    # must survive both a same-invocation retry and a later panel-review:resume.
+    for seat in dispatch_seats:
+        remove_files(
+            directory / "raw" / f"round0.{seat}.txt",
+            directory / f"f.{seat}.json",
+            directory / f"status.{seat}",
+        )
+    claude_prompt = (
+        write_claude_prompt(directory, prompt, 0) if "claude" in dispatch_seats else None
+    )
+    cli_seats = [seat for seat in dispatch_seats if seat != "claude"]
+    remove_files(
+        directory / "await.round0.txt",
+        directory / "await.round0.sentinel",
+        directory / "cli_barrier.round0.sh",
+    )
+    if cli_seats:
+        barrier, done = barrier_command(directory, "findings", prompt, 0, None, cli_seats)
+        command_value = str(barrier)
+        done_value = str(done)
+        sentinel_value = str(directory / "await.round0.sentinel")
+    else:
+        command_value = None
+        done_value = None
+        sentinel_value = None
+    all_complete = all(
+        round0_checkpoint_complete(directory, seat) for seat in configured_seats
+    )
+    emit(
+        {
+            "status": (
+                "prepared" if dispatch_seats else "complete" if all_complete else "unavailable"
+            ),
+            "attempt_kind": attempt_kind,
+            "attempt_number": attempt_number,
+            "configured": configured_seats,
+            "dispatch": dispatch_seats,
+            "prompt": str(prompt),
+            "claude_prompt": str(claude_prompt) if claude_prompt is not None else None,
+            "command": command_value,
+            "done": done_value,
+            "sentinel": sentinel_value,
+        }
+    )
 
 
 def verify_guard(directory, run_id, workdir, name):
@@ -340,7 +475,13 @@ def cmd_collect_round0(run_id, final):
     )
     claude_status = 4 if result.returncode == 1 and not claude_raw.is_file() else result.returncode
     panel_atomic_write(str(directory / "status.claude"), f"{claude_status}\n")
-    statuses = {seat: read_status(directory / f"status.{seat}") for seat in seats}
+    statuses = {}
+    for seat in seats:
+        status = read_status(directory / f"status.{seat}")
+        if status == 0 and not round0_checkpoint_complete(directory, seat):
+            status = 4
+            panel_atomic_write(str(directory / f"status.{seat}"), b"4\n")
+        statuses[seat] = status
     if final:
         guard_clean = verify_guard(directory, run_id, workdir, "guard.round0.txt")
     else:
@@ -727,6 +868,23 @@ def cmd_verdict_input(run_id):
                 origins[path.name] = [line for line in path.read_text(encoding="utf-8").splitlines() if line]
             elif ".raw." not in path.name and not path.name.endswith(".raw.txt"):
                 origins[path.name] = path.read_text(encoding="utf-8")
+    round0 = None
+    round0_panel = directory / "round0.panel.json"
+    if round0_panel.is_file():
+        round0_seats = load_configured_panel(round0_panel)
+        _attempts_path, attempts = round0_attempts(directory)
+        final_statuses = {}
+        for seat in round0_seats:
+            status = read_status(directory / f"status.{seat}")
+            final_statuses[seat] = (
+                status if status != 0 or round0_checkpoint_complete(directory, seat) else 4
+            )
+        round0 = {
+            "configured": round0_seats,
+            "attempts": attempts,
+            "final_statuses": final_statuses,
+            "engaged": [seat for seat in round0_seats if final_statuses[seat] == 0],
+        }
     emit(
         {
             "manifest": {
@@ -736,6 +894,7 @@ def cmd_verdict_input(run_id):
                 )
             },
             "configured": configured_panel(directory),
+            "round0": round0,
             "index": index,
             "origins": origins,
         }
@@ -762,7 +921,12 @@ def main(argv):
     panel_require_id(run_id)
     try:
         if command == "prepare-round0":
-            cmd_prepare_round0(run_id, argv[3:])
+            attempt_kind = "initial"
+            seats = argv[3:]
+            if seats and seats[0] in {"--retry", "--resume"}:
+                attempt_kind = seats[0][2:]
+                seats = seats[1:]
+            cmd_prepare_round0(run_id, seats, attempt_kind)
         elif command == "collect-round0":
             if argv[3:] not in ([], ["--final"]):
                 raise RoundError("collect-round0 takes only optional --final", 2)

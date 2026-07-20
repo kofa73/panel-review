@@ -138,11 +138,14 @@ workdir holds exactly one review; concurrent runs against the same workdir are u
   root each run — `cd`-ing the wrapper cannot move it. So an agy prompt needs an **absolute** path
   anchor (and ideally an explicit "set the tool `cwd` to `<workdir>`" directive) or it can drift
   (observed: anchored `/home/developer` instead of the workdir under a very large prompt).
-- **Seat engagement is per-round, not sticky.** `--configured` = the fixed `preflight` panel;
+- **Seat engagement is per-round, not sticky.** Round 0 freezes its configured panel and exact blind
+  prompt on first preparation, retries actual down responses once, and may retry a still-down seat
+  again when a later `resume` reports it available; complete seat passes are never rerun. In debate,
+  `--configured` = the current `preflight` panel;
   `--engaged` = whoever returned a parseable block *this pass* (`parse_block` exit 0). Every configured
-  seat is re-dispatched every round; a seat that fails or times out one round is retried the next. The
-  only persistent effect of a down-round is the informational `fully_vetted=false` label (never
-  re-flipped). "Down" means down *for that pass*, not excluded from the run.
+  seat is dispatched in every debate round; a seat that fails or times out one round is retried the
+  next. The only persistent effect of a down-round is the informational `fully_vetted=false` label
+  (never re-flipped). "Down" means down *for that pass*, not excluded from the run.
 - **CLI salvage is referee-owned.** `run_seat` dispatches and parses but never repairs or re-dispatches
   a seat. On parse status 4 (missing block) or 5 (malformed block), the referee may salvage a genuine
   completed CLI review without changing its conclusions. Debate salvage re-emits both required blocks

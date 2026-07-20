@@ -236,6 +236,7 @@ class RoundTest(unittest.TestCase):
             check=False,
         )
         self.assertEqual(written.returncode, 0, written.stderr)
+        (self.run_dir / "raw" / "round0.codex.txt").write_text(raw, encoding="utf-8")
         (self.run_dir / "status.codex").write_text("0\n", encoding="utf-8")
         (self.run_dir / "f.codex.json").write_text(json.dumps({**FINDING, "_source": "codex"}) + "\n", encoding="utf-8")
 
@@ -246,6 +247,263 @@ class RoundTest(unittest.TestCase):
         self.assertEqual(summary["engaged"], ["claude", "codex"])
         self.assertEqual(summary["finding_counts"], {"claude": 1, "codex": 1})
         self.assertTrue(summary["guard_clean"])
+
+    def test_prepare_round0_retries_only_the_down_seat(self):
+        self.prepare_round0()
+        claude_raw = f"```findings\n{json.dumps(FINDING)}\n```\n"
+        written = subprocess.run(
+            [str(WRITE_RAW), "--id", self.run_id, "--round", "0"],
+            input=claude_raw,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(written.returncode, 0, written.stderr)
+        (self.run_dir / "raw" / "round0.codex.txt").write_bytes(b"")
+        (self.run_dir / "f.codex.json").write_bytes(b"")
+        (self.run_dir / "status.codex").write_text("4\n", encoding="utf-8")
+        collected = self.run_round("collect-round0", self.run_id, "--final")
+        self.assertEqual(collected.returncode, 0, collected.stderr)
+
+        retry = self.run_round(
+            "prepare-round0", self.run_id, "--retry", "claude", "codex"
+        )
+
+        self.assertEqual(retry.returncode, 0, retry.stderr)
+        prepared = json.loads(retry.stdout)
+        self.assertIsNone(prepared["claude_prompt"])
+        barrier = Path(prepared["command"]).read_text(encoding="utf-8")
+        self.assertIn("--seat codex", barrier)
+        self.assertNotIn("--seat claude", barrier)
+        self.assertEqual(
+            (self.run_dir / "raw" / "round0.claude.txt").read_text(encoding="utf-8"),
+            claude_raw,
+        )
+
+        (self.run_dir / "raw" / "round0.codex.txt").write_bytes(b"")
+        (self.run_dir / "f.codex.json").write_bytes(b"")
+        (self.run_dir / "status.codex").write_text("4\n", encoding="utf-8")
+        failed_retry = self.run_round("collect-round0", self.run_id, "--final")
+        self.assertEqual(failed_retry.returncode, 0, failed_retry.stderr)
+
+        resumed = self.run_round(
+            "prepare-round0", self.run_id, "--resume", "claude", "codex", "gemini"
+        )
+
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+        resumed_preparation = json.loads(resumed.stdout)
+        self.assertIsNone(resumed_preparation["claude_prompt"])
+        resumed_barrier = Path(resumed_preparation["command"]).read_text(encoding="utf-8")
+        self.assertIn("--seat codex", resumed_barrier)
+        self.assertNotIn("--seat gemini", resumed_barrier)
+        self.assertEqual(resumed_preparation["configured"], ["claude", "codex"])
+
+    def test_prepare_round0_does_not_retry_valid_empty_findings(self):
+        self.prepare_round0()
+        empty_findings = "```findings\n[]\n```\n"
+        written = subprocess.run(
+            [str(WRITE_RAW), "--id", self.run_id, "--round", "0"],
+            input=empty_findings,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(written.returncode, 0, written.stderr)
+        (self.run_dir / "raw" / "round0.codex.txt").write_text(
+            empty_findings, encoding="utf-8"
+        )
+        (self.run_dir / "f.codex.json").write_bytes(b"")
+        (self.run_dir / "status.codex").write_text("0\n", encoding="utf-8")
+        collected = self.run_round("collect-round0", self.run_id, "--final")
+        self.assertEqual(collected.returncode, 0, collected.stderr)
+
+        prepared = self.run_round(
+            "prepare-round0", self.run_id, "--retry", "claude", "codex"
+        )
+
+        self.assertEqual(prepared.returncode, 0, prepared.stderr)
+        summary = json.loads(prepared.stdout)
+        self.assertEqual(summary["status"], "complete")
+        self.assertIsNone(summary["claude_prompt"])
+        self.assertIsNone(summary["command"])
+
+    def test_prepare_round0_retries_only_claude_without_a_stale_cli_barrier(self):
+        self.prepare_round0()
+        codex_raw = f"```findings\n{json.dumps(FINDING)}\n```\n"
+        (self.run_dir / "raw").mkdir(exist_ok=True)
+        (self.run_dir / "raw" / "round0.codex.txt").write_text(
+            codex_raw, encoding="utf-8"
+        )
+        (self.run_dir / "f.codex.json").write_text(
+            json.dumps({**FINDING, "_source": "codex"}) + "\n", encoding="utf-8"
+        )
+        (self.run_dir / "status.codex").write_text("0\n", encoding="utf-8")
+        (self.run_dir / "await.round0.txt").write_text("codex 0\n", encoding="utf-8")
+        (self.run_dir / "await.round0.sentinel").write_text("0\n", encoding="utf-8")
+        collected = self.run_round("collect-round0", self.run_id, "--final")
+        self.assertEqual(collected.returncode, 0, collected.stderr)
+
+        retry = self.run_round(
+            "prepare-round0", self.run_id, "--retry", "claude", "codex"
+        )
+
+        self.assertEqual(retry.returncode, 0, retry.stderr)
+        prepared = json.loads(retry.stdout)
+        self.assertIsNotNone(prepared["claude_prompt"])
+        self.assertIsNone(prepared["command"])
+        self.assertIsNone(prepared["done"])
+        self.assertIsNone(prepared["sentinel"])
+        self.assertFalse((self.run_dir / "await.round0.txt").exists())
+        self.assertFalse((self.run_dir / "await.round0.sentinel").exists())
+
+    def test_prepare_round0_retries_a_zero_byte_raw_despite_a_stale_success_status(self):
+        self.prepare_round0()
+        claude_raw = "```findings\n[]\n```\n"
+        written = subprocess.run(
+            [str(WRITE_RAW), "--id", self.run_id, "--round", "0"],
+            input=claude_raw,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(written.returncode, 0, written.stderr)
+        (self.run_dir / "raw" / "round0.codex.txt").write_bytes(b"")
+        (self.run_dir / "f.codex.json").write_bytes(b"")
+        (self.run_dir / "status.codex").write_text("0\n", encoding="utf-8")
+        collected = self.run_round("collect-round0", self.run_id, "--final")
+        self.assertEqual(collected.returncode, 0, collected.stderr)
+        self.assertEqual(json.loads(collected.stdout)["engaged"], ["claude"])
+
+        retry = self.run_round(
+            "prepare-round0", self.run_id, "--retry", "claude", "codex"
+        )
+
+        self.assertEqual(retry.returncode, 0, retry.stderr)
+        prepared = json.loads(retry.stdout)
+        self.assertIsNone(prepared["claude_prompt"])
+        barrier = Path(prepared["command"]).read_text(encoding="utf-8")
+        self.assertIn("--seat codex", barrier)
+
+    def test_prepare_round0_preserves_a_completed_seat_absent_from_current_preflight(self):
+        initial = self.prepare_round0("claude", "codex", "gemini")
+        original_prompt = Path(initial["prompt"]).read_bytes()
+        raw = f"```findings\n{json.dumps(FINDING)}\n```\n"
+        written = subprocess.run(
+            [str(WRITE_RAW), "--id", self.run_id, "--round", "0"],
+            input=raw,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(written.returncode, 0, written.stderr)
+        (self.run_dir / "raw" / "round0.codex.txt").write_text(raw, encoding="utf-8")
+        (self.run_dir / "f.codex.json").write_text(
+            json.dumps({**FINDING, "_source": "codex"}) + "\n", encoding="utf-8"
+        )
+        (self.run_dir / "status.codex").write_text("0\n", encoding="utf-8")
+        (self.run_dir / "raw" / "round0.gemini.txt").write_bytes(b"")
+        (self.run_dir / "f.gemini.json").write_bytes(b"")
+        (self.run_dir / "status.gemini").write_text("4\n", encoding="utf-8")
+        collected = self.run_round("collect-round0", self.run_id, "--final")
+        self.assertEqual(collected.returncode, 0, collected.stderr)
+
+        resumed = self.run_round(
+            "prepare-round0", self.run_id, "--resume", "claude", "gemini"
+        )
+
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+        prepared = json.loads(resumed.stdout)
+        barrier = Path(prepared["command"]).read_text(encoding="utf-8")
+        self.assertIn("--seat gemini", barrier)
+        self.assertNotIn("--seat codex", barrier)
+        panel = json.loads((self.run_dir / "panel.json").read_text(encoding="utf-8"))
+        self.assertEqual(panel["configured"], ["claude", "codex", "gemini"])
+        self.assertEqual(Path(prepared["prompt"]).read_bytes(), original_prompt)
+        self.assertTrue((self.run_dir / "raw" / "round0.codex.txt").is_file())
+
+    def test_prepare_round0_resume_preserves_valid_claude_raw_before_collection(self):
+        self.prepare_round0()
+        claude_raw = f"```findings\n{json.dumps(FINDING)}\n```\n"
+        written = subprocess.run(
+            [str(WRITE_RAW), "--id", self.run_id, "--round", "0"],
+            input=claude_raw,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(written.returncode, 0, written.stderr)
+
+        resumed = self.run_round(
+            "prepare-round0", self.run_id, "--resume", "claude", "codex"
+        )
+
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+        prepared = json.loads(resumed.stdout)
+        self.assertIsNone(prepared["claude_prompt"])
+        self.assertEqual(
+            (self.run_dir / "raw" / "round0.claude.txt").read_text(encoding="utf-8"),
+            claude_raw,
+        )
+        self.assertEqual((self.run_dir / "status.claude").read_text(), "0\n")
+
+    def test_prepare_round0_retry_is_single_use_but_resume_allows_another_attempt(self):
+        self.prepare_round0()
+        first_retry = self.run_round(
+            "prepare-round0", self.run_id, "--retry", "claude", "codex"
+        )
+        self.assertEqual(first_retry.returncode, 0, first_retry.stderr)
+
+        duplicate_retry = self.run_round(
+            "prepare-round0", self.run_id, "--retry", "claude", "codex"
+        )
+
+        self.assertNotEqual(duplicate_retry.returncode, 0)
+        self.assertIn("Round-0 retry is already prepared", duplicate_retry.stderr)
+        resumed = self.run_round(
+            "prepare-round0", self.run_id, "--resume", "claude", "codex"
+        )
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+        history = json.loads(
+            (self.run_dir / "round0.attempts.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            [attempt["kind"] for attempt in history["attempts"]],
+            ["initial", "retry", "resume"],
+        )
+
+    def test_verdict_input_includes_round0_attempts_and_final_statuses(self):
+        self.prepare_round0()
+        claude_raw = "```findings\n[]\n```\n"
+        written = subprocess.run(
+            [str(WRITE_RAW), "--id", self.run_id, "--round", "0"],
+            input=claude_raw,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(written.returncode, 0, written.stderr)
+        (self.run_dir / "raw" / "round0.codex.txt").write_bytes(b"")
+        (self.run_dir / "f.codex.json").write_bytes(b"")
+        (self.run_dir / "status.codex").write_text("4\n", encoding="utf-8")
+        first_collection = self.run_round("collect-round0", self.run_id, "--final")
+        self.assertEqual(first_collection.returncode, 0, first_collection.stderr)
+        retry = self.run_round(
+            "prepare-round0", self.run_id, "--retry", "claude", "codex"
+        )
+        self.assertEqual(retry.returncode, 0, retry.stderr)
+        (self.run_dir / "raw" / "round0.codex.txt").write_bytes(b"")
+        (self.run_dir / "f.codex.json").write_bytes(b"")
+        (self.run_dir / "status.codex").write_text("4\n", encoding="utf-8")
+        final_collection = self.run_round("collect-round0", self.run_id, "--final")
+        self.assertEqual(final_collection.returncode, 0, final_collection.stderr)
+
+        result = self.run_round("verdict-input", self.run_id)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        round0 = json.loads(result.stdout)["round0"]
+        self.assertEqual([item["kind"] for item in round0["attempts"]], ["initial", "retry"])
+        self.assertEqual(round0["final_statuses"], {"claude": 0, "codex": 4})
+        self.assertEqual(round0["engaged"], ["claude"])
 
     def test_debate_prepare_collect_commit_and_verdict_input(self):
         self.prepare_round0()

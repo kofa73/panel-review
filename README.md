@@ -26,7 +26,8 @@ A fourth participant, the **referee**, orchestrates but never reviews. It runs t
 their findings, and drives them to a verdict. The review proceeds in two phases:
 
 1. **Round 0 (the blind pass).** Each seat reviews the scope on its own, with no knowledge of the
-   others. The referee merges the three independent finding sets into a single list of **issues**.
+   others. A seat that produces no usable response is retried once before the pass degrades. The
+   referee then merges the independent finding sets into a single list of **issues**.
 2. **Debate.** For each issue, the referee shows every seat both sides of the argument and asks it
    to take a **stance** (support / reject). This repeats over a bounded number of rounds.
 
@@ -212,8 +213,13 @@ Four more behaviors worth knowing before you run it:
   re-run. Pass `--debate-low` to skip these stops.
 - **Resumable.** If a run is interrupted — crash, token exhaustion, you stop it — its state
   survives. `panel-review:status` shows it, and `panel-review:resume` picks it up from where it
-  stopped. If the code under review changed since the interruption (**diverged**), neither `resume`
-  nor `continue` will touch it — `panel-review:discard` it and `panel-review:start` fresh.
+  stopped. Round 0 freezes its configured panel and exact blind prompt, retains complete seat passes,
+  and records each prepared attempt. A currently available configured seat that was down in an
+  uncommitted Round 0 may be tried again because the earlier failure may have gone away; a newly
+  available seat joins later debate rather than changing the saved blind pass. Once the Round-0 issue
+  index is installed, that blind pass is committed and is not rerun. If the code under review changed
+  since the interruption (**diverged**), neither `resume` nor `continue` will touch it —
+  `panel-review:discard` it and `panel-review:start` fresh.
 - **Agent-budget exhaustion fails closed.** If Claude Code reports `Subagent spawn limit reached`,
   panel-review keeps the current checkpoint and stops; this is an orchestration failure, not a
   down-seat pass. Start a fresh conversation (normally `/clear`) and invoke `panel-review:resume`.
@@ -287,7 +293,7 @@ start      ── parse scope (commit=abc123) + profile + round limits; hash the
    (skill)  ── refuse-if-session-exists precondition (state-aware message if one does)
            ── init_run (fresh) → mints a run id; spawn the referee agent with mode/id/scope/limits
            │  (separate context)
-referee    ── Round 0: assemble one blind prompt, dispatch the configured seats (Claude = fresh agent)
+referee    ── Round 0: assemble one blind prompt, dispatch seats, retry actual down responses once
   (agent)  ── merge findings into issues (judgment); project blind cards
            ── debate sweeps: cards → seats → stances → transitions → commit (checkpointed)
            ── synthesize + persist the verdict; return the fixed success/write-failure/review-failure status; clean up when eligible
@@ -427,7 +433,7 @@ independent, deterministic authority for user-visible report delivery.
 | `write_card` | Atomic single-card write (temp + fsync + rename, `.bak` rotation) over `panel_atomic_write`, for the card writes `project_card`/`regen_cards` don't own |
 | `write_seat_raw` | Validate the Claude seat's complete phase-required block set and atomically install it at the derived `/tmp/<ID>/raw/` path; the seat then returns only a fixed status stub to the referee |
 | `hooks/enforce_agent_status_stub` | `SubagentStop` gate for Claude-seat and referee Agent results: allow only their exact fixed terminal statuses, recover the referee's expected run ID from its original Agent task, request one correction for a malformed referee response, and allow an already-active referee stop-hook continuation to stop rather than loop indefinitely |
-| `round` | Coarse normal-path module: prepare Round 0/debate prompts and barriers from the current preflight panel, collect compact seat/guard status, install an explicitly supplied canonical CLI debate salvage through `salvage-debate`, select only complete active-plan batches for decision/atomic commit with an optional judgment addendum, and render stable compact verdict input |
+| `round` | Coarse normal-path module: freeze the initial Round-0 panel and blind prompt; reconstruct and preserve complete raw/status/parsed checkpoints; record initial/retry/resume attempts and selectively prepare only originally configured, currently available down/incomplete seats; prepare debate prompts and barriers from the current preflight panel; collect compact seat/guard status; install an explicitly supplied canonical CLI debate salvage through `salvage-debate`; select only complete active-plan batches for decision/atomic commit with an optional judgment addendum; and render stable compact verdict input |
 | `sweep` | Checkpointed debate sweeps — owns batch plans (including `plan-scaffold`, which emits one correctly shaped batch per supplied current-panel seat, and `extend-plan`, which adds unplanned seats or reactivates already-planned dropped seats when they return to the current panel), targeted plan-schema diagnostics, two-block (`stances` + `new_findings`) parse/ID validation, complete-bundle checkpoint retention/source provenance, dropped-seat cleanup, and resume plans. A published completion marker with any missing companion is corrupt state and fails closed; counters advance **only** on a committed sweep |
 | `write_verdict_artifact` | Write the canonical verdict to the `/tmp/<ID>.md` sibling of `/tmp/<ID>/` (outside it, so `cleanup`/`discard` never delete it), stamped with the continuation epoch, exact index hash, and `finished` only when the canonical index has no open issue or the user explicitly finishes at the low-only gate. This artifact is the only final-report delivery surface; write failure keeps the run resumable and blocks cleanup |
 | `read_verdict_artifact` | Validate a durable artifact's ID, metadata, and optional expected scope/diff hash/continuation epoch. Default mode requires a finished review and emits its body for `panel-review:result`; `--delivery` verifies retained state through `index delivery-status`, rejects a stale same-epoch snapshot, and emits only the validated filename plus minimal gate/continuation status for `start`/`resume`/`continue` |
@@ -453,9 +459,11 @@ derived, regenerable cache; state is never inferred from them.
 | `.panel-review/<ID>/` (the dir) | the per-worktree marker / lock — its name carries `<ID>` |
 | `/tmp/<ID>/manifest.json` | scope, limits, diff hash, phase, and review-profile source path/size/SHA-256 |
 | `/tmp/<ID>/review-profile.md` | exact saved profile bytes used by every seat and every phase; the original source path is provenance only |
+| `/tmp/<ID>/round0.panel.json` | the configured panel frozen for the blind pass; current preflight filters which of these seats may be retried but never changes this set **Read back on resume and verdict synthesis** (referee only) |
 | `/tmp/<ID>/index.json` | the **issue index** — the authoritative record of every issue: its state (e.g. `accepted`), flags, counters, and evidence (all defined under [How an issue moves](#how-an-issue-moves-transitions)); cards are rendered from it and the verdict is read off it (referee only) |
 | `/tmp/<ID>/sweeps/` | one subdir per **sweep** — a sweep is one full pass over the open issues across all engaged seats (i.e. one debate round). A complete seat/batch checkpoint binds the retained raw, exact-ID stances, parsed `new_findings`, zero parse status, expected IDs, and source provenance; interrupted rounds resume without re-running complete batches. **Read back on resume** (referee only) |
-| `/tmp/<ID>/raw/` | each seat's verbatim response text, before parsing; **read back** — `parse_block` turns these into findings/stances, and resume reuses them (referee only) |
+| `/tmp/<ID>/raw/` | each seat's verbatim response text, before parsing; **read back** — `parse_block` turns these into findings/stances. In Round 0, `round` retains non-empty raw + zero parse status + parsed output as one complete seat checkpoint, so retry/resume dispatches only down or incomplete seats (referee only) |
+| `/tmp/<ID>/round0.attempts.json` | deterministic history of prepared Round-0 attempts (`initial`, the single same-invocation `retry`, and later `resume` attempts), including the available and dispatched seats; `round verdict-input` combines it with final Round-0 statuses for Process notes **Read back on resume and verdict synthesis** (referee only) |
 | `/tmp/<ID>/origins/` | who raised each point, its original wording, and the per-round stances — the data the blind cards omit; **read back** by the referee to track review coverage and to attribute findings in the verdict (referee only) |
 | `/tmp/<ID>/audit/` | `round-<N>.md` — a human-readable trail of the issue-field changes applied in each debate round (state, flag, severity/claim/location revisions, evidence, new issues), written mechanically by `index commit-sweep`; **for inspection only — never read back by the process** |
 | `/tmp/<ID>/epochs/epoch-<n>/` | a snapshot of a finished debate cycle, taken by `reopen` when `panel-review:continue` starts the next cycle. Because per-round artifacts are named `round<N>`/`round-<N>` with **no epoch component**, the new cycle's round 1 overwrites the previous cycle's round 1 in place; this archive preserves the prior cycle's raws/prompts/sweeps/audit/index/verdict. **For inspection only — never read back by the process** |

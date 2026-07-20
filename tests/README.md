@@ -69,9 +69,12 @@ them up. No real run is touched.
   validation with field-specific diagnostics; `plan-scaffold` validation and scaffold-to-plan round
   trip; extending a live plan when a configured seat appears or returns.
 - **round** (`test_round.py`): every Round-0/debate rendering for two- and three-seat panels uses the
-  shared contract and runtime-valid examples; coarse prepare/collect behavior; strict Claude debate
-  delivery; canonical CLI salvage; checkpoint and changed-panel resume handling; verdict-input
-  filtering; and successful/failed `round commit --addendum` transaction boundaries.
+  shared contract and runtime-valid examples; coarse prepare/collect behavior; Round-0 selective
+  retry/resume with frozen prompt/panel, deterministic attempt history, pre-collection checkpoint
+  recovery, complete-seat retention, and zero-byte versus valid-empty distinction; strict
+  Claude debate delivery; canonical CLI salvage; checkpoint and changed-panel resume handling;
+  verdict-input filtering plus Round-0 attempt/final-status Process facts; and successful/failed
+  `round commit --addendum` transaction boundaries.
 - **write_seat_raw** (`test_write_seat_raw.py`): derived Round-0/debate destinations; strict round and
   batch shapes; complete phase-required block validation; atomic installation without replacing a
   valid raw on invalid input.
@@ -109,7 +112,8 @@ them up. No real run is touched.
   removing the marker / `.panel-review`; the default still removes `/tmp/<id>`.
 - **Protocol/template contracts**: runs `seat_contract.py render` through runtime parsing and pins
   the documented batch-completeness,
-  dropped-seat cleanup, low-only gate, coverage, prompt/schema requirements,
+  dropped-seat cleanup, Round-0 retry/resume boundary, low-only gate, coverage,
+  prompt/schema requirements,
   the referee's agreement-gated-decision versus mechanical-update invariant,
   Claude-seat redundant-read and sufficient-evidence guidance without lookup
   batching or a hard call cap, its single final validation/write step, and the

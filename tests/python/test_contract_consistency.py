@@ -162,6 +162,24 @@ class ContractConsistencyTest(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(invariant, result.stderr)
 
+    def test_round0_retry_contract_drift_is_reported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_contract_tree(root)
+            protocol = root / "skills/panel-review-for-agent/references/protocol.md"
+            text = protocol.read_text(encoding="utf-8")
+            required = "Retry each still-down seat once"
+            self.assertIn(required, text)
+            protocol.write_text(
+                text.replace(required, "Treat each still-down seat as unavailable", 1),
+                encoding="utf-8",
+            )
+
+            result = self.run_check(root)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("round0-retry-contract", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -76,7 +76,7 @@ Load phases through these commands (re-derive `SC` at the top of each Bash call 
 ```bash
 "$SC/read_protocol_phase" common
 # mode=fresh: load round0 now; load debate only if open issues enter debate
-# mode=resume: load recovery now, then debate if recovery says to continue
+# mode=resume: load recovery now; if it finds index.phase=round0 load round0 too, else load debate
 # parse status 4/5 only: load salvage
 # fewer than two engaged seats after retry only: load degraded
 # immediately before applying a low-severity stop decision only: load gate

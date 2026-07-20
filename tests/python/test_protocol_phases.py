@@ -72,6 +72,24 @@ class ProtocolPhasesTest(unittest.TestCase):
         post_decision = result.stdout.partition(decision_command)[2]
         self.assertNotRegex(post_decision, r'\$SC/regen_cards\b')
 
+    def test_round0_contract_retries_down_seats_and_resume_preserves_completed_seats(self):
+        round0 = subprocess.run(
+            [str(READER), "round0"], capture_output=True, text=True, check=False
+        )
+        recovery = subprocess.run(
+            [str(READER), "recovery"], capture_output=True, text=True, check=False
+        )
+
+        self.assertEqual(round0.returncode, 0, round0.stderr)
+        self.assertEqual(recovery.returncode, 0, recovery.stderr)
+        round0_text = " ".join(round0.stdout.split())
+        recovery_text = " ".join(recovery.stdout.split())
+        self.assertIn("Retry each still-down seat once", round0_text)
+        self.assertIn('prepare-round0 "$id" --retry', round0_text)
+        self.assertIn("preserves every complete Round-0 seat pass", recovery_text)
+        self.assertIn("currently available seat that remains down", recovery_text)
+        self.assertIn('prepare-round0 "$id" --resume', recovery_text)
+
     def test_referee_return_contract_distinguishes_review_and_write_failures(self):
         referee = REFEREE.read_text(encoding="utf-8")
         bootstrap = BOOTSTRAP.read_text(encoding="utf-8")
@@ -81,6 +99,16 @@ class ProtocolPhasesTest(unittest.TestCase):
         self.assertNotIn("PANEL_VERDICT_WRITE_FAILED", referee)
         self.assertNotIn("PANEL_REVIEW_FAILED", referee)
         self.assertIn("preloaded skill's fixed return contract", referee)
+
+    def test_verdict_contract_reports_round0_retry_results_from_coarse_input(self):
+        result = subprocess.run(
+            [str(READER), "verdict"], capture_output=True, text=True, check=False
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        text = " ".join(result.stdout.split())
+        self.assertIn("Round-0 attempt history plus final seat statuses", text)
+        self.assertIn("report every retry and final down-seat result in Process notes", text)
 
     def test_referee_waits_for_parallel_foreground_agents_without_polling(self):
         bootstrap = BOOTSTRAP.read_text(encoding="utf-8")

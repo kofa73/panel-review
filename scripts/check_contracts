@@ -126,7 +126,35 @@ def check_tree(errors, root):
     }
     readme = read(root, "README.md")
     executable_text = "\n".join([*templates.values(), protocol, referee, bootstrap])
+    round0 = normalized(read_protocol_phase(root, "round0"))
+    recovery = normalized(read_protocol_phase(root, "recovery"))
     debate = read_protocol_phase(root, "debate")
+    verdict = normalized(read_protocol_phase(root, "verdict"))
+
+    for location, text, required in (
+        ("rendered:round0", round0, "Retry each still-down seat once"),
+        ("rendered:round0", round0, 'prepare-round0 "$id" --retry'),
+        ("rendered:round0", round0, "exact saved blind prompt"),
+        ("rendered:recovery", recovery, "preserves every complete Round-0 seat pass"),
+        ("rendered:recovery", recovery, "currently available seat that remains down"),
+        ("rendered:recovery", recovery, 'prepare-round0 "$id" --resume'),
+        ("rendered:verdict", verdict, "Round-0 attempt history plus final seat statuses"),
+    ):
+        if required not in text:
+            fail(
+                errors,
+                "round0-retry-contract",
+                location,
+                f"missing `{required}` behavior",
+            )
+
+    if "if it finds index.phase=round0 load round0 too" not in normalized(bootstrap):
+        fail(
+            errors,
+            "round0-retry-contract",
+            "skills/panel-review-for-agent/SKILL.md",
+            "resume bootstrap does not load the Round-0 phase for Round-0 recovery",
+        )
 
     for name, command in commands.items():
         dispatches = [
