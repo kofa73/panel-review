@@ -56,6 +56,14 @@ instr=$(jq -r '.instructions // ""' "$man")
 iss=$(jq -r '.limits.issue_rounds' "$man")
 mx=$(jq -r '.limits.max_rounds' "$man")
 dh=$(jq -r '.diff_hash' "$man")
+profile_path=$(jq -er '.review_profile.source_path | select(type == "string" and length > 0)' "$man") \
+  || { echo "write_verdict_artifact: invalid review profile for $id" >&2; exit 1; }
+profile_hash=$(jq -er '.review_profile.sha256 | select(type == "string")' "$man") \
+  || { echo "write_verdict_artifact: invalid review profile for $id" >&2; exit 1; }
+profile_size=$(jq -er '.review_profile.size | select(type == "number" and . > 0 and . <= 65536 and . == floor)' "$man") \
+  || { echo "write_verdict_artifact: invalid review profile for $id" >&2; exit 1; }
+[[ "$profile_hash" =~ ^[0-9a-f]{64}$ ]] \
+  || { echo "write_verdict_artifact: invalid review profile for $id" >&2; exit 1; }
 index_hash="$("$here/diff_hash" < "$index")"
 created=$(jq -r '.created' "$man")
 finished="$(date '+%Y-%m-%d %H:%M:%S')"
@@ -97,6 +105,9 @@ dest="/tmp/$id.md"
   printf 'status: %s\n' "$status"
   printf 'scope: %s\n' "$(yaml_scalar "$scope")"
   printf 'instructions: %s\n' "$(yaml_scalar "${instr:-(none)}")"
+  printf 'review_profile_path: %s\n' "$(yaml_scalar "$profile_path")"
+  printf 'review_profile_sha256: %s\n' "$profile_hash"
+  printf 'review_profile_size: %s\n' "$profile_size"
   printf 'limits: issue-rounds=%s max-rounds=%s\n' "$iss" "$mx"
   printf 'seats: %s\n' "$(yaml_scalar "${seats:-n/a}")"
   printf 'rounds: %s\n' "$(yaml_scalar "${rounds:-n/a}")"

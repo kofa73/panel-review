@@ -3,7 +3,7 @@
 # Installer for the panel-review plugin.
 #
 # Copies the whole plugin tree (.claude-plugin/, skills/, agents/, scripts/,
-# hooks/, prompts/, assets/, CONTRACTS.md) into the user's Claude config dir as a single
+# hooks/, prompts/, profiles/, assets/, CONTRACTS.md) into the user's Claude config dir as a single
 # skills-directory plugin, loaded as panel-review@skills-dir. Commands are
 # namespaced panel-review:<verb> (panel-review:start, :status, :resume,
 # :continue, :result, :discard).
@@ -53,7 +53,7 @@ done
 rm -rf -- "$PLUGIN_DST"
 mkdir -p "$PLUGIN_DST"
 
-for part in .claude-plugin skills agents scripts hooks prompts assets CONTRACTS.md; do
+for part in .claude-plugin skills agents scripts hooks prompts profiles assets CONTRACTS.md; do
   if [ -e "$REPO/$part" ]; then
     cp -a "$REPO/$part" "$PLUGIN_DST/$part"
   fi

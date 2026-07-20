@@ -3,7 +3,7 @@
 Regression suite for the panel-review scripts. It has two layers:
 
 - **`run_tests.sh`** — plain bash + `jq`, covering the scripts that are still bash
-  (`resolve_diff`, `preflight`, `birth_index`, `run_seat`, `resolve_instructions`,
+  (`resolve_diff`, `preflight`, `birth_index`, `run_seat`, `resolve_instructions`, `init_run`,
   `cleanup`/`discard`) plus the protocol/template contracts. As its **final step**
   it runs the Python suite below, so this one command exercises the whole pipeline.
 - **`python/`** — `unittest` tests for the Python script interfaces, including `index`,
@@ -102,6 +102,9 @@ them up. No real run is touched.
   `--no-repair` flag → usage exit 2.
 - **resolve_instructions**: verbatim/none resolved (0), `auto` → sentinel (3),
   missing manifest → exit 1.
+- **init_run / stage_review_profile**: built-in and external exact-byte snapshots plus resolved
+  source-path/size/SHA-256 metadata; missing, empty, non-UTF-8, over-64-KiB, non-regular, and duplicate
+  profile inputs fail before marker publication.
 - **cleanup / discard**: `PANEL_REVIEW_KEEP_TMP=true` preserves `/tmp/<id>` while
   removing the marker / `.panel-review`; the default still removes `/tmp/<id>`.
 - **Protocol/template contracts**: runs `seat_contract.py render` through runtime parsing and pins

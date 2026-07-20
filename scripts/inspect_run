@@ -52,6 +52,9 @@ m_iss=$(jq -r '.limits.issue_rounds' "$man" 2>/dev/null) || stale
 m_mx=$(jq -r '.limits.max_rounds' "$man" 2>/dev/null) || stale
 m_dh=$(jq -r '.diff_hash' "$man" 2>/dev/null) || stale
 m_created=$(jq -r '.created // ""' "$man" 2>/dev/null) || stale
+m_profile_path=$(jq -r '.review_profile.source_path // ""' "$man" 2>/dev/null) || stale
+m_profile_hash=$(jq -r '.review_profile.sha256 // ""' "$man" 2>/dev/null) || stale
+m_profile_size=$(jq -r '.review_profile.size // 0' "$man" 2>/dev/null) || stale
 
 # Re-resolve THIS manifest's own scope and compare hashes — divergence check.
 diff_file="$(mktemp /tmp/inspect_run_diff.XXXXXX)"
@@ -90,6 +93,9 @@ fi
 
 jq -n --arg id "$id" --arg state "$state" --arg scope "$m_scope" --arg instr "$m_instr" \
       --argjson iss "$m_iss" --argjson mx "$m_mx" --arg created "$m_created" \
+      --arg profile_path "$m_profile_path" --arg profile_hash "$m_profile_hash" \
+      --argjson profile_size "$m_profile_size" \
       --argjson counts "$counts" \
   '{id:$id, state:$state, scope:$scope, instructions:$instr,
+    review_profile:{source_path:$profile_path, sha256:$profile_hash, size:$profile_size},
     issue_rounds:$iss, max_rounds:$mx, created:$created} + $counts'

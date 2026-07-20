@@ -1,6 +1,6 @@
 ---
 name: status
-description: Show the saved panel-review session(s) for this workdir — creation time, scope, instructions, limits, state and progress. Read-only; also reports seat prerequisites (Codex/Gemini availability).
+description: Show the saved panel-review session(s) for this workdir — creation time, scope, review profile, instructions, limits, state and progress. Read-only; also reports seat prerequisites (Codex/Gemini availability).
 argument-hint: ""
 ---
 
@@ -55,7 +55,7 @@ fi
   > No saved review; `panel-review:start <scope>` to start one.
 
 - **Exactly one entry in `ids`** → the normal case. Show its creation time (the manifest's stored
-  local wall-clock value), scope, instructions, limits, and state + progress. Omit the ID — it's
+  local wall-clock value), scope, review-profile source path/hash/size, instructions, limits, and state + progress. Omit the ID — it's
   internal noise in the single-session case. Per `state`:
   - `interrupted` (≥1 `open`) → show progress (`round`, counts by state). Append: "Pick it up with
     `panel-review:resume`."
@@ -72,7 +72,8 @@ fi
 - **More than one entry in `ids`, or any entry in `names`** → flag the abnormal state explicitly:
   > More than one saved review (only possible if `.panel-review/`/`/tmp/` was edited out of band —
   > multiple reviews aren't supported).
-  List **each** `ids` entry with its creation time, scope, instructions, limits, state/progress, **and**
+  List **each** `ids` entry with its creation time, scope, review-profile source path/hash/size,
+  instructions, limits, state/progress, **and**
   its `.panel-review/<ID>/` + `/tmp/<ID>/` paths (so the user can tell them apart and remove a specific
   one by hand). List each `names` stray as an unrecognized path under `.panel-review/`. Then:
   > `panel-review:discard` clears them all, or remove individual `.panel-review/<ID>/` + `/tmp/<ID>/`

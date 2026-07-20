@@ -1,14 +1,11 @@
 # Remaining issues
 
-This directory holds the detailed work that remains after the completed sequence in `pending.md`.
-`pending.md` remains the durable session handoff; this file is the authoritative ordered index for
-remaining work.
+This directory is the authoritative ordered index and detailed record for repository work.
 
 Work through the rows in the order shown. Numeric issue identifiers remain stable, so a later issue
 may appear ahead of an older one when a newly discovered defect is demonstrably more severe.
 Correctness and executable-contract problems precede documentation and optional polishing.
-Completing an item should update its status here, its issue file, and the corresponding entry in
-`pending.md`.
+Completing an item should update its status here and in its issue file.
 
 | Priority | Status | Issue | Why it is ordered here |
 |---:|---|---|---|
@@ -21,7 +18,7 @@ Completing an item should update its status here, its issue file, and the corres
 | 14 | Completed | [Remove duplicate addendum and commit instructions](14-remove-duplicate-addendum-commit-instructions.md) | The normal debate protocol now leaves merge, commit, and card regeneration exclusively to `round commit --addendum`. |
 | 15 | Completed | [Restore event-driven referee seat waiting](15-referee-seat-polling-in-loop.md) | Runs each CLI-barrier/Claude-seat pair as concurrent foreground Agents, keeping all seat waiting out of the referee context. |
 | 17 | Completed | [Align Agent and Bash contracts with current Claude Code](17-claude-code-runtime-compatibility.md) | Pins the outer referee foreground, fails closed on session Agent-budget exhaustion, and documents current Bash timeout behavior. |
-| 16 | Pending | [Support external review profiles](16-external-review-profiles.md) | Adds a project-neutral profile seam for reusable domain review methods without specializing the panel core. |
+| 16 | Completed | [Support external review profiles](16-external-review-profiles.md) | Added a project-neutral, snapshotted profile seam and extracted the reusable darktable review method without specializing the panel core. |
 | 6 | Completed | [Correct repository documentation](06-repository-documentation-corrections.md) | Current maintainer and user documentation now matches the settled gate, salvage, transaction, trust-boundary, component, and test behavior. |
 | 7 | Completed | [Reconstruct architectural evolution and write qualifying ADRs](07-architecture-evolution-and-adrs.md) | Added an evidence-backed ten-milestone history and seven qualifying accepted ADRs without promoting proposed work. |
 | 8 | Completed | [Remove low-risk implementation and test duplication](08-maintainability-cleanups.md) | Deduplicated byte-sorted sweep lookup and valid debate-test setup without changing behavior. |

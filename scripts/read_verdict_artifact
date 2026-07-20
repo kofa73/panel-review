@@ -12,7 +12,8 @@ from panel_common import panel_require_id
 
 
 USAGE = "usage: read_verdict_artifact --id ID [--delivery] [--scope SCOPE --diff-hash HASH --run-epoch N]"
-JSON_FIELDS = {"scope", "instructions", "seats", "rounds"}
+JSON_FIELDS = {"scope", "instructions", "seats", "rounds", "review_profile_path"}
+PROFILE_FIELDS = {"review_profile_path", "review_profile_sha256", "review_profile_size"}
 REQUIRED_FIELDS = {
     "id",
     "run_epoch",
@@ -119,7 +120,7 @@ def parse_artifact(raw):
     missing = sorted(REQUIRED_FIELDS - fields.keys())
     if missing:
         raise ArtifactError(f"artifact frontmatter is missing {missing[0]}")
-    for key in JSON_FIELDS:
+    for key in JSON_FIELDS & fields.keys():
         try:
             fields[key] = json.loads(fields[key])
         except (json.JSONDecodeError, TypeError) as error:
@@ -155,6 +156,18 @@ def validate(fields, run_id, expected_scope, expected_hash, expected_epoch, allo
         raise ArtifactError("artifact diff_hash is invalid")
     if not re.fullmatch(r"[0-9a-f]{64}", fields["index_hash"]):
         raise ArtifactError("artifact index_hash is invalid")
+    present_profile_fields = PROFILE_FIELDS & fields.keys()
+    if present_profile_fields and present_profile_fields != PROFILE_FIELDS:
+        raise ArtifactError("artifact review profile metadata is incomplete")
+    if present_profile_fields:
+        if not fields["review_profile_path"].startswith("/"):
+            raise ArtifactError("artifact review_profile_path is invalid")
+        if not re.fullmatch(r"[0-9a-f]{64}", fields["review_profile_sha256"]):
+            raise ArtifactError("artifact review_profile_sha256 is invalid")
+        if re.fullmatch(r"[1-9][0-9]*", fields["review_profile_size"]) is None:
+            raise ArtifactError("artifact review_profile_size is invalid")
+        if int(fields["review_profile_size"]) > 64 * 1024:
+            raise ArtifactError("artifact review_profile_size is invalid")
     if expected_scope is not None and fields["scope"] != expected_scope:
         raise ArtifactError("artifact scope does not match the requested run")
     if expected_hash is not None and fields["diff_hash"] != expected_hash:
@@ -236,6 +249,16 @@ def delivery_text(fields, run_id):
     return "\n".join(lines) + "\n"
 
 
+def result_text(fields, body):
+    if not PROFILE_FIELDS <= fields.keys():
+        return body
+    return (
+        f"Review profile: {fields['review_profile_path']}\n"
+        f"SHA-256: {fields['review_profile_sha256']}\n\n"
+        f"{body}"
+    )
+
+
 def main(argv):
     run_id, expected_scope, expected_hash, expected_epoch, delivery = parse_args(argv)
     try:
@@ -251,7 +274,7 @@ def main(argv):
             print(f"read_verdict_artifact: {error}", file=sys.stderr)
             return 1
     else:
-        sys.stdout.write(body)
+        sys.stdout.write(result_text(fields, body))
     return 0
 
 

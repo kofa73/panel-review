@@ -118,6 +118,7 @@ panel-review:start --commit <SHA>                 # review a single commit
 panel-review:start "<question>"                   # validate an answer to a broad technical question
 panel-review:start --uncommitted --issue-rounds 3 --max-rounds 5   # override the loop limits
 panel-review:start --uncommitted --debate-low                      # debate even an all-low set
+panel-review:start --base main --review-profile /path/domain-review.md  # replace generic priorities
 panel-review:start --uncommitted focus on the new locking           # steer the seats (trailing text)
 panel-review:start --base main --instructions auto                  # let the referee derive context
 panel-review:resume                               # pick up an interrupted run
@@ -126,9 +127,9 @@ panel-review:result <ID>                          # retrieve a validated finishe
 panel-review:discard                              # delete the saved review (the reset)
 ```
 
-Only `panel-review:start` takes a scope or instructions — the session remembers them, and
-`panel-review:resume`/`panel-review:continue` read them back from the manifest rather than asking
-you to retype them.
+Only `panel-review:start` takes a scope, review-profile path, or instructions — the run remembers
+them, and `panel-review:resume`/`panel-review:continue` reuse the saved profile snapshot and read the
+other values from the manifest rather than asking you to retype them.
 
 It writes one synthesized verdict to **`/tmp/<ID>.md`** and returns only that filename plus any
 minimal gate/continuation status. The review and report body stay in a separate context, so they do
@@ -175,6 +176,30 @@ Notes:
   comparing a retyped value. Only `panel-review:start` accepts instructions at all; passing them to
   `resume`/`continue` is a hard error (there's nothing to apply them to — the manifest already has
   its own).
+
+### Selecting a review profile
+
+Every run uses one review profile: a reusable investigation method containing priorities, domain
+invariants, execution variants, false-positive filters, and severity guidance. With no flag,
+panel-review uses its built-in generic software profile, preserving the existing review behavior.
+Supply a project-specific profile explicitly when appropriate:
+
+```
+panel-review:start --base main \
+  --review-profile /home/developer/.claude/skills/darktable-review/references/review-profile.md
+```
+
+The source must be a readable regular, non-empty UTF-8 file no larger than 64 KiB. `start` resolves
+the path and snapshots the exact bytes into `/tmp/<ID>/review-profile.md`; the manifest records the
+resolved source path, byte size, and SHA-256. Every seat reads that one saved snapshot in Round 0 and
+debate. Editing, moving, or deleting the source afterward cannot alter the run, and
+`resume`/`continue` never reload it.
+
+The profile changes investigation priorities; it cannot redefine panel-owned scope, roles,
+read-only rules, output blocks, finding fields, issue lifecycle, or consensus semantics. An external
+profile replaces the built-in generic priority catalogue rather than being appended to it.
+`--review-profile` must appear before `--instructions`, because `--instructions` consumes all
+remaining text.
 
 Four more behaviors worth knowing before you run it:
 
@@ -237,7 +262,7 @@ that did finish.
 
 | File | Kind | What it is | Invoked by |
 |------|------|------------|------------|
-| `skills/start/SKILL.md` | skill | Parses scope + instructions + limits, refuses if a session already exists, mints the run, spawns the referee. | you, via `panel-review:start` |
+| `skills/start/SKILL.md` | skill | Parses scope + review profile + instructions + limits, refuses if a session already exists, mints the run, spawns the referee. | you, via `panel-review:start` |
 | `skills/status/SKILL.md` | skill | **Read-only.** Lists the saved session(s) + prereqs. | you, via `panel-review:status` (also model-invocable) |
 | `skills/resume/SKILL.md` | skill | Picks up an interrupted run (limit overrides only; scope/instructions adopted from the manifest). | you, via `panel-review:resume` |
 | `skills/continue/SKILL.md` | skill | Re-debates a finished run's `unresolved`/`contested` leftovers. | you, via `panel-review:continue` |
@@ -258,7 +283,7 @@ read-only and left model-invocable.
 ```
 You: panel-review:start --commit abc123
            │  (main conversation)
-start      ── parse scope (commit=abc123) + round limits; hash the diff
+start      ── parse scope (commit=abc123) + profile + round limits; hash the diff
    (skill)  ── refuse-if-session-exists precondition (state-aware message if one does)
            ── init_run (fresh) → mints a run id; spawn the referee agent with mode/id/scope/limits
            │  (separate context)
@@ -273,7 +298,7 @@ start      ── validates the artifact; reports only `/tmp/<ID>.md` + minimal 
 
 An interrupted or finished-with-leftovers session is picked up the same way via
 `panel-review:resume`/`panel-review:continue` instead of `start`'s precondition+`init_run` step —
-they adopt scope/limits/instructions from the manifest and run `resume_check`
+they adopt scope/limits/instructions from the manifest, reuse the saved profile, and run `resume_check`
 (`fresh | resume | continuable | stale | diverged | ambiguous`) to decide whether to act or redirect
 you to the right command.
 
@@ -349,7 +374,9 @@ The referee never hand-rolls flags, writes, index math, or parsing. It calls wra
 `${CLAUDE_PLUGIN_ROOT}/scripts/`, so those operations are byte-exact and can't be fat-fingered.
 Static reviewer prompt templates live in `${CLAUDE_PLUGIN_ROOT}/prompts/` (`blind_pass.tmpl` and
 `debate.tmpl`); `claude_delivery.tmpl` adds only the Claude Agent's validated file-delivery
-instructions. A slipped block is not re-asked of the seat via a template — the seat has exited, so
+instructions. The built-in generic investigation priorities live in `profiles/default.md`; `init_run`
+snapshots either it or the explicitly supplied external profile before publishing the run marker.
+A slipped block is not re-asked of the seat via a template — the seat has exited, so
 recovering it is the referee's job (see "Salvage" in the referee protocol), not a script's.
 `scripts/seat_contract.py` is the authoritative owner of seat blocks, fields, stance values,
 normalization, phase cardinality, and their rendered instructions. `round` renders that contract into
@@ -378,6 +405,7 @@ independent, deterministic authority for user-visible report delivery.
 | `seat_contract.py` | Authoritative seat-output contract: defines fields, examples, stance values, phase-required blocks/cardinality, normalization, and renders panel-size-correct Round-0/debate instructions. Its Python interface is shared by runtime validators; its `render` command supports exceptional manual prompt assembly |
 | `check_contracts` | Validate the ownership map, every rendered panel-size/phase variant, runtime-valid examples, and forbidden legacy wording; failures name the violated invariant and location |
 | `resolve_instructions` | Resolve `manifest.instructions` to the seat-facing text for the two deterministic cases (verbatim author text, or the "(none …)" line); returns a compose **sentinel** (exit 3) for `auto`, the only case that needs the referee to write neutral context |
+| `stage_review_profile` | Resolve and validate one built-in or external profile source, atomically snapshot its exact bytes, and return its source-path/size/SHA-256 metadata; the source is never reloaded after run creation |
 | `run_codex` | The **only** way to call the Codex seat — defaults `--profile panel-review` (auto-creates the profile from a shipped default) and runs with the sandbox **bypassed** (`--dangerously-bypass-approvals-and-sandbox`, the only mode where Codex's MCP/tilth runs and it can write scratch; integrity is enforced by `repo_guard`, not this sandbox) |
 | `repo_guard` | Protect the **code under review**: `snapshot` records the tracked tree (a `git stash create` SHA + a sha256 manifest) at the start; `verify --restore` after each seat pass detects, reverts, and reports any tracked-file drift. Untracked scratch and the `.panel-review/` cache are left alone |
 | `run_agy` | The **only** way to call the Gemini seat — pins the model, a 15-min `--print-timeout` budget, and the flag-binding invocation (prompt on **stdin with no bare `--print`**, since agy's `--print` takes the prompt as its argument and would otherwise swallow `--model`); falls back from the primary Gemini model to a faster one if the primary fails or exhausts its `--print-timeout` (whose expiry prints `Error: timed out waiting for response`) |
@@ -423,7 +451,8 @@ derived, regenerable cache; state is never inferred from them.
 |------|-------|
 | `.panel-review/<ID>/issue-<id>.md` | the blind cards (kept in the repo so any seat running in a constrained/sandboxed workspace — e.g. a seat under an externally-imposed read-only mount — can still read them; git-excluded and kept out of every scope so they never contaminate an `--uncommitted` review) |
 | `.panel-review/<ID>/` (the dir) | the per-worktree marker / lock — its name carries `<ID>` |
-| `/tmp/<ID>/manifest.json` | scope, limits, diff hash, phase |
+| `/tmp/<ID>/manifest.json` | scope, limits, diff hash, phase, and review-profile source path/size/SHA-256 |
+| `/tmp/<ID>/review-profile.md` | exact saved profile bytes used by every seat and every phase; the original source path is provenance only |
 | `/tmp/<ID>/index.json` | the **issue index** — the authoritative record of every issue: its state (e.g. `accepted`), flags, counters, and evidence (all defined under [How an issue moves](#how-an-issue-moves-transitions)); cards are rendered from it and the verdict is read off it (referee only) |
 | `/tmp/<ID>/sweeps/` | one subdir per **sweep** — a sweep is one full pass over the open issues across all engaged seats (i.e. one debate round). A complete seat/batch checkpoint binds the retained raw, exact-ID stances, parsed `new_findings`, zero parse status, expected IDs, and source provenance; interrupted rounds resume without re-running complete batches. **Read back on resume** (referee only) |
 | `/tmp/<ID>/raw/` | each seat's verbatim response text, before parsing; **read back** — `parse_block` turns these into findings/stances, and resume reuses them (referee only) |
@@ -450,7 +479,7 @@ produced** (the low-severity gate, a finished-with-leftovers run, or a final fin
 only surface that carries the report body; a `continue` or a debated gate **overwrites** the same path
 (the prior copy rotates to `/tmp/<ID>.md.bak`, and `continue` additionally snapshots it into that
 cycle's `/tmp/<ID>/epochs/epoch-<n>/`). The file is self-contained: a YAML frontmatter header
-(`id`, `run_epoch`, `status`, `scope`, `instructions`, `limits`, `seats`, `rounds`,
+(`id`, `run_epoch`, `status`, `scope`, `instructions`, review-profile path/hash/size, `limits`, `seats`, `rounds`,
 `created`/`finished`, `diff_hash`, `index_hash`)
 followed by the verdict markdown verbatim — the full diff is not embedded (it is large and
 reproducible from the scope; `diff_hash` is the reference). Writing it is required for delivery: if
@@ -473,8 +502,9 @@ continuation epoch. Only a validated finished artifact or canonical low-only sna
 filename; existence alone is not treated as completion. The report body never passes through the
 main conversation. If a hard session/quota limit leaves no main-conversation turn for that check,
 reset the quota and run `panel-review:result <ID>`. This read-only command validates `/tmp/<ID>.md`
-and prints its verdict body without depending on the normally removed workspace marker or re-running
-any seat.
+and prints the recorded review-profile path/hash followed by the verdict body, without depending on
+the normally removed workspace marker or re-running any seat. Legacy artifacts without profile
+metadata remain readable and print only their body.
 
 ### Continuing a finished review
 
@@ -485,8 +515,8 @@ the Round-0 low-severity gate). Push those issues further with:
 - `panel-review:continue unresolved` — only unresolved
 - `panel-review:continue contested` — only contested
 
-`continue` takes **no scope and no instructions** — it adopts them, along with the round limits,
-from the finished run's manifest (passing any of them is a hard error; `panel-review:status` shows
+`continue` takes **no scope, review profile, or instructions** — it adopts the stored values and
+saved profile, along with the round limits, from the finished run (passing any of them is a hard error; `panel-review:status` shows
 what's stored, and `--issue-rounds`/`--max-rounds` may still be overridden). It re-resolves the diff:
 if the code under review changed since the snapshot (**diverged**), it refuses — `panel-review:discard`
 before `panel-review:start` is the only way forward. The selected issues return to **open** with their

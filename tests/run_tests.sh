@@ -79,6 +79,9 @@ protocol="$root/skills/panel-review-for-agent/references/protocol.md"
 # Seat fields, block cardinality, and rendered instructions share one executable owner.
 assert_file_contains "blind template splices the seat contract" '{{SEAT_CONTRACT}}' "$root/prompts/blind_pass.tmpl"
 assert_file_contains "debate template splices the seat contract" '{{SEAT_CONTRACT}}' "$root/prompts/debate.tmpl"
+assert_file_contains "blind template references the saved review profile" '{{PROFILEINFO}}' "$root/prompts/blind_pass.tmpl"
+assert_file_contains "debate template references the saved review profile" '{{PROFILEINFO}}' "$root/prompts/debate.tmpl"
+assert_file_contains "built-in review profile carries the generic priority catalogue" 'auth, permissions, tenant isolation, trust boundaries' "$root/profiles/default.md"
 assert_file_contains "seat contract owns category revision" '"category": "correctness"' "$SC/seat_contract.py"
 assert_file_contains "protocol uses degraded decision script" 'decide_degraded_round' "$protocol"
 assert_file_contains "protocol delegates batch admission" 'sweep ingest-batch' "$protocol"
@@ -582,6 +585,51 @@ assert_exit "auto -> compose sentinel exit 3" 3 "$rc"
 assert_eq "auto prints the compose sentinel" '__PANEL_COMPOSE_INSTRUCTIONS__' "$out"
 rm -f "/tmp/$id/manifest.json"
 "$SC/resolve_instructions" --id "$id" >/dev/null 2>&1; assert_exit "missing manifest -> exit 1" 1 "$?"
+
+section "init_run — review profile validation and snapshot"
+profile_repo="$TMP/profile-repo"; mkdir -p "$profile_repo"; git -C "$profile_repo" init -q
+printf '# Domain profile\n\nProbe the domain invariant.\n' > "$TMP/domain-profile.md"
+profile_hash="$("$SC/diff_hash" < "$TMP/domain-profile.md")"
+profile_size="$(wc -c < "$TMP/domain-profile.md" | tr -d ' ')"
+id="$("$SC/init_run" --workdir "$profile_repo" --scope 'question=test' --issue-rounds 2 --max-rounds 4 \
+  --diff-hash "$(printf '' | "$SC/diff_hash")" --instructions '' --review-profile "$TMP/domain-profile.md")"
+assert_eq "external profile bytes are snapshotted exactly" "$profile_hash" "$("$SC/diff_hash" < "/tmp/$id/review-profile.md")"
+assert_eq "external profile path is resolved" "$(realpath "$TMP/domain-profile.md")" "$(jq -r '.review_profile.source_path' "/tmp/$id/manifest.json")"
+assert_eq "external profile hash is recorded" "$profile_hash" "$(jq -r '.review_profile.sha256' "/tmp/$id/manifest.json")"
+assert_eq "external profile size is recorded" "$profile_size" "$(jq -r '.review_profile.size' "/tmp/$id/manifest.json")"
+inspection="$("$SC/inspect_run" --id "$id" --workdir "$profile_repo")"
+assert_eq "status metadata carries the profile path" "$(realpath "$TMP/domain-profile.md")" "$(jq -r '.review_profile.source_path' <<<"$inspection")"
+assert_eq "status metadata carries the profile hash" "$profile_hash" "$(jq -r '.review_profile.sha256' <<<"$inspection")"
+PANEL_REVIEW_KEEP_TMP=false "$SC/cleanup" --id "$id" --workdir "$profile_repo"
+
+default_repo="$TMP/default-profile-repo"; mkdir -p "$default_repo"; git -C "$default_repo" init -q
+id="$("$SC/init_run" --workdir "$default_repo" --scope 'question=test' --issue-rounds 2 --max-rounds 4 \
+  --diff-hash "$(printf '' | "$SC/diff_hash")" --instructions '')"
+assert_eq "built-in profile is snapshotted exactly" "$("$SC/diff_hash" < "$root/profiles/default.md")" "$("$SC/diff_hash" < "/tmp/$id/review-profile.md")"
+assert_eq "built-in profile source is recorded" "$(realpath "$root/profiles/default.md")" "$(jq -r '.review_profile.source_path' "/tmp/$id/manifest.json")"
+PANEL_REVIEW_KEEP_TMP=false "$SC/cleanup" --id "$id" --workdir "$default_repo"
+
+for invalid in missing empty binary large directory; do
+  invalid_repo="$TMP/invalid-$invalid"; mkdir -p "$invalid_repo"; git -C "$invalid_repo" init -q
+  case "$invalid" in
+    missing) invalid_path="$TMP/no-such-profile.md";;
+    empty) invalid_path="$TMP/empty-profile.md"; : > "$invalid_path";;
+    binary) invalid_path="$TMP/binary-profile.md"; printf '\377' > "$invalid_path";;
+    large) invalid_path="$TMP/large-profile.md"; dd if=/dev/zero of="$invalid_path" bs=65537 count=1 status=none;;
+    directory) invalid_path="$TMP";;
+  esac
+  "$SC/init_run" --workdir "$invalid_repo" --scope 'question=test' --issue-rounds 2 --max-rounds 4 \
+    --diff-hash "$(printf '' | "$SC/diff_hash")" --instructions '' --review-profile "$invalid_path" >/dev/null 2>&1
+  assert_exit "$invalid review profile fails" 1 "$?"
+  markers="$(find "$invalid_repo/.panel-review" -name .panel-run -print 2>/dev/null | wc -l | tr -d ' ')"
+  assert_eq "$invalid review profile creates no marker" 0 "$markers"
+done
+duplicate_repo="$TMP/duplicate-profile"; mkdir -p "$duplicate_repo"; git -C "$duplicate_repo" init -q
+"$SC/init_run" --workdir "$duplicate_repo" --scope 'question=test' --issue-rounds 2 --max-rounds 4 \
+  --diff-hash "$(printf '' | "$SC/diff_hash")" --review-profile "$TMP/domain-profile.md" \
+  --review-profile "$TMP/domain-profile.md" >/dev/null 2>"$TMP/duplicate-profile.err"
+assert_exit "duplicate review profile flag fails as usage" 2 "$?"
+assert_file_contains "duplicate review profile error is clear" 'duplicate --review-profile' "$TMP/duplicate-profile.err"
 
 # ---------------------------------------------------------------------------
 section "cleanup / discard — PANEL_REVIEW_KEEP_TMP preserves /tmp diagnostics"

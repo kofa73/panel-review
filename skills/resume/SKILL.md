@@ -1,6 +1,6 @@
 ---
 name: resume
-description: Resume an interrupted panel review (mid-debate, crashed, or stopped). Takes only optional round-limit overrides — scope and instructions come from the saved session. Redirects to status/continue/discard if the saved session isn't interrupted.
+description: Resume an interrupted panel review (mid-debate, crashed, or stopped). Takes only optional round-limit overrides — scope, review profile, and instructions come from the saved session. Redirects to status/continue/discard if the saved session isn't interrupted.
 disable-model-invocation: true
 argument-hint: "[--issue-rounds N] [--max-rounds N]"
 ---
@@ -8,7 +8,7 @@ argument-hint: "[--issue-rounds N] [--max-rounds N]"
 # panel-review:resume
 
 You are the **main-context entry point** for resuming an interrupted review. This command takes
-**no scope, no instructions** — both come from the manifest. Run from the repo root.
+**no scope, review profile, or instructions** — all come from the saved run. Run from the repo root.
 
 ```bash
 # CLAUDE_PLUGIN_ROOT is substituted into this text at skill-load — it is NOT a
@@ -22,9 +22,9 @@ SC="$ROOT/scripts"
 
 Apply `--issue-rounds N` / `--max-rounds N` if present (track whether each was actually given — you
 need that later to decide whether to write back an override). Anything else in `$ARGUMENTS` — a scope
-flag, free text, `--instructions` — is a hard error:
+flag, free text, `--review-profile`, or `--instructions` — is a hard error:
 
-> `panel-review:resume` takes the scope and instructions from the saved review; it doesn't accept
+> `panel-review:resume` takes the scope, review profile, and instructions from the saved review; it doesn't accept
 > them. `panel-review:status` shows what's stored.
 
 ## Step 2 — find the session
@@ -43,7 +43,7 @@ ids=(); [ -d "$base" ] && for d in "$base"/*/; do [ -f "$d/.panel-run" ] && ids+
   Stop.
 - **1** → `id="${ids[0]}"`. Continue to Step 3.
 
-## Step 3 — adopt scope/limits/instructions, resolve the current diff
+## Step 3 — adopt scope/profile/limits/instructions, resolve the current diff
 
 ```bash
 man="/tmp/$id/manifest.json"
@@ -52,6 +52,7 @@ scope="$(jq -r '.scope' "$man")"
 ISS="$(jq -r '.limits.issue_rounds' "$man")"
 MAX="$(jq -r '.limits.max_rounds' "$man")"
 INSTR="$(jq -r '.instructions // ""' "$man")"
+PROFILE="$(jq -r '.review_profile.source_path' "$man")" # provenance only; seats use /tmp/$id/review-profile.md
 ```
 
 Apply any `--issue-rounds`/`--max-rounds` override from Step 1 on top of the adopted `ISS`/`MAX` now

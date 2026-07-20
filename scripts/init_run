@@ -5,12 +5,15 @@
 #
 # Usage:
 #   init_run --workdir DIR --scope STR --issue-rounds N --max-rounds N --diff-hash HEX
-#           [--instructions STR]
+#           [--instructions STR] [--review-profile PATH]
 #
 # --instructions is optional author guidance for the seats (free text, or the
 # sentinel "auto" for referee-generated context). Stored verbatim in the manifest
 # so it survives resume/continue; it is NOT part of the run's resume identity
 # (resume_check never compares it).
+# --review-profile selects a non-empty UTF-8 profile up to 64 KiB. The built-in
+# generic profile is used when omitted. Exact bytes are snapshotted into the run;
+# the source path is provenance only and is never read on resume/continue.
 #
 # Creates:
 #   /tmp/<ID>/manifest.json           (canonical; persistent volume)
@@ -29,7 +32,7 @@ here="$(cd "$(dirname "$0")" && pwd)"; . "$here/_panel_common.sh"
 # through panel_atomic_write's mktemp (already 0600).
 umask 077
 
-workdir="" scope="" iss="" mx="" dh="" instr=""
+workdir="" scope="" iss="" mx="" dh="" instr="" profile="" profile_seen=false
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --workdir) workdir="$2"; shift 2;;
@@ -38,12 +41,27 @@ while [ "$#" -gt 0 ]; do
     --max-rounds) mx="$2"; shift 2;;
     --diff-hash) dh="$2"; shift 2;;
     --instructions) instr="$2"; shift 2;;
+    --review-profile)
+      [ "$profile_seen" = false ] || { echo "init_run: duplicate --review-profile" >&2; exit 2; }
+      [ "$#" -ge 2 ] || { echo "init_run: --review-profile needs a path" >&2; exit 2; }
+      profile="$2"; profile_seen=true; shift 2;;
     *) echo "init_run: unknown arg: $1" >&2; exit 2;;
   esac
 done
 [ -n "$workdir" ] && [ -n "$scope" ] && [ -n "$iss" ] && [ -n "$mx" ] && [ -n "$dh" ] \
   || { echo "init_run: need --workdir --scope --issue-rounds --max-rounds --diff-hash" >&2; exit 2; }
 command -v jq >/dev/null 2>&1 || { echo "init_run: jq not found" >&2; exit 127; }
+[ -n "$profile" ] || profile="$here/../profiles/default.md"
+
+# Once an ID has been claimed, any failure before marker publication removes its
+# unpublished state. A caller must never find an orphan produced by bad profile input.
+id=""; cleanup_new_run=true
+cleanup_partial_run() {
+  if [ "$cleanup_new_run" = true ] && [ -n "$id" ] && panel_valid_id "$id"; then
+    rm -rf -- "/tmp/$id"
+  fi
+}
+trap cleanup_partial_run EXIT
 
 # Mint an ID and claim ONLY /tmp/<ID> with exclusive mkdir; retry on rare clash.
 # The workdir marker is published LAST (after canonical state exists), so a
@@ -57,13 +75,16 @@ done
 [ -n "${id:-}" ] || { echo "init_run: could not allocate a run id" >&2; exit 1; }
 
 mkdir -p "/tmp/$id/sweeps" "/tmp/$id/raw" "/tmp/$id/audit"
+profile_meta="$("$here/stage_review_profile" --source "$profile" --destination "/tmp/$id/review-profile.md")"
 
 jq -n --arg id "$id" --arg wd "$workdir" --arg scope "$scope" \
       --argjson iss "$iss" --argjson mx "$mx" --arg dh "$dh" \
-      --arg instr "$instr" --arg created "$(date '+%Y-%m-%d %H:%M:%S')" '{
+      --arg instr "$instr" --argjson profile "$profile_meta" \
+      --arg created "$(date '+%Y-%m-%d %H:%M:%S')" '{
   id:$id, workdir:$wd, scope:$scope,
   limits:{issue_rounds:$iss, max_rounds:$mx},
-  diff_hash:$dh, instructions:$instr, phase:"round0", state_version:1, created:$created
+  diff_hash:$dh, instructions:$instr, review_profile:$profile,
+  phase:"round0", state_version:1, created:$created
 }' | panel_atomic_write "/tmp/$id/manifest.json"
 
 printf '{"issues":[],"round":0,"phase":"round0","committed_rounds":[],"evaluated_by":{}}\n' | panel_atomic_write "/tmp/$id/index.json"
@@ -87,6 +108,7 @@ marker="$base/$id"
 mkdir "$marker" 2>/dev/null || { echo "init_run: marker already exists: $marker" >&2; exit 1; }
 printf '%s\n' "$id" | panel_atomic_write "$marker/.panel-run"
 
+cleanup_new_run=false
 panel_git_exclude_add "$workdir" ".panel-review/"
 
 printf '%s\n' "$id"

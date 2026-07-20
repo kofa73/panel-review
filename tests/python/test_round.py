@@ -81,6 +81,13 @@ class RoundTest(unittest.TestCase):
             "state_version": 1,
             "created": "2026-07-14 00:00:00",
         }
+        self.profile = b"# Test review profile\n\nProbe test-specific invariants.\n"
+        (self.run_dir / "review-profile.md").write_bytes(self.profile)
+        manifest["review_profile"] = {
+            "source_path": "/profiles/test-review.md",
+            "sha256": hashlib.sha256(self.profile).hexdigest(),
+            "size": len(self.profile),
+        }
         self.write_json(self.run_dir / "manifest.json", manifest)
         self.write_json(
             self.run_dir / "index.json",
@@ -169,6 +176,9 @@ class RoundTest(unittest.TestCase):
         self.assertIn("--seat codex", barrier)
         self.assertNotIn("--seat claude", barrier)
         self.assertTrue((self.run_dir / "guard" / "manifest.sha256").is_file())
+        self.assertIn(str(self.run_dir / "review-profile.md"), common)
+        self.assertIn(hashlib.sha256(self.profile).hexdigest(), common)
+        self.assertNotIn("Probe test-specific invariants.", common)
 
     def test_prepare_round0_renders_the_configured_panel_size(self):
         prepared = self.prepare_round0("claude", "codex")
@@ -194,6 +204,26 @@ class RoundTest(unittest.TestCase):
         )
 
         self.assertEqual(parsed.returncode, 0, parsed.stdout + parsed.stderr)
+
+    def test_prepare_debate_reuses_the_saved_review_profile(self):
+        self.prepare_round0()
+        self.install_open_index()
+
+        prepared = self.run_round("prepare-debate", self.run_id, "claude", "codex")
+
+        self.assertEqual(prepared.returncode, 0, prepared.stderr)
+        prompt = Path(json.loads(prepared.stdout)["prompt"]).read_text(encoding="utf-8")
+        self.assertIn(str(self.run_dir / "review-profile.md"), prompt)
+        self.assertIn(hashlib.sha256(self.profile).hexdigest(), prompt)
+        self.assertNotIn("Probe test-specific invariants.", prompt)
+
+    def test_prepare_rejects_a_profile_snapshot_that_disagrees_with_the_manifest(self):
+        (self.run_dir / "review-profile.md").write_text("changed\n", encoding="utf-8")
+
+        result = self.run_round("prepare-round0", self.run_id, "claude", "codex")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("review profile snapshot does not match the manifest", result.stderr)
 
     def test_collect_round0_parses_claude_raw_and_returns_compact_summary(self):
         self.prepare_round0()

@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+"""Validate and snapshot one review profile, then emit its stable metadata."""
+
+import argparse
+import hashlib
+import json
+import os
+import stat
+import sys
+
+from panel_common import panel_atomic_write
+
+
+MAX_PROFILE_BYTES = 64 * 1024
+
+
+class ProfileError(Exception):
+    pass
+
+
+def read_profile(path):
+    resolved = os.path.realpath(os.path.abspath(os.path.expanduser(path)))
+    try:
+        fd = os.open(resolved, os.O_RDONLY)
+    except OSError as error:
+        raise ProfileError("profile is missing or unreadable") from error
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ProfileError("profile is not a regular file")
+        chunks = []
+        total = 0
+        while True:
+            chunk = os.read(fd, min(1024 * 1024, MAX_PROFILE_BYTES + 1 - total))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > MAX_PROFILE_BYTES:
+                raise ProfileError(f"profile exceeds {MAX_PROFILE_BYTES} bytes")
+        raw = b"".join(chunks)
+    finally:
+        os.close(fd)
+    if not raw:
+        raise ProfileError("profile is empty")
+    try:
+        raw.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ProfileError("profile is not valid UTF-8") from error
+    return resolved, raw
+
+
+def main(argv):
+    parser = argparse.ArgumentParser(
+        prog="stage_review_profile",
+        usage="stage_review_profile --source PATH --destination PATH",
+    )
+    parser.add_argument("--source", required=True)
+    parser.add_argument("--destination", required=True)
+    args = parser.parse_args(argv[1:])
+    try:
+        source_path, raw = read_profile(args.source)
+        panel_atomic_write(args.destination, raw)
+    except (ProfileError, OSError) as error:
+        print(f"stage_review_profile: {error}", file=sys.stderr)
+        return 1
+    print(
+        json.dumps(
+            {
+                "source_path": source_path,
+                "sha256": hashlib.sha256(raw).hexdigest(),
+                "size": len(raw),
+            },
+            separators=(",", ":"),
+        )
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

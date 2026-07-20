@@ -57,6 +57,11 @@ class ContractConsistencyTest(unittest.TestCase):
                 "\nYou and two other AIs reviewed the same work.\n",
             ),
             (
+                "review-profile-owner",
+                "prompts/debate.tmpl",
+                "\n{{PROFILEINFO}}\n",
+            ),
+            (
                 "all-seat-health-reporting",
                 "skills/panel-review-for-agent/references/protocol.md",
                 "\nProcess notes name any peer seat (Codex or Gemini) down.\n",

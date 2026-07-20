@@ -40,6 +40,8 @@ and spawned you with, in your prompt:
 - `workdir=<DIR>` — the repo root (run everything from here)
 - `scope=<base=X | uncommitted | commit=SHA | the question text>`
 - the resolved round limits (also in the manifest)
+- the selected review profile is NOT in your prompt — `round` validates the manifest metadata and
+  saved `/tmp/<id>/review-profile.md` snapshot, then gives every seat the same absolute reference
 - author **instructions** are NOT in your prompt — read them from `manifest.instructions` (free text,
   the sentinel `auto`, or empty) and resolve them in Round 0 step 2
 - `debate-low=<true|false>` — when `true`, skip the Round-0 severity gate and debate even an

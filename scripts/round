@@ -109,6 +109,41 @@ def ensure_instructions(directory, manifest):
     return destination
 
 
+def ensure_review_profile(directory, manifest):
+    metadata = manifest.get("review_profile")
+    if not isinstance(metadata, dict):
+        raise RoundError("manifest review profile is missing or invalid")
+    source_path = metadata.get("source_path")
+    expected_hash = metadata.get("sha256")
+    expected_size = metadata.get("size")
+    if (
+        not isinstance(source_path, str)
+        or not source_path.startswith("/")
+        or re.fullmatch(r"[0-9a-f]{64}", expected_hash or "") is None
+        or not isinstance(expected_size, int)
+        or isinstance(expected_size, bool)
+        or not 0 < expected_size <= 64 * 1024
+    ):
+        raise RoundError("manifest review profile is missing or invalid")
+    snapshot = directory / "review-profile.md"
+    try:
+        raw = snapshot.read_bytes()
+        raw.decode("utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        raise RoundError("review profile snapshot is missing or invalid") from error
+    if len(raw) != expected_size or hashlib.sha256(raw).hexdigest() != expected_hash:
+        raise RoundError("review profile snapshot does not match the manifest")
+    info = directory / "review_profile_info.txt"
+    panel_atomic_write(
+        str(info),
+        (
+            f"Canonical review profile (authoritative bytes — read this file): {snapshot}\n"
+            f"Size: {expected_size} bytes   sha256: {expected_hash}\n"
+        ),
+    )
+    return info
+
+
 def write_common_files(directory, manifest, workdir):
     scratch = Path(workdir) / ".panel-review" / manifest["id"] / "work"
     scratch.mkdir(parents=True, exist_ok=True)
@@ -210,6 +245,7 @@ def cmd_prepare_round0(run_id, seats):
     if index.get("phase") != "round0":
         raise RoundError("round 0 is already complete")
     instructions = ensure_instructions(directory, manifest)
+    profile_info = ensure_review_profile(directory, manifest)
     write_common_files(directory, manifest, workdir)
     panel_atomic_write(str(directory / "panel.json"), compact({"configured": seats}) + "\n")
 
@@ -245,6 +281,7 @@ def cmd_prepare_round0(run_id, seats):
             "WORKDIR": directory / "workdir.txt",
             "SCOPE": directory / "scope.txt",
             "INSTRUCTIONS": instructions,
+            "PROFILEINFO": profile_info,
             "DIFFINFO": directory / "diff_info.txt",
             "SCRATCH": directory / "scratch.txt",
             "SEAT_CONTRACT": contract,
@@ -339,6 +376,7 @@ def cmd_prepare_debate(run_id, seats):
     if not issue_ids:
         raise RoundError("no open issues to debate")
     instructions = ensure_instructions(directory, manifest)
+    profile_info = ensure_review_profile(directory, manifest)
     write_common_files(directory, manifest, workdir)
     round_number = int(index.get("round", 0)) + 1
     epoch = str(index.get("run_epoch", 0))
@@ -407,6 +445,7 @@ def cmd_prepare_debate(run_id, seats):
             "WORKDIR": directory / "workdir.txt",
             "CARDS": directory / f"cards.{round_number}.txt",
             "INSTRUCTIONS": instructions,
+            "PROFILEINFO": profile_info,
             "SCRATCH": directory / "scratch.txt",
             "SEAT_CONTRACT": contract,
             "TILTH": PROMPTS / "tilth_guide.txt",
@@ -692,7 +731,9 @@ def cmd_verdict_input(run_id):
         {
             "manifest": {
                 key: manifest.get(key)
-                for key in ("id", "scope", "instructions", "limits", "diff_hash", "created")
+                for key in (
+                    "id", "scope", "instructions", "review_profile", "limits", "diff_hash", "created"
+                )
             },
             "configured": configured_panel(directory),
             "index": index,

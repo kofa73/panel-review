@@ -32,6 +32,11 @@ class VerdictArtifactTest(unittest.TestCase):
             "limits": {"issue_rounds": 2, "max_rounds": 4},
             "diff_hash": self.diff_hash,
             "created": "2026-07-14 00:00:00",
+            "review_profile": {
+                "source_path": "/home/developer/.claude/skills/example/references/review-profile.md",
+                "sha256": "b" * 64,
+                "size": 1234,
+            },
         }
         (self.run_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
         self.write_index("accepted")
@@ -85,11 +90,15 @@ class VerdictArtifactTest(unittest.TestCase):
         env.pop("PANEL_REVIEW_KEEP_TMP", None)
         return env
 
-    def test_finished_artifact_is_validated_and_reader_emits_only_body(self):
+    def test_finished_artifact_records_profile_and_reader_identifies_it(self):
         written = self.write_artifact()
         self.assertEqual(written.returncode, 0, written.stderr)
-        self.assertIn("run_epoch: 0\n", self.artifact.read_text(encoding="utf-8"))
-        self.assertIn("status: finished\n", self.artifact.read_text(encoding="utf-8"))
+        artifact = self.artifact.read_text(encoding="utf-8")
+        self.assertIn("run_epoch: 0\n", artifact)
+        self.assertIn("status: finished\n", artifact)
+        self.assertIn('review_profile_path: "/home/developer/.claude/skills/example/references/review-profile.md"\n', artifact)
+        self.assertIn(f"review_profile_sha256: {'b' * 64}\n", artifact)
+        self.assertIn("review_profile_size: 1234\n", artifact)
 
         result = self.read_artifact(
             "--scope", self.scope,
@@ -98,10 +107,28 @@ class VerdictArtifactTest(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout, self.body)
+        expected = (
+            "Review profile: /home/developer/.claude/skills/example/references/review-profile.md\n"
+            f"SHA-256: {'b' * 64}\n\n"
+            f"{self.body}"
+        )
+        self.assertEqual(result.stdout, expected)
         by_id = self.read_artifact()
         self.assertEqual(by_id.returncode, 0, by_id.stderr)
-        self.assertEqual(by_id.stdout, self.body)
+        self.assertEqual(by_id.stdout, expected)
+
+    def test_legacy_artifact_without_profile_metadata_remains_readable(self):
+        self.assertEqual(self.write_artifact().returncode, 0)
+        lines = self.artifact.read_text(encoding="utf-8").splitlines(keepends=True)
+        self.artifact.write_text(
+            "".join(line for line in lines if not line.startswith("review_profile_")),
+            encoding="utf-8",
+        )
+
+        result = self.read_artifact()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, self.body)
 
     def test_finished_artifact_delivery_emits_only_the_fixed_file_pointer(self):
         self.assertEqual(self.write_artifact().returncode, 0)
@@ -310,7 +337,12 @@ class VerdictArtifactTest(unittest.TestCase):
         self.assertIn("status: finished\n", self.artifact.read_text(encoding="utf-8"))
         result = self.read_artifact()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout, self.body)
+        self.assertEqual(
+            result.stdout,
+            "Review profile: /home/developer/.claude/skills/example/references/review-profile.md\n"
+            f"SHA-256: {'b' * 64}\n\n"
+            f"{self.body}",
+        )
         delivery = self.deliver_artifact()
         self.assertEqual(delivery.returncode, 0, delivery.stderr)
         self.assertEqual(delivery.stdout, f"Done. Final report: /tmp/{self.run_id}.md\n")

@@ -1,6 +1,6 @@
 ---
 name: continue
-description: Re-debate a finished panel review's leftover unresolved/contested issues. Takes an optional leftover category plus round-limit overrides — scope and instructions come from the saved session. Redirects to status/resume/discard if the saved session isn't finished-with-leftovers.
+description: Re-debate a finished panel review's leftover unresolved/contested issues. Takes an optional leftover category plus round-limit overrides — scope, review profile, and instructions come from the saved session. Redirects to status/resume/discard if the saved session isn't finished-with-leftovers.
 disable-model-invocation: true
 argument-hint: "[unresolved|contested]  [--issue-rounds N] [--max-rounds N]"
 ---
@@ -8,7 +8,7 @@ argument-hint: "[unresolved|contested]  [--issue-rounds N] [--max-rounds N]"
 # panel-review:continue
 
 You are the **main-context entry point** for re-debating a finished review's leftovers. This command
-takes **no scope, no instructions** — both come from the manifest. Run from the repo root.
+takes **no scope, review profile, or instructions** — all come from the saved run. Run from the repo root.
 
 ```bash
 # CLAUDE_PLUGIN_ROOT is substituted into this text at skill-load — it is NOT a
@@ -24,8 +24,8 @@ SC="$ROOT/scripts"
   otherwise `CAT=both`.
 - **Limit overrides.** Apply `--issue-rounds N` / `--max-rounds N` if present (track whether each was
   actually given).
-- Anything else in `$ARGUMENTS` — a scope flag, free text, `--instructions` — is a hard error:
-  > `panel-review:continue` takes the scope and instructions from the saved review; it doesn't accept
+- Anything else in `$ARGUMENTS` — a scope flag, free text, `--review-profile`, or `--instructions` — is a hard error:
+  > `panel-review:continue` takes the scope, review profile, and instructions from the saved review; it doesn't accept
   > them. `panel-review:status` shows what's stored.
 
 ## Step 2 — find the session
@@ -41,9 +41,9 @@ ids=(); [ -d "$base" ] && for d in "$base"/*/; do [ -f "$d/.panel-run" ] && ids+
 - **>1** → the same ambiguous message as `resume`'s Step 2. Stop.
 - **1** → `id="${ids[0]}"`. Continue to Step 3.
 
-## Step 3 — adopt scope/limits/instructions, resolve the current diff
+## Step 3 — adopt scope/profile/limits/instructions, resolve the current diff
 
-Identical to `resume`'s Step 3: read `scope`/`ISS`/`MAX`/`INSTR` from `/tmp/$id/manifest.json`, apply
+Identical to `resume`'s Step 3: read `scope`/`PROFILE`/`ISS`/`MAX`/`INSTR` from `/tmp/$id/manifest.json`, apply
 any Step 1 limit overrides, resolve + hash the current diff for `scope` into `DH`. If the scope no
 longer resolves, emit the same diverged-family message `resume` does and stop.
 

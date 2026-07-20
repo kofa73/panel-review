@@ -95,11 +95,14 @@ def check_tree(errors, root):
             fail(errors, "seat-contract-owner", f"prompts/{phase}", "must contain one SEAT_CONTRACT sentinel")
         if re.search(r"(?m)^```(findings|stances|new_findings)[ \t\r]*$", template):
             fail(errors, "seat-contract-owner", f"prompts/{phase}", "template restates a seat block")
+        if template.count("{{PROFILEINFO}}") != 1:
+            fail(errors, "review-profile-owner", f"prompts/{phase}", "must contain one PROFILEINFO sentinel")
 
     owner_map = read(root, "CONTRACTS.md")
     for owner in (
         "scripts/seat_contract.py",
         "scripts/round",
+        "scripts/stage_review_profile",
         "skills/panel-review-for-agent/references/protocol.md",
         "agents/panel-review-cli-barrier.md",
         "scripts/write_verdict_artifact",

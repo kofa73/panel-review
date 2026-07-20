@@ -1,8 +1,8 @@
 ---
 name: start
-description: Start a fresh panel review (three-way blind debate across Claude + Codex + Gemini). Takes the scope, optional author instructions, and round limits. Refuses if a saved review already exists for this workdir.
+description: Start a fresh panel review (three-way blind debate across Claude + Codex + Gemini). Takes the scope, optional review profile, optional author instructions, and round limits. Refuses if a saved review already exists for this workdir.
 disable-model-invocation: true
-argument-hint: "--base <branch> | --uncommitted | --commit <SHA> | <question>  [--issue-rounds N] [--max-rounds N] [--debate-low]  [<focus text> | --instructions <text|auto>]"
+argument-hint: "--base <branch> | --uncommitted | --commit <SHA> | <question>  [--review-profile <path>] [--issue-rounds N] [--max-rounds N] [--debate-low]  [<focus text> | --instructions <text|auto>]"
 ---
 
 # panel-review:start
@@ -21,12 +21,14 @@ ROOT="${CLAUDE_PLUGIN_ROOT}"; ROOT="${ROOT%/}"   # strip trailing slash so $SC h
 SC="$ROOT/scripts"
 ```
 
-## Step 1 — parse `$ARGUMENTS` (instructions, then round limits, then scope)
+## Step 1 — parse `$ARGUMENTS` (instructions, profile, round limits, then scope)
 
 The harness does **not** parse flags; you get the raw `$ARGUMENTS` string. Parse it yourself:
 
 0. **`--instructions` (explicit form) — extract this BEFORE round limits, `--debate-low`, and
-   scope.** It must be processed first because everything after it is literal: if the token
+   scope.** Before extracting it, reject a `--review-profile` token after `--instructions` with
+   `--review-profile must appear before --instructions.` Otherwise it must be processed first
+   because everything after it is literal: if the token
    `--instructions` appears, it must be **last** in `$ARGUMENTS`, and you take **everything after it** —
    verbatim, including newlines and any `--`-looking tokens — as the instruction text, then remove
    `--instructions` + that text from the string. This is the escape hatch: after `--instructions`,
@@ -34,6 +36,11 @@ The harness does **not** parse flags; you get the raw `$ARGUMENTS` string. Parse
    that text. The special value `--instructions auto` sets `INSTR=auto` (referee generates context from
    branch / commit messages / `git status`). If `--instructions` is present but the text is empty, stop
    with `--instructions needs text (or 'auto').` If `--instructions` is absent, leave `INSTR` unset for now.
+0b. **`--review-profile <path>`.** Accept at most one occurrence in the remaining arguments, set
+   `PROFILE` to its path, and remove both tokens. Reject a missing path or duplicate flag clearly.
+   The path may be relative to the current repository or begin with `~`; `init_run` resolves it and
+   owns regular-file, non-empty UTF-8, and 64 KiB validation. If absent, leave `PROFILE` empty so
+   `init_run` snapshots panel-review's built-in generic profile.
 1. **Round limits.** Defaults `issue-rounds=2`, `max-rounds=4`. Apply `--issue-rounds N` /
    `--max-rounds N` if present, then validate the **resolved** values: each a positive integer and
    `issue-rounds ≤ max-rounds`. Otherwise stop with a one-line error.
@@ -64,7 +71,7 @@ The harness does **not** parse flags; you get the raw `$ARGUMENTS` string. Parse
 
 3. If **no scope flag was given AND** nothing remains after removing the flags → print exactly:
    ```
-   Specify a scope: --base <branch> | --uncommitted | --commit <SHA> | <question>  [--issue-rounds N] [--max-rounds N]  [<focus text> | --instructions <text|auto>]
+   Specify a scope: --base <branch> | --uncommitted | --commit <SHA> | <question>  [--review-profile <path>] [--issue-rounds N] [--max-rounds N]  [<focus text> | --instructions <text|auto>]
    ```
    and stop. (`--uncommitted` legitimately leaves no positional text — that is a valid scope, not
    an error. Never guess a base branch.)
@@ -131,7 +138,9 @@ ids=(); [ -d "$base" ] && for d in "$base"/*/; do [ -f "$d/.panel-run" ] && ids+
 ## Step 4 — mint the run and dispatch
 
 ```bash
-ID="$("$SC/init_run" --workdir "$PWD" --scope "$scope" --issue-rounds "$ISS" --max-rounds "$MAX" --diff-hash "$DH" --instructions "$INSTR")"
+PROFILE_ARGS=()
+[ -z "$PROFILE" ] || PROFILE_ARGS=(--review-profile "$PROFILE")
+ID="$("$SC/init_run" --workdir "$PWD" --scope "$scope" --issue-rounds "$ISS" --max-rounds "$MAX" --diff-hash "$DH" --instructions "$INSTR" "${PROFILE_ARGS[@]}")"
 EPOCH=0
 ```
 

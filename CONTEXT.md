@@ -16,6 +16,12 @@ Optional emphasis shared with every seat without narrowing the review scope or s
 findings outside that emphasis.
 _Avoid_: Scope, filter
 
+**Review profile**:
+The reusable investigation method shared with every seat: priorities, domain invariants, execution
+variants, false-positive filters, and severity guidance. A run snapshots exactly one profile; it
+does not replace the panel's scope, output, lifecycle, or consensus contracts.
+_Avoid_: Review instructions, skill
+
 **Review run**:
 One durable review identity for a fixed scope and its accumulated issues, evidence, and outcomes. A
 run may survive interruptions and contain more than one continuation cycle.

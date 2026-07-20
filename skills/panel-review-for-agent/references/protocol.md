@@ -250,7 +250,8 @@ the available peer seat(s), then call:
 
 Its compact JSON gives `prompt` for the CLI seats, `claude_prompt` for the fresh Claude Agent, and
 the CLI barrier's `command`/`done`/`sentinel` paths. It owns diff resolution, the guard snapshot,
-absolute path anchors, seat-contract rendering, prompt assembly, and the barrier command; do not
+saved-review-profile validation/reference, absolute path anchors, seat-contract rendering, prompt
+assembly, and the barrier command; do not
 repeat those mechanics. Exit 3 with `status=needs_auto_instructions` is the sole normal-path pause:
 write a few neutral sentences based on branch name, commit subjects, and status—not an interpretation
 of the diff—to the returned path, then call `prepare-round0` again. A diff-hash mismatch is a hard
@@ -408,6 +409,7 @@ the common one-batch shape.
      --check-command "$SC/check_draft stances" > /tmp/$id/seat_contract.debate.md
    "$SC/assemble" "$PR/debate.tmpl" WORKDIR=/tmp/$id/workdir.txt \
      CARDS=/tmp/$id/cards.$round.txt INSTRUCTIONS=/tmp/$id/instructions.txt \
+     PROFILEINFO=/tmp/$id/review_profile_info.txt \
      SCRATCH=/tmp/$id/scratch.txt SEAT_CONTRACT=/tmp/$id/seat_contract.debate.md \
      TILTH=$PR/tilth_guide.txt > /tmp/$id/debate.$round.prompt
    # run each seat/batch -> /tmp/$id/raw/round$round.<seat>.<batch>.txt
@@ -670,9 +672,10 @@ index diverge from its own just-rotated `.bak`, and that divergence *is* the tra
 `sweep resume-plan` (it validates `run_epoch`) for what to recover; never reconstruct state from
 `.bak`. When `run_epoch > 0`, label the verdict a **continuation** (see the Rounds line in synthesis).
 
-1. Read `/tmp/$id/manifest.json` (scope, limits, `instructions` — the launching command adopted
+1. Read `/tmp/$id/manifest.json` (scope, limits, `instructions`, and review-profile metadata — the launching command adopted
    these from the manifest and confirmed via `resume_check` that the diff hash is unchanged; a
-   diverged or stale run would not have dispatched you). If `/tmp/$id/instructions.txt` is absent (resume before Round 0
+   diverged or stale run would not have dispatched you). The source profile path is provenance only;
+   every resumed prompt uses `/tmp/$id/review-profile.md`. If `/tmp/$id/instructions.txt` is absent (resume before Round 0
    finished resolving it), regenerate it via Round 0 step 2 before any seat prompt is assembled.
 2. **Re-run `"$SC/preflight"`** — the environment may have changed since the interrupted run (e.g.
    a peer seat is now down, or back). The CURRENT `CODEX: yes|no` / `GEMINI: yes|no` define the configured panel for the

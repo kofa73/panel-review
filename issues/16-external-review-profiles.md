@@ -2,7 +2,7 @@
 
 Priority: 16
 
-Status: Pending
+Status: Completed
 
 Source: design discussion, 2026-07-20
 
@@ -93,6 +93,10 @@ At run creation:
 5. Record the applied profile name and hash in status/result metadata and the verdict artifact. Do
    not embed the full profile in the verdict.
 
+The resolved absolute source path is the profile's display name and provenance. The source must be
+a readable regular, non-empty UTF-8 file no larger than 64 KiB. Its SHA-256 is computed over the
+exact bytes copied into the run.
+
 Every configured seat must receive the same profile bytes. Prefer a salient absolute reference to
 the saved file, with its size and hash, over repeatedly inlining a large profile into every prompt.
 The hash is an audit and accidental-drift convenience under the existing trust model, not a control
@@ -128,6 +132,10 @@ instructional documentation that an agent reads and applies. Synchronizing the e
 skill copies remains the darktable skill's packaging concern; a panel run relies only on its saved
 profile snapshot.
 
+Only the copy explicitly selected by `--review-profile` participates in a panel run. Claude resolves
+that path while launching the review; Codex and Gemini read the shared `/tmp/<ID>/review-profile.md`
+snapshot and do not need their own installed profile copies.
+
 ## Verification
 
 - A run without `--review-profile` preserves the current generic review behavior.
@@ -152,3 +160,21 @@ profile snapshot.
 - Do not let profiles replace panel output contracts or consensus rules.
 - Do not reload a profile from its original path during resume or continuation.
 - Do not treat the profile hash as protection against a malicious, unconstrained seat.
+
+## Implementation
+
+- `profiles/default.md` owns the generic priority catalogue previously embedded in the blind prompt.
+- `stage_review_profile` validates and atomically snapshots built-in or external profile bytes;
+  `init_run` stores the resolved source path, size, and SHA-256 before publishing the workdir marker.
+- `round` verifies the saved snapshot and gives the same absolute reference to Round 0 and every
+  debate prompt. Resume and continuation never read the original source path.
+- Status exposes the saved metadata. Verdict frontmatter records it, and `panel-review:result` prints
+  the source path and SHA-256 before the verdict body. Legacy verdict artifacts remain readable.
+- The canonical `~/.agents/skills/darktable-review` copy now keeps its reusable method in
+  `references/review-profile.md`; its `SKILL.md` reads that reference for standalone reviews.
+
+Verification, 2026-07-20:
+
+- `scripts/check_contracts --root .` — passed.
+- `./tests/run_tests.sh` — `PASS: 246`, `FAIL: 0`.
+- `git diff --check` — passed.

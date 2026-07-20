@@ -41,7 +41,8 @@ byte-exact.
   any missing companion is corrupt and fails closed. Don't reconstruct batch eligibility from raw
   files or hand-write the common plan.
 - `round` — the referee's coarse normal-path module over the owners in this list. It resolves and
-  assembles Round 0 with the rendered seat contract, prepares the common one-batch debate, collects
+  assembles Round 0 with the rendered seat contract and validated saved review-profile reference,
+  prepares the common one-batch debate with that same profile, collects
   compact engagement/guard status,
   installs a canonical CLI debate side file through `salvage-debate`, selects only complete
   active-plan batches for the normal or degraded decision and atomic commit with an optional referee
@@ -103,6 +104,9 @@ byte-exact.
   still owns the clustering). Output installs via `index put`.
 - `resolve_instructions` — resolves `manifest.instructions` for the deterministic verbatim/none cases;
   returns the compose sentinel (exit 3) for `auto` (the only case the referee composes).
+- `stage_review_profile` — resolves one source path, requires a readable regular non-empty UTF-8
+  file of at most 64 KiB, atomically snapshots its exact bytes, and returns source-path/size/SHA-256
+  metadata. `init_run` is its only lifecycle caller; resumes never reload the source path.
 - `resolve_diff` — the single place that turns a scope token into diff text; `diff_hash` hashes it.
 - `assemble` — the **only** builder of a reviewer prompt: maps each `{{KEY}}` sentinel line to a file's
   bytes verbatim (whole-line, literal). `extract_block` is its inverse — pulls one fenced ` ```<tag> `
@@ -126,7 +130,9 @@ byte-exact.
   It is the sole final-return interface for `start`/`resume`/`continue`.
 - `init_run` / `resume_check` / `cleanup` / `discard` / `inspect_run` / `set_limits` — run lifecycle
   and resume/diverged/stale classification. `PANEL_REVIEW_KEEP_TMP=true` makes `cleanup`/`discard` keep
-  `/tmp/<id>/` (diagnostics) while still removing the workspace marker/cards/git-exclude.
+  `/tmp/<id>/` (diagnostics) while still removing the workspace marker/cards/git-exclude. `init_run`
+  selects the built-in profile when no external path is supplied and publishes the marker only after
+  the profile snapshot, manifest, and index exist.
 - `_panel_common.sh` (bash) / `panel_common.py` (Python) — parallel shared-helper libs kept in sync:
   `panel_valid_id`/`panel_require_id` (ID validation guarding `rm -rf` paths), `panel_atomic_write`
   (temp + fsync + rename, `.bak` rotation), git-exclude helpers. Python scripts import
