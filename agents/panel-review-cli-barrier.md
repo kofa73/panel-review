@@ -17,21 +17,24 @@ all the real work; you only start them and wait.
 
 The seats can take up to ~35 minutes. The referee runs you as a **foreground Agent** in parallel with
 the foreground Claude-seat Agent. This keeps the referee blocked until both branches return while
-isolating the CLI wait loop in your small context. The referee cannot run `await_seats` in one Bash
-call because that call outlasts the Bash tool timeout; **you** launch it safely and wait for it.
+isolating the CLI wait loop in your small context. The referee does not run `await_seats` in one
+ordinary foreground Bash call because that call outlasts the Bash tool timeout; **you** launch it
+with an explicit lifecycle and wait for it.
 
 The Bash tool timeout caps how long any single foreground wait can block, and it is shorter than a
 seat's worst case, so no one wait can cover the whole run:
 
-- the **Bash tool** timeout is **2 minutes by default** (10-minute max). A foreground call that runs
-  longer is killed by the harness.
+- the **Bash tool** timeout is **2 minutes by default**, with a configurable **10-minute maximum**.
+  On current Claude Code, reaching that timeout moves the call to the background instead of stopping
+  it.
 
-So you do two things: **(1)** run `await_seats` **detached in the background**, wrapped so its exit
-code lands in the `sentinel` file the instant it finishes (step 1) — never foreground it, it outlasts
-the 2-minute Bash default and would be killed — and **(2)** watch that **sentinel** with a series of
-**short** foreground waits, each safely under the 2-minute Bash default, re-issued until it appears
-(step 2). Short waits keep that limit irrelevant with **zero configuration** — do not try to "save
-turns" with one long wait.
+Panel-review explicitly backgrounds `await_seats` so it owns the launch and completion-sentinel
+lifecycle instead of relying on that implicit timeout conversion. You do two things: **(1)** run
+`await_seats` **detached in the background**, wrapped so its exit code lands in the `sentinel` file
+the instant it finishes (step 1), and **(2)** watch that **sentinel** with a series of **short**
+foreground waits, each safely under the 2-minute Bash default, re-issued until it appears (step 2).
+Short waits keep that limit irrelevant with **zero configuration** — do not try to "save turns" with
+one long wait.
 
 Why the sentinel and not the done-file: the done-file appears **only** on a clean run, so a
 setup/usage error would leave you polling a file that never comes for the full ~43-minute budget and
@@ -73,8 +76,9 @@ Your prompt gives you exactly:
 
 2. **Wait for the sentinel with short, bounded blocking waits.** Issue this **foreground** `Bash`
    call (substitute the real `sentinel` path). The `timeout 100` keeps each wait **under the Bash
-   tool's 2-minute (120000 ms) default**, so you neither need nor should set the Bash tool `timeout`
-   parameter — leave it at its default:
+   tool's 2-minute (120000 ms) default** and completes before the Bash tool can auto-background the
+   wait, so you neither need nor should set the Bash tool `timeout` parameter — leave it at its
+   default:
 
    ```bash
    timeout 100 bash -c 'until [ -f "<sentinel>" ]; do sleep 5; done'; echo "WAIT_RC=$?"
@@ -87,10 +91,10 @@ Your prompt gives you exactly:
      after 26 waits, `await_seats` is wedged past its own self-bound — take the **budget-exhausted**
      branch in step 3 (reap it, report unavailable), never a clean "settled".
 
-   Why short waits and not one long one: a longer wait (e.g. `timeout 540`) would be silently
-   truncated to ~120 s unless the Bash tool `timeout` were also raised. A ~100 s wait stays below the
-   default with no configuration. The extra iterations are cheap — they run in your tiny context,
-   not the referee's.
+   Why short waits and not one long one: a longer wait (e.g. `timeout 540`) would reach the Bash tool
+   timeout and move into the background unless that tool timeout were also raised. A ~100 s wait
+   stays below the default with no configuration and keeps every wait result in this foreground loop.
+   The extra iterations are cheap — they run in your tiny context, not the referee's.
 
    Do **nothing** between these waits — no `date`/`ps`/status-narration turns, and never lengthen the
    wait. Each wait already blocks; the loop is the whole job.
@@ -132,14 +136,15 @@ Your prompt gives you exactly:
 ## Hard rules
 
 - Run `await_seats` (step 1) **only in the background**, and **only** through the exit-code-capturing
-  wrapper — never foreground it (it routinely outlasts the 2-minute Bash default and would be killed
-  mid-run) and never run it without the `sentinel` capture (you would lose its terminal state).
+  wrapper. Never rely on a foreground call reaching the tool timeout and being moved to the
+  background implicitly, and never run it without the `sentinel` capture (you would lose its
+  terminal state).
 - Wait on the **sentinel**, never on the done-file: the done-file is written only on a clean exit, so
   polling it would hang the whole budget on a setup error and then false-degrade. An **absent**
   sentinel after the budget is a wedged job → reap + report unavailable, **never** an implicit
   "settled".
 - Keep every step-2 wait **short** — `timeout 100`, under the 2-minute Bash default — and just loop.
-  Never lengthen the wait or raise the Bash tool `timeout`: a long wait is truncated by the Bash
-  default and false-degrades the review (see step 2).
+  Never lengthen the wait or raise the Bash tool `timeout`: a long wait can be auto-backgrounded and
+  escape this foreground sentinel loop (see step 2).
 - Never edit the `command`, retype `await_seats`/`run_seat` flags, or call `codex`/`agy` yourself.
 - Never read the diff or review the code. Never spawn other agents. Never write to the repo.

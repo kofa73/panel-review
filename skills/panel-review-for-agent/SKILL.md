@@ -121,3 +121,8 @@ either failure so the main conversation can report it and a later `panel-review:
   `run_in_background: false`. The calls run concurrently and the referee resumes only after every
   Agent returns. Never background `await_seats` yourself. Do not poll or narrate between dispatch and
   that combined return (see the long-running-seats rule).
+- ✅ If either Agent call fails with the exact Claude Code error `Subagent spawn limit reached`, stop
+  the review pass immediately. Do not perform the missing Agent's work, do not retry either Agent call
+  in this conversation, and do not treat this as an ordinary down-seat pass. Leave the current
+  checkpoint intact and return `PANEL_REVIEW_FAILED id=<id>` through the fixed return contract so the
+  main command can direct the user to a fresh conversation and `panel-review:resume`.

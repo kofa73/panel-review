@@ -139,6 +139,7 @@ Spawn the `panel-review:panel-review-referee` subagent (Agent tool) with the res
 
 ```
 subagent_type: panel-review:panel-review-referee
+run_in_background: false
 prompt: |
   Run the panel-review referee protocol.
   mode=fresh
@@ -152,22 +153,36 @@ prompt: |
 The agent reconstructs all state from `/tmp/<id>/`, runs the loop, persists the verdict artifact, and
 cleans up only after successful persistence. Run from cwd = repo root.
 
-**Await its single return — do not poke it.** The referee waits for its own slow seats internally
-(per pass it spawns background helper Agents — the `panel-review-cli-barrier` for the Codex+Gemini
-wait, plus the Claude seat — which wake it when they finish), so it can legitimately run for many
-minutes with no intermediate output. Do **not** `SendMessage`-resume it, re-dispatch it, or otherwise
-nudge it on any background-task notification: every such poke makes the referee re-read its whole
+If this Agent call fails with the exact Claude Code error `Subagent spawn limit reached`, fail closed:
+do not perform the referee's work in the main context and do not retry the Agent call in this
+conversation. Leave the run intact, tell the user to start a fresh conversation (normally `/clear`),
+then invoke `panel-review:resume`. Apply the same handling to the low-severity gate's Step 4-form
+re-dispatch below, then stop here without applying the artifact-delivery flow.
+
+**Await its single return — do not poke it.** Internally, each pass issues the foreground CLI-barrier
+and Claude-seat Agent calls together, and the referee resumes only after both return. The paired calls
+can legitimately run for many minutes with no intermediate output. Do **not** `SendMessage`-resume the
+referee, re-dispatch it, or otherwise nudge it: every such poke makes it re-read its whole
 (long-context-tier) context for nothing — exactly the waste these scripts exist to avoid. Let it run;
-act only on its final wake. (A genuine interruption — the human cancels — is recovered later
-via `panel-review:resume`, not by poking the live agent.)
+act only on its final return. (A genuine interruption — the human cancels — is recovered later via
+`panel-review:resume`, not by poking the live agent.)
 
 ## Step 5 — validate artifact-only delivery (and handle the low-severity gate)
 
-Apply this after **every** referee Agent call in this command, whether the Agent reports success or
-failure, including the gate-time `mode=resume` call below. The Agent's return is only a small status
-stub; it is never a report transport. Do not parse artifact YAML or copy the verdict body into the
-main conversation. Ask the deterministic reader to validate and classify the artifact against the
-run minted above:
+Apply this after every referee Agent call in this command, whether it returns or fails, including the
+gate-time `mode=resume` call below, except the exact outer spawn-limit failure stopped in Step 4 and
+the fixed review-failure early stop defined next. An Agent's return is only a small status stub; it is
+never a report transport. Do not parse artifact YAML or copy the verdict body into the main
+conversation.
+
+- **The Agent returned `PANEL_REVIEW_FAILED id=<ID>`** → report that the review failed before a
+  validated report was produced and the run was kept. The fixed status does not disclose whether a
+  nested Agent call hit the session spawn limit, so use the safe resumable recovery: tell the user to
+  start a fresh conversation (normally `/clear`) and invoke `panel-review:resume`. Stop without
+  cleanup or artifact delivery.
+
+For every other returned status or Agent-tool failure, ask the deterministic reader to validate and
+classify the artifact against the run minted above:
 
 ```bash
 if DELIVERY="$("$SC/read_verdict_artifact" --delivery --id "$ID" --scope "$scope" --diff-hash "$DH" --run-epoch "$EPOCH")"; then

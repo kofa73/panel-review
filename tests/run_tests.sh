@@ -198,13 +198,13 @@ assert_file_contains "cli-barrier agent is a non-reviewing wait barrier" 'wait b
 assert_file_contains "cli-barrier runs await_seats detached in the background" 'run_in_background: true' "$bar"
 assert_file_contains "cli-barrier waits via a bounded foreground loop" 'until [ -f' "$bar"
 # The step-2 wait is a foreground Bash tool call, so each wait stays under the Bash tool's 2-min
-# default and loops rather than depending on the model to raise the tool `timeout`.
+# default and loops rather than letting Claude Code auto-background the wait.
 assert_file_contains "cli-barrier waits in short chunks under the 2-min Bash default" 'timeout 100 bash -c' "$bar"
 # Regression: must NOT reintroduce the fragile long-wait-with-raised-tool-timeout design.
 if grep -Fq '570000' "$bar"; then bad "cli-barrier must not depend on raising the Bash tool timeout"; else ok "cli-barrier does not depend on a raised Bash tool timeout"; fi
 # Match the command FORM ('timeout 540 bash'), not a prose mention of the number, so the doc can
-# still cite `timeout 540` as the anti-pattern it explains against.
-if grep -Fq 'timeout 540 bash' "$bar"; then bad "cli-barrier must not use a >2-min wait the Bash default truncates"; else ok "cli-barrier uses no >2-min blocking wait"; fi
+# still cite `timeout 540` as the auto-backgrounding anti-pattern it explains against.
+if grep -Fq 'timeout 540 bash' "$bar"; then bad "cli-barrier must not use a wait that the Bash tool auto-backgrounds"; else ok "cli-barrier uses no >2-min blocking wait"; fi
 assert_file_contains "protocol dispatches the cli-barrier Agent" 'panel-review:panel-review-cli-barrier' "$spk"
 assert_file_contains "protocol runs seat Agents as foreground calls" 'run_in_background: false' "$spk"
 assert_file_contains_text "protocol emits foreground seat Agents in parallel" \

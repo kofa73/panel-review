@@ -82,6 +82,7 @@ Spawn the `panel-review:panel-review-referee` subagent (Agent tool):
 
 ```
 subagent_type: panel-review:panel-review-referee
+run_in_background: false
 prompt: |
   Run the panel-review referee protocol.
   mode=resume
@@ -92,10 +93,15 @@ prompt: |
   Persist the canonical verdict artifact, then return only PANEL_VERDICT_READY id=<id>.
 ```
 
-**Await its single return — do not poke it** (it waits for its own slow seats via background helper
-Agents — the `panel-review-cli-barrier` plus the Claude seat — and may run many minutes with no
-output; `SendMessage`-poking it only forces a wasteful full-context re-read — see `start`'s Step 4).
-After the Agent returns or fails, apply `start`'s Step 5 artifact-only delivery flow using
-`"$SC/read_verdict_artifact" --delivery --id "$id" --scope "$scope" --diff-hash "$DH" --run-epoch
-"$EPOCH"`. Present only its fixed pointer/control text; never copy the verdict body or parse artifact
-frontmatter in the main model. On validation failure, retain the interrupted run.
+If this Agent call fails with the exact Claude Code error `Subagent spawn limit reached`, fail closed:
+do not perform the referee's work in the main context and do not retry the Agent call in this
+conversation. Leave the run intact, tell the user to start a fresh conversation (normally `/clear`),
+then invoke `panel-review:resume`, then stop here without applying `start`'s artifact-delivery flow.
+
+**Await its single return — do not poke it.** Each pass issues the foreground CLI-barrier and
+Claude-seat Agent calls together, and the referee resumes only after both return; the paired calls may
+run many minutes with no output. `SendMessage`-poking the referee only forces a wasteful full-context
+re-read — see `start`'s Step 4. After the Agent returns or fails, apply `start`'s Step 5 artifact-only
+delivery flow using `"$SC/read_verdict_artifact" --delivery --id "$id" --scope "$scope" --diff-hash
+"$DH" --run-epoch "$EPOCH"`. Present only its fixed pointer/control text; never copy the verdict body
+or parse artifact frontmatter in the main model. On validation failure, retain the interrupted run.

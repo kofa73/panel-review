@@ -117,8 +117,151 @@ def check_tree(errors, root):
     bootstrap = read(root, "skills/panel-review-for-agent/SKILL.md")
     agent_status_hook = read(root, "hooks/enforce_agent_status_stub")
     status = read(root, "skills/status/SKILL.md")
+    commands = {
+        name: read(root, f"skills/{name}/SKILL.md")
+        for name in ("start", "resume", "continue")
+    }
+    readme = read(root, "README.md")
     executable_text = "\n".join([*templates.values(), protocol, referee, bootstrap])
     debate = read_protocol_phase(root, "debate")
+
+    for name, command in commands.items():
+        dispatches = [
+            block
+            for block in re.findall(r"(?ms)^```[^\n]*\n(.*?)^```[ \t]*$", command)
+            if "subagent_type: panel-review:panel-review-referee" in block
+        ]
+        if not dispatches or any("run_in_background: false" not in block for block in dispatches):
+            fail(
+                errors,
+                "outer-referee-agent-contract",
+                f"skills/{name}/SKILL.md",
+                "every referee Agent dispatch must set run_in_background: false",
+            )
+        command_text = normalized(command)
+        if "background helper Agent" in command_text:
+            fail(
+                errors,
+                "outer-referee-agent-contract",
+                f"skills/{name}/SKILL.md",
+                "uses the retired background-helper description",
+            )
+        for required in (
+            "Subagent spawn limit reached",
+            "do not perform the referee's work",
+            "do not retry the Agent call",
+            "Leave the run intact",
+            "stop here without applying",
+            "/clear",
+            "panel-review:resume",
+        ):
+            if required not in command_text:
+                fail(
+                    errors,
+                    "agent-spawn-budget",
+                    f"skills/{name}/SKILL.md",
+                    f"missing `{required}` handling",
+                )
+
+    if "Step 4 form" not in commands["start"].partition("**Await its single return")[2]:
+        fail(
+            errors,
+            "outer-referee-agent-contract",
+            "skills/start/SKILL.md",
+            "low-severity re-dispatch does not reuse the foreground Step 4 form",
+        )
+
+    start_delivery = normalized(commands["start"].partition("## Step 5")[2])
+    for required in (
+        "PANEL_REVIEW_FAILED",
+        "fixed status does not disclose",
+        "start a fresh conversation",
+        "every other returned status or Agent-tool failure",
+        "/clear",
+        "panel-review:resume",
+    ):
+        if required not in start_delivery:
+            fail(
+                errors,
+                "agent-spawn-budget",
+                "skills/start/SKILL.md",
+                f"shared delivery flow is missing `{required}` propagation",
+            )
+
+    bootstrap_text = normalized(bootstrap)
+    bootstrap_lower = bootstrap_text.lower()
+    for required in (
+        "subagent spawn limit reached",
+        "do not perform the missing agent's work",
+        "do not retry either agent call",
+        "do not treat this as an ordinary down-seat pass",
+        "leave the current checkpoint intact",
+        "panel_review_failed",
+    ):
+        if required not in bootstrap_lower:
+            fail(
+                errors,
+                "agent-spawn-budget",
+                "skills/panel-review-for-agent/SKILL.md",
+                f"missing `{required}` handling",
+            )
+
+    barrier_text = normalized(barrier)
+    barrier_lower = barrier_text.lower()
+    for required in (
+        "2 minutes by default",
+        "10-minute maximum",
+        "moves the call to the background instead of stopping it",
+        "explicitly backgrounds `await_seats`",
+        "owns the launch and completion-sentinel lifecycle",
+        "before the bash tool can auto-background the wait",
+    ):
+        if required not in barrier_lower:
+            fail(
+                errors,
+                "bash-timeout-contract",
+                "agents/panel-review-cli-barrier.md",
+                f"missing `{required}` behavior",
+            )
+    for stale in ("killed by the harness", "would be killed", "silently truncated"):
+        if stale in barrier_lower:
+            fail(
+                errors,
+                "bash-timeout-contract",
+                "agents/panel-review-cli-barrier.md",
+                f"retains stale `{stale}` wording",
+            )
+
+    run_seat_match = re.search(r"(?m)^\| `run_seat` \|.*$", readme)
+    if run_seat_match is None:
+        fail(errors, "bash-timeout-contract", "README.md", "missing run_seat ownership row")
+    else:
+        run_seat_row = run_seat_match.group(0).lower()
+        if "panel-review-cli-barrier" not in run_seat_row:
+            fail(errors, "bash-timeout-contract", "README.md", "run_seat row does not point to the barrier")
+        for stale in ("killed", "empty raw"):
+            if stale in run_seat_row:
+                fail(
+                    errors,
+                    "bash-timeout-contract",
+                    "README.md",
+                    f"run_seat row retains stale `{stale}` wording",
+                )
+
+    readme_lower = normalized(readme).lower()
+    for required in (
+        "subagent spawn limit reached",
+        "not a down-seat pass",
+        "/clear",
+        "panel-review:resume",
+    ):
+        if required not in readme_lower:
+            fail(
+                errors,
+                "agent-spawn-budget",
+                "README.md",
+                f"public recovery guidance is missing `{required}`",
+            )
 
     forbidden_debate_commands = (
         (r'\$SC/merge_payload\b', "merge_payload"),

@@ -32,6 +32,7 @@ class ContractConsistencyTest(unittest.TestCase):
         (root / "scripts").mkdir()
         shutil.copy2(ROOT / "scripts/read_protocol_phase", root / "scripts/read_protocol_phase")
         shutil.copy2(ROOT / "CONTRACTS.md", root / "CONTRACTS.md")
+        shutil.copy2(ROOT / "README.md", root / "README.md")
 
     def test_each_known_drift_is_reported_by_invariant_name(self):
         cases = [
@@ -107,6 +108,54 @@ class ContractConsistencyTest(unittest.TestCase):
 
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("normal-debate-transaction-owner", result.stderr)
+
+    def test_claude_runtime_contract_drift_is_reported(self):
+        cases = (
+            (
+                "outer-referee-agent-contract",
+                "skills/start/SKILL.md",
+                "run_in_background: false",
+                "run_in_background: true",
+            ),
+            (
+                "agent-spawn-budget",
+                "skills/panel-review-for-agent/SKILL.md",
+                "Subagent spawn limit reached",
+                "Subagent capacity unavailable",
+            ),
+            (
+                "agent-spawn-budget",
+                "skills/start/SKILL.md",
+                "fixed status does not disclose",
+                "fixed status discloses",
+            ),
+            (
+                "bash-timeout-contract",
+                "agents/panel-review-cli-barrier.md",
+                "moves the call to the background",
+                "stops the call",
+            ),
+            (
+                "agent-spawn-budget",
+                "README.md",
+                "down-seat pass",
+                "ordinary seat pass",
+            ),
+        )
+
+        for invariant, relative_path, old, new in cases:
+            with self.subTest(invariant=invariant), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.copy_contract_tree(root)
+                target = root / relative_path
+                text = target.read_text(encoding="utf-8")
+                self.assertIn(old, text)
+                target.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+                result = self.run_check(root)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(invariant, result.stderr)
 
 
 if __name__ == "__main__":
