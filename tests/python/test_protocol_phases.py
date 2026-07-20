@@ -82,6 +82,22 @@ class ProtocolPhasesTest(unittest.TestCase):
         self.assertNotIn("PANEL_REVIEW_FAILED", referee)
         self.assertIn("preloaded skill's fixed return contract", referee)
 
+    def test_referee_waits_for_parallel_foreground_agents_without_polling(self):
+        bootstrap = BOOTSTRAP.read_text(encoding="utf-8")
+        common = subprocess.run(
+            [str(READER), "common"], capture_output=True, text=True, check=False
+        )
+
+        self.assertEqual(common.returncode, 0, common.stderr)
+        for contract in (bootstrap, common.stdout):
+            with self.subTest(contract="bootstrap" if contract == bootstrap else "common"):
+                normalized = " ".join(contract.split())
+                self.assertIn("in one assistant response", normalized)
+                self.assertIn("run_in_background: false", normalized)
+                self.assertIn("resumes only after every Agent returns", normalized)
+                self.assertIn("Do not poll or narrate between dispatch and that combined return", normalized)
+                self.assertNotIn("PANEL_REVIEW_WAITING", normalized)
+
 
 if __name__ == "__main__":
     unittest.main()

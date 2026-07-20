@@ -78,8 +78,9 @@ command/orchestration layers (full per-script map in `.claude/rules/scripts.md`)
   subagent to correct them; Claude Code's eight-block cap makes this bounded conformance enforcement,
   not an absolute security boundary. Codex and Gemini seats are external CLIs.
 - **CLI barrier** (`agents/panel-review-cli-barrier.md`) — a thin non-reviewing helper the referee
-  spawns as a **background Agent** each pass to run `await_seats` and return when both CLI seats settle
-  (a background Agent reliably re-wakes the referee; a background Bash job does not).
+  runs as a **foreground Agent** in parallel with the foreground Claude-seat Agent. It runs
+  `await_seats` and returns when both CLI seats settle; issuing both Agent calls in one response keeps
+  them concurrent and blocks the referee until both return.
 - **Wrapper scripts** (`scripts/`) — the referee never hand-rolls flags, writes, index math, or
   parsing; it calls these so operations are byte-exact. The coarse `round` module owns normal-path
   preparation, collection, commit, and verdict input. `seat_contract.py` owns seat fields, stance

@@ -116,8 +116,8 @@ either failure so the main conversation can report it and a later `panel-review:
 - ✅ Cards carry **no** origins and **no** stance tally. Settle only on unanimity among ≥2
   engaged seats. Present every issue, including rejected and unresolved.
 - ✅ Degrade gracefully: one dead seat ≠ aborted review. Run everything from cwd = repo root.
-- ✅ Wait for CLI seats through the `panel-review-cli-barrier` **Agent** (which runs `await_seats`),
-  spawned background alongside the Claude-seat Agent — **never** background `await_seats` yourself (a
-  background Bash job does not re-invoke a sub-agent; only a background Agent does). Two Agent wakes
-  per pass; take **no** turns polling (`date`/`ps`/`cat status.*`) or narrating the wait (see the
-  long-running-seats rule).
+- ✅ Wait for CLI seats through the `panel-review-cli-barrier` **Agent** (which runs `await_seats`).
+  Dispatch it and the Claude-seat Agent together in one assistant response, both with
+  `run_in_background: false`. The calls run concurrently and the referee resumes only after every
+  Agent returns. Never background `await_seats` yourself. Do not poll or narrate between dispatch and
+  that combined return (see the long-running-seats rule).

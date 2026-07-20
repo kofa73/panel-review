@@ -71,15 +71,16 @@ means the seat returned no block at all (down / malfunctioned), distinct from an
 block (ran, found nothing). **Run everything from cwd = `workdir` (repo root)** so seat
 working-tree reads, scratch paths, and `repo_guard` all resolve against the same tree.
 
-**CLI seats are long-running.** Run their prepared command only through a background
+**CLI seats are long-running.** Run their prepared command only through the
 `panel-review-cli-barrier` Agent; never run or background `await_seats` yourself. Pass the Agent the
 `command`, `done`, and `sentinel` paths produced by `round prepare-*`. The barrier's own agent
 definition owns how it launches and waits; on return, consume only its `await_seats_rc` result and
 the status files through `round collect-*`.
 
-Spawn the fresh Claude-seat Agent in parallel with the CLI barrier. Each Agent return is one wake.
-Between dispatch and those wakes, do not poll or narrate the wait. Process only completed results;
-if the other Agent is still running, stop and wait for its wake.
+Dispatch the CLI-barrier and fresh Claude-seat Agent calls together in one assistant response, both
+with `run_in_background: false`. Multiple foreground Agent calls in one response run concurrently,
+and the referee resumes only after every Agent returns. If preparation checkpointed one side, issue
+only the remaining foreground call. Do not poll or narrate between dispatch and that combined return.
 
 ## The three seats
 
@@ -94,7 +95,7 @@ Claude-specific prompt returned by `round prepare-round0` / `round prepare-debat
 (a fork inherits your context and destroys blindness). The delivery wrapper makes the seat pass its
 complete response to `write_seat_raw`, which validates and atomically installs the expected raw path;
 the Agent returns only `CLAUDE_SEAT_RAW_WRITTEN` or `CLAUDE_SEAT_RAW_FAILED`. Never copy, quote, or
-write the Agent return. After both background Agents settle, `round collect-* --final` parses the
+write the Agent return. After both foreground Agents settle, `round collect-* --final` parses the
 on-disk raw. Missing/invalid Claude raw fails closed: Claude is down for that pass, with no fallback
 that returns findings or evidence into your context.
 
@@ -345,9 +346,10 @@ Claude plus the available peer seat(s), then call
 `"$SC/round" prepare-debate "$id" <configured seats...>`.
 Its JSON gives the round/epoch, shared CLI prompt, optional Claude-specific prompt, and barrier paths.
 Spawn one CLI barrier per returned entry and a fresh Claude Agent only when `claude_prompt` is
-non-null; a missing entry/prompt is already checkpointed and must not be re-dispatched. Then wait for
-all Agent wakes without polling. Call `"$SC/round" collect-debate "$id" --final`; use its batch
-statuses and engaged list.
+non-null; a missing entry/prompt is already checkpointed and must not be re-dispatched. Issue every
+returned Agent call together in one assistant response with `run_in_background: false`; they run
+concurrently, and the referee resumes only after every Agent returns. Then call
+`"$SC/round" collect-debate "$id" --final`; use its batch statuses and engaged list.
 Load `salvage` only for a failed CLI block. After rewriting both blocks to the canonical side file,
 call `round salvage-debate`, then call `round collect-debate` again; recollection reads the completed
 checkpoint instead of the malformed original. Retry each still-non-complete batch once, and use
@@ -438,15 +440,16 @@ the common one-batch shape.
    # cli-barrier Agent — never background await_seats yourself (it would not wake you).
    printf '%s\n' "$SC/await_seats --id $id --tag new_findings --prompt /tmp/$id/debate.$round.prompt --seat codex --raw /tmp/$id/raw/round$round.codex.$batch.txt --parsed /tmp/$id/nf.$round.codex.json --status /tmp/$id/status.round$round.codex.$batch --seat gemini --raw /tmp/$id/raw/round$round.gemini.$batch.txt --parsed /tmp/$id/nf.$round.gemini.json --status /tmp/$id/status.round$round.gemini.$batch --done /tmp/$id/await.round$round.$batch.txt" > /tmp/$id/cli_barrier.round$round.$batch.sh
    ```
-   Spawn the **CLI barrier** as one background `panel-review:panel-review-cli-barrier` Agent
+   Spawn the **CLI barrier** as a `panel-review:panel-review-cli-barrier` Agent
    (`command=/tmp/<id>/cli_barrier.round$round.$batch.sh`, `done=/tmp/<id>/await.round$round.$batch.txt`,
    `sentinel=/tmp/<id>/await.round$round.$batch.sentinel`, `workdir=<repo root>`; on its return an
    `await_seats_rc` that is nonzero or `absent` means the seats did not run this batch — treat those
    CLI seats as down for the batch and note it in Process notes) and the **fresh Claude seat** as its
-   own background Agent alongside it (it
-   cannot run inside `await_seats`). In the common single-batch case that is one barrier + one Claude
-   Agent = two wakes; an over-budget round adds one barrier Agent per extra batch. Never poll between
-   dispatch and the Agents' wakes (see the long-running-seats rule).
+   own Agent alongside it (it cannot run inside `await_seats`). Issue every barrier and Claude-seat
+   call together in one assistant response, each with `run_in_background: false`; the foreground
+   calls run concurrently and the referee resumes only after every Agent returns. An over-budget
+   round adds one barrier Agent per extra batch to that same parallel call group. Never poll or
+   narrate between dispatch and the combined return (see the long-running-seats rule).
 
    ```bash
    # Ingest the original seat raw. If salvage is needed, use round salvage-debate;

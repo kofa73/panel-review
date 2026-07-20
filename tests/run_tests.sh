@@ -187,29 +187,29 @@ assert_file_contains "protocol treats new_findings as required-emptyable" 'requi
 assert_file_contains "protocol salvage uses extract-first-else-empty wording" 'if and only if the seat genuinely raised nothing' "$protocol"
 [ -e "$root/prompts/repair.tmpl" ] && bad "repair.tmpl is retired" "still present" || ok "repair.tmpl is retired"
 
-# --- CLI-seat wait is a background Agent, never a backgrounded Bash job (the stalled-referee fix) ---
-# Root cause it guards: a background Bash job does NOT re-invoke the sub-agent that launched it, so a
-# referee that backgrounded await_seats stalled forever. The wait must go through an Agent.
+# --- CLI-seat wait is isolated in a foreground Agent parallel with the Claude seat ---
+# Root cause it guards: ending the referee while background Agents are live completes the referee;
+# later child notifications reach the main session. Both foreground Agent calls must therefore be
+# emitted together so they run concurrently and block the referee until both return.
 spk="$protocol"
 bar="$root/agents/panel-review-cli-barrier.md"
 assert_file_contains "cli-barrier agent exists with the right name" 'name: panel-review-cli-barrier' "$bar"
 assert_file_contains "cli-barrier agent is a non-reviewing wait barrier" 'wait barrier**, not a reviewer' "$bar"
 assert_file_contains "cli-barrier runs await_seats detached in the background" 'run_in_background: true' "$bar"
 assert_file_contains "cli-barrier waits via a bounded foreground loop" 'until [ -f' "$bar"
-# The step-2 wait is a foreground Bash tool call inside a BACKGROUND subagent, so each wait is bounded
-# by TWO timeouts: the Bash tool's 2-min default AND the ~10-min background-subagent stall abort
-# (CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS). The robust design keeps each wait SHORT (under the 2-min
-# default) and loops, rather than one long wait that depends on the model raising the tool `timeout`.
+# The step-2 wait is a foreground Bash tool call, so each wait stays under the Bash tool's 2-min
+# default and loops rather than depending on the model to raise the tool `timeout`.
 assert_file_contains "cli-barrier waits in short chunks under the 2-min Bash default" 'timeout 100 bash -c' "$bar"
-assert_file_contains "cli-barrier accounts for the background-subagent stall abort" 'CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS' "$bar"
 # Regression: must NOT reintroduce the fragile long-wait-with-raised-tool-timeout design.
 if grep -Fq '570000' "$bar"; then bad "cli-barrier must not depend on raising the Bash tool timeout"; else ok "cli-barrier does not depend on a raised Bash tool timeout"; fi
 # Match the command FORM ('timeout 540 bash'), not a prose mention of the number, so the doc can
 # still cite `timeout 540` as the anti-pattern it explains against.
 if grep -Fq 'timeout 540 bash' "$bar"; then bad "cli-barrier must not use a >2-min wait the Bash default truncates"; else ok "cli-barrier uses no >2-min blocking wait"; fi
 assert_file_contains "protocol dispatches the cli-barrier Agent" 'panel-review:panel-review-cli-barrier' "$spk"
+assert_file_contains "protocol runs seat Agents as foreground calls" 'run_in_background: false' "$spk"
+assert_file_contains_text "protocol emits foreground seat Agents in parallel" \
+  'Issue every returned Agent call together in one assistant response' "$spk"
 assert_file_contains "round writes the Round-0 barrier command to a script" 'cli_barrier.round0.sh' "$SC/round"
-assert_file_contains "barrier owner explains why background Bash cannot wake a sub-agent" 're-invokes its spawning conversation' "$bar"
 # Regression guard: the OLD broken instruction (referee backgrounds await_seats itself) must be gone.
 if grep -Fq 'ONE background Bash call' "$spk"; then bad "protocol must not background await_seats as a bash job"; else ok "protocol no longer backgrounds await_seats directly"; fi
 if grep -Eq 'await_seats.*run_in_background' "$spk"; then bad "protocol must not pair await_seats with run_in_background"; else ok "await_seats is not backgrounded by the referee"; fi

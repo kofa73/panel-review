@@ -85,17 +85,19 @@ byte-exact.
   block set and every item to pass the shared seat-contract validation, and only then atomically
   installs the complete raw response. It never accepts an arbitrary destination path.
 - `hooks/enforce_agent_status_stub` — the plugin's `SubagentStop` return gate for the Claude seat and
-  referee. It admits only an exact fixed stub, derives the referee's expected run ID from the
-  original Agent task in `agent_transcript_path`, and asks the same subagent to correct any mismatch.
-  It does not transform or transport review content. Claude Code caps consecutive stop-hook blocks,
-  so document this as bounded runtime enforcement, never as a security boundary.
+  referee. It admits only an exact fixed terminal stub and derives the referee's expected run ID from
+  the original Agent task in `agent_transcript_path`.
+  It asks the same subagent to correct an initial mismatch, then allows an already-active referee
+  stop-hook continuation to stop so correction cannot become an unbounded loop; the Claude-seat gate
+  remains strict. It does not transform or transport review content, so document it as bounded
+  runtime enforcement, never as a security boundary.
 - `await_seats` — the barrier that owns CLI-seat waiting; runs every CLI seat concurrently (each via
   `run_seat`) in ONE job with a per-seat outer timeout, writes per-seat status + a combined `--done`
   summary. **Run it via the `panel-review-cli-barrier` Agent, never as a referee-backgrounded Bash
-  job** — a background Agent reliably re-wakes the referee, a background Bash job does not (its
-  completion is dropped and the referee stalls forever). The referee spawns two background Agents per
-  pass (CLI barrier + Claude seat) for two reliable wakes; **no `date`/`ps`/`cat status.*`/narration
-  turns between dispatch and the wakes.**
+  job.** The referee issues that barrier and the Claude-seat Agent together in one assistant response,
+  both with `run_in_background: false`; the calls run concurrently and block the referee until both
+  return. There are no referee `date`/`ps`/`cat status.*`/narration turns between dispatch and the
+  combined return.
 - `birth_index` — the **only** builder of the Round-0 `index.json` from the referee's clustered
   finding-to-issue map; assigns birth state/flags/`evaluated_by` by the birth-unanimity rule (referee
   still owns the clustering). Output installs via `index put`.

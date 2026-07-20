@@ -61,6 +61,12 @@ agent_type = payload.get("agent_type")
 if agent_type not in {CLAUDE_SEAT, REFEREE}:
     raise SystemExit(0)
 
+# A blocked referee stop is re-invoked in the same long-lived context. Let that continuation stop
+# so a malformed retry cannot become an unbounded hook loop; Claude seats have no waiting state and
+# retain their strict response gate.
+if agent_type == REFEREE and payload.get("stop_hook_active") is True:
+    raise SystemExit(0)
+
 message = payload.get("last_assistant_message", "")
 if agent_type == CLAUDE_SEAT:
     allowed = message in CLAUDE_SEAT_STATUSES

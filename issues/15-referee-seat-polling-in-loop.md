@@ -2,7 +2,7 @@
 
 Priority: 15
 
-Status: Pending
+Status: Completed
 
 Source: review `panel-20260719-073553-0dd5c908`
 
@@ -73,44 +73,46 @@ polling begins after commit `177f48f` introduced the hook; the no-poll contract 
 `5747dc3`. The issue-13 smoke test exercised terminal failure returns without live child Agents, so
 it did not cover the referee's required intermediate stopped/waiting state.
 
-## Proposed fix
+## Implemented fix
 
-Give the referee a distinct, exact intermediate status and make the hook distinguish it from a
-terminal result:
+The originally proposed `PANEL_REVIEW_WAITING` status was rejected after an isolated Claude Code
+smoke test showed that accepting it completes the referee Agent; later child notifications reach the
+main session instead of resuming the referee. The implemented orchestration removes the need for an
+intermediate referee stop:
 
-1. Add `PANEL_REVIEW_WAITING id=<ID>` to the referee's internal contract. The referee may emit it
-   only after dispatching background seat Agents, or after one child wake while another child is
-   still live. It must not poll or narrate before emitting the status.
-2. Make `hooks/enforce_agent_status_stub` accept that exact waiting status for the referee while
-   retaining the three existing terminal statuses. Wrong IDs, prefixes, suffixes, and arbitrary
-   prose remain blocked.
-3. Follow Claude Code's `stop_hook_active` liveness rule: after one rejected referee response, do not
-   keep blocking the same stop-hook continuation indefinitely. The main command already treats the
-   referee result as non-authoritative and validates the durable artifact, so failure to obtain a
-   valid terminal stub must remain resumable rather than trigger an unbounded correction loop.
-4. Keep the Claude-seat status rules unchanged. This regression is caused by the long-lived referee
-   yielding while it owns background children; a Claude seat has no equivalent intermediate state.
+1. Each pass emits the foreground CLI-barrier Agent and foreground Claude-seat Agent calls together
+   in one assistant response, both with `run_in_background: false`.
+2. Claude Code runs those foreground calls concurrently and returns control to the referee only
+   after both have completed. The referee therefore does not stop, poll, or narrate while seats are
+   live.
+3. The CLI barrier retains the long Bash/sentinel wait loop in its small context; no seat-wait loop
+   moves back into the referee.
+4. `PANEL_REVIEW_WAITING` remains invalid. The three terminal referee statuses and the Claude-seat
+   statuses remain unchanged.
+5. An invalid referee correction received with `stop_hook_active=true` is allowed to stop rather
+   than enter an unbounded hook-correction loop. The Claude-seat gate remains strict.
 
-The exact waiting status preserves the fixed Agent interface without parsing internal Agent
-transcripts or weakening the terminal artifact-only boundary. Under the normal runtime path it does
-not reach the main command: Claude Code keeps a subagent with live background children pending and
-uses their completion notifications to wake it. If it does escape because no child is live, the main
-command's artifact validation rejects the incomplete run and leaves it resumable.
+README, the protocol, the referee bootstrap, the CLI-barrier agent, script ownership guidance, and
+the existing hook/protocol tests now describe and enforce this model.
 
 ## Verification
 
-- Extend `tests/python/test_agent_status_hook.py` to cover the exact waiting status, wrong IDs,
-  surrounding prose, and `stop_hook_active` liveness behavior.
-- Add a wording contract requiring the referee to return the waiting status immediately instead of
-  polling or narrating after dispatch and after a partial wake.
-- Run a focused Claude Code integration smoke test with a referee-like Agent and two staggered
-  background child Agents. Verify that the parent receives only the terminal referee status, that
-  each child completion causes one wake, and that the referee transcript contains no Bash seat-file
-  polling between dispatch and completion.
-- Run one real review and compare the referee trace with the failing run: ordinary single-batch
-  passes should have two child wakes and zero polling calls.
-- Run `scripts/check_contracts --root .`, `python3 -m unittest
-  tests.python.test_agent_status_hook -v`, `./tests/run_tests.sh`, and `git diff --check`.
+- TDD coverage in `tests/python/test_agent_status_hook.py`,
+  `tests/python/test_protocol_phases.py`, and `tests/run_tests.sh` requires paired foreground Agent
+  dispatch, prohibits referee polling, rejects `PANEL_REVIEW_WAITING`, and covers
+  `stop_hook_active` liveness.
+- The isolated foreground-concurrency smoke passed: the barrier and Claude-seat calls overlapped,
+  and their parent returned only after both completed.
+- The full local suite passed with `PASS: 223, FAIL: 0`; `scripts/check_contracts --root .`, the
+  focused hook/protocol tests, and `git diff --check` also passed.
+- Real review `panel-20260720-120133-3599d270` reproduced the failing run's exact diff hash
+  `f604aae91c86c98885b221b8af1cf90367aa259773480b77323d95aa48b646e7`. Round 0 and both debate
+  rounds each dispatched the CLI-barrier and Claude-seat Agents together with
+  `run_in_background: false`; their execution intervals overlapped, and the referee issued no Bash
+  or other tool call between the paired dispatch and the combined return.
+- The real review completed normally with all three seats engaged, a clean repository guard, two
+  converged debate rounds, a persisted finished artifact, and exact artifact-only delivery at
+  `/tmp/panel-20260720-120133-3599d270.md`.
 
 ## Non-goals
 

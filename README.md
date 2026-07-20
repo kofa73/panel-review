@@ -197,27 +197,16 @@ The loop is bounded by a per-issue counter (`--issue-rounds`, default 2) and a g
 
 **You normally set nothing.** A review needs no timeout configuration: each CLI seat is allowed up to
 ~40 min (`await_seats`' `--seat-timeout`, default 2400 s), and the CLI-seat barrier waits for them in
-short (< 2 min) polling chunks that stay under Claude Code's Bash-tool timeout *and* its
-background-subagent stall timeout by design, so nothing is truncated out of the box. (You do **not**
-need `BASH_DEFAULT_TIMEOUT_MS` / `BASH_MAX_TIMEOUT_MS`: the barrier never asks for a longer single
-Bash call, so raising the Bash ceiling has no effect here.)
+short (< 2 min) polling chunks that stay under Claude Code's Bash-tool timeout, so nothing is
+truncated out of the box. (You do **not** need `BASH_DEFAULT_TIMEOUT_MS` /
+`BASH_MAX_TIMEOUT_MS`: the barrier never asks for a longer single Bash call, so raising the Bash
+ceiling has no effect here.)
 
 You only tune this if you deliberately let seats run **longer than ~40 min** — e.g. you raise the
-per-seat cap with `PANEL_REVIEW_SEAT_TIMEOUT=<seconds>`. Then two limits also have to move, or a slow
-seat is abandoned mid-run and the review silently degrades to the seats that did finish:
-
-1. **The barrier's poll budget** — raise the retry cap in `agents/panel-review-cli-barrier.md`
-   step 2 (currently 26) so `cap × ~100 s` comfortably exceeds your new per-seat cap.
-2. **Claude Code's background-subagent stall timeout** — raise `CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS`
-   (default `600000`, i.e. 10 min) so a background Agent that goes quiet through a long run is not
-   aborted as "stalled". Put it in the `env` block of a settings file — pick the file by who it
-   should apply to:
-
-   | File | Applies to |
-   | :--- | :--- |
-   | `~/.claude/settings.json` | you, in every project |
-   | `<reviewed-repo>/.claude/settings.json` | everyone working in that repo (checked in) |
-   | `<reviewed-repo>/.claude/settings.local.json` | just you, just that repo (gitignore it) |
+per-seat cap with `PANEL_REVIEW_SEAT_TIMEOUT=<seconds>`. Then raise the barrier's retry cap in
+`agents/panel-review-cli-barrier.md` step 2 (currently 26) so `cap × ~100 s` comfortably exceeds your
+new per-seat cap. Otherwise a slow seat is abandoned mid-run and the review degrades to the seats
+that did finish.
 
    Add exactly (match the value to your longest seat, in ms — e.g. 60 min):
 
@@ -255,7 +244,7 @@ seat is abandoned mid-run and the review silently degrades to the seats that did
 | `skills/panel-review-for-agent/references/protocol.md` | reference | **The canonical phased procedure.** `read_protocol_phase` loads only the marked sections needed for the current state. | the referee bootstrap |
 | `agents/panel-review-referee.md` | agent | **The referee.** A separate context that runs the seats and never reviews code itself; it follows the referee-protocol skill. | `start`/`resume`/`continue` |
 | `agents/panel-review-claude-seat.md` | agent | **The Claude seat.** A cold, no-memory agent spawned fresh each pass. | the referee agent (never forked) |
-| `agents/panel-review-cli-barrier.md` | agent | **The CLI-seat wait barrier.** A thin non-reviewing background Agent that runs `await_seats` and reliably wakes the referee after the CLI seats settle. | the referee agent |
+| `agents/panel-review-cli-barrier.md` | agent | **The CLI-seat wait barrier.** A thin non-reviewing foreground Agent run in parallel with the Claude seat; it runs `await_seats` and returns after the CLI seats settle. | the referee agent |
 
 `start`/`resume`/`continue`/`discard` are `disable-model-invocation: true` — only you trigger them
 (critical for `discard`, so the model never autonomously wipes a session). `status` and `result` are
@@ -370,14 +359,12 @@ fenced block).
 
 The plugin's `SubagentStop` hook gates the two model-return boundaries that carry fixed statuses:
 Claude seat → referee and referee → main command. It accepts only an exact Claude-seat status, or an
-exact referee status whose run ID matches the original Agent task prompt. Prose-prefixed, malformed,
-or wrong-ID responses stay in the subagent transcript; the same subagent receives a short correction
-and returns again, without repeating the Agent call or its completed file work. This preserves the
-background-Agent wake path and keeps raw review/verdict prose out of the caller context during normal
-correction. It is **bounded enforcement, not a security boundary**: Claude Code forcibly ends a
-subagent after eight consecutive stop-hook blocks, so a model that ignores every correction can still
-escape the exact-result contract. `read_verdict_artifact --delivery` remains the independent,
-deterministic authority for user-visible report delivery.
+exact terminal referee status whose run ID matches the original Agent task prompt. Prose-prefixed,
+malformed, or wrong-ID responses stay in the subagent transcript and receive one short correction.
+If that referee correction is itself invalid, the active stop-hook continuation is allowed to stop
+instead of being blocked into an unbounded loop; the Claude-seat gate remains strict. This is
+**bounded enforcement, not a security boundary**. `read_verdict_artifact --delivery` remains the
+independent, deterministic authority for user-visible report delivery.
 
 | Component | Job |
 |-----------|-----|
@@ -392,8 +379,8 @@ deterministic authority for user-visible report delivery.
 | `repo_guard` | Protect the **code under review**: `snapshot` records the tracked tree (a `git stash create` SHA + a sha256 manifest) at the start; `verify --restore` after each seat pass detects, reverts, and reports any tracked-file drift. Untracked scratch and the `.panel-review/` cache are left alone |
 | `run_agy` | The **only** way to call the Gemini seat — pins the model, a 15-min `--print-timeout` budget, and the flag-binding invocation (prompt on **stdin with no bare `--print`**, since agy's `--print` takes the prompt as its argument and would otherwise swallow `--model`); falls back from the primary Gemini model to a faster one if the primary fails or exhausts its `--print-timeout` (whose expiry prints `Error: timed out waiting for response`) |
 | `run_seat` | Dispatch one **CLI** seat (Codex or Gemini) for a tag, parse the block, and print the parse status (0 engaged · 4 no block · 5 malformed). **It does not repair.** Salvaging a slipped CLI block — a malformed fence, or a real review the seat forgot to fence — is the **referee's** job, not a script's: the seat that wrote the block has exited, so any "repair" re-dispatch is a fresh cold model whose only input is the raw file the referee already has, and deciding *"real review or down-seat stub?"* is an LLM judgment, not a grep heuristic. On a 4/5 the referee reads that one CLI seat's raw and rewrites it well-formed (see "Salvage" in the referee protocol); debate salvage is installed through `round salvage-debate`, which requires the canonical `.salvaged` side path and never overwrites the original. The Claude seat instead writes through `write_seat_raw`, which validates before installation and fails closed. **CLI seats are long-running** (minutes; `run_agy` up to ~34 min across its two 15-min model attempts), longer than the Bash tool's foreground timeout (2 min default, 10 min max), so the seats run **in the background**, never foreground (a foreground dispatch is killed mid-pass and the empty raw file reads as a down seat) |
-| `await_seats` | **Barrier** over the CLI seats: runs them all concurrently (each through `run_seat`, so dispatch + parse are unchanged — neither repairs) inside **one** job, waits for every seat with a configurable per-seat outer timeout (`--seat-timeout`, default 2400s — the backstop `run_codex` otherwise lacks), writes each seat's final status plus one combined `--done` summary, and exits. It is run by the **`panel-review-cli-barrier` Agent**, not backgrounded by the referee directly: a background **Bash** job does **not** re-invoke the sub-agent that launched it (its completion is routed to the root session and dropped, stalling the referee), whereas a background **Agent** reliably wakes its spawner. So a pass spawns two background Agents — the CLI barrier and the Claude seat — for two reliable wakes instead of the per-seat polling loop that made the referee burn turns re-reading its whole context |
-| `agents/panel-review-cli-barrier.md` | Thin, non-reviewing helper subagent the referee spawns **background** each pass: it `bash`-runs the `await_seats` command the referee wrote — wrapped so `await_seats`' exit code is always written to a **completion sentinel** — then watches that sentinel (not the `--done` file, which exists only on a clean run) via bounded foreground waits in its own tiny context, and returns once `await_seats` has fully exited. Its return is the event that wakes the referee; the sentinel's exit code tells the referee whether the seats actually ran (`0`) or hit a setup error / wedged (nonzero / absent → CLI seats down for the pass, no false "settled" and no late writes). Exists solely because a background Agent — unlike a background Bash job — reliably re-invokes its spawning sub-agent |
+| `await_seats` | **Barrier** over the CLI seats: runs them all concurrently (each through `run_seat`, so dispatch + parse are unchanged — neither repairs) inside **one** job, waits for every seat with a configurable per-seat outer timeout (`--seat-timeout`, default 2400s — the backstop `run_codex` otherwise lacks), writes each seat's final status plus one combined `--done` summary, and exits. The referee runs it only through the foreground **`panel-review-cli-barrier` Agent**, dispatched in the same assistant response as the foreground Claude seat. The two Agent calls execute concurrently and return together, so the referee never polls seat files while either branch is live. |
+| `agents/panel-review-cli-barrier.md` | Thin, non-reviewing helper subagent the referee runs **foreground** in parallel with the Claude seat each pass: it `bash`-runs the prepared `await_seats` command — wrapped so `await_seats`' exit code is always written to a **completion sentinel** — then watches that sentinel (not the `--done` file, which exists only on a clean run) via bounded foreground waits in its own tiny context. The sentinel's exit code tells the referee whether the seats ran (`0`) or hit a setup error / wedged (nonzero / absent → CLI seats down for the pass, no false "settled" and no late writes). |
 | `extract_block` / `parse_block` | Pull a `findings` / `stances` / `new_findings` block → validated JSONL; stance parsing accepts only `support`/`reject`, normalizes optional support revisions, discards revisions attached to reject, and requires reject counter-evidence. `--response round0|debate` additionally enforces exactly one required block and rejects phase-inappropriate blocks. Exit 4 = a required block is absent, exit 0 = valid (including an empty or explicit `[]` block), and exit 5 = malformed or duplicate. `--diagnose` reports per-item failures to guide salvage |
 | `check_draft` | **Seat-facing** pre-emit validator, spliced into each seat prompt as `{{CHECK}}` (never called by the referee): a seat runs it on the JSONL it is about to fence so it can fix malformed items *before* emitting. A thin wrapper over `parse_block --diagnose` (same validator, no second schema to drift). Closes the silent-drop gap: `parse_block`'s normal mode discards individual malformed lines with only an unseen stderr note (it fails hard only when the *whole* block is unparseable), so a seat that emits some good and some bad items would otherwise lose the bad ones with no repair |
 | `birth_index` | Turn the referee's clustered Round-0 finding-to-issue map into the full `index.json` — assigns each issue's birth state, vetting flags, and `evaluated_by` coverage by the birth-unanimity rule (the deterministic half of clustering; the referee still owns the merge itself) |
@@ -408,7 +395,7 @@ deterministic authority for user-visible report delivery.
 | `project_card` / `regen_cards` | Render issue records → blind cards (no origins, no tally); rebuild all cards from the index on resume |
 | `write_card` | Atomic single-card write (temp + fsync + rename, `.bak` rotation) over `panel_atomic_write`, for the card writes `project_card`/`regen_cards` don't own |
 | `write_seat_raw` | Validate the Claude seat's complete phase-required block set and atomically install it at the derived `/tmp/<ID>/raw/` path; the seat then returns only a fixed status stub to the referee |
-| `hooks/enforce_agent_status_stub` | `SubagentStop` gate for Claude-seat and referee Agent results: allow only their exact fixed statuses, recover the referee's expected run ID from its original Agent task, and keep the same subagent running on any mismatch |
+| `hooks/enforce_agent_status_stub` | `SubagentStop` gate for Claude-seat and referee Agent results: allow only their exact fixed terminal statuses, recover the referee's expected run ID from its original Agent task, request one correction for a malformed referee response, and allow an already-active referee stop-hook continuation to stop rather than loop indefinitely |
 | `round` | Coarse normal-path module: prepare Round 0/debate prompts and barriers from the current preflight panel, collect compact seat/guard status, install an explicitly supplied canonical CLI debate salvage through `salvage-debate`, select only complete active-plan batches for decision/atomic commit with an optional judgment addendum, and render stable compact verdict input |
 | `sweep` | Checkpointed debate sweeps — owns batch plans (including `plan-scaffold`, which emits one correctly shaped batch per supplied current-panel seat, and `extend-plan`, which adds unplanned seats or reactivates already-planned dropped seats when they return to the current panel), targeted plan-schema diagnostics, two-block (`stances` + `new_findings`) parse/ID validation, complete-bundle checkpoint retention/source provenance, dropped-seat cleanup, and resume plans. A published completion marker with any missing companion is corrupt state and fails closed; counters advance **only** on a committed sweep |
 | `write_verdict_artifact` | Write the canonical verdict to the `/tmp/<ID>.md` sibling of `/tmp/<ID>/` (outside it, so `cleanup`/`discard` never delete it), stamped with the continuation epoch, exact index hash, and `finished` only when the canonical index has no open issue or the user explicitly finishes at the low-only gate. This artifact is the only final-report delivery surface; write failure keeps the run resumable and blocks cleanup |
@@ -472,9 +459,10 @@ failure; successful persistence returns `PANEL_VERDICT_READY id=<ID>`. **`/tmp` 
 
 Before those Agent results enter their callers, the plugin's `SubagentStop` hook requires the exact
 fixed response and blocks prose-prefixed or wrong-ID variants for correction by the same subagent.
-The hook does not carry or reconstruct the verdict; the artifact reader below remains the delivery
-authority. Claude Code caps repeated stop-hook blocks at eight, so this mechanism is a bounded
-runtime conformance gate rather than an absolute isolation or security guarantee.
+A malformed referee retry made while the stop hook is already active is allowed to stop so correction
+cannot become an unbounded loop. The hook does not carry or reconstruct the verdict; the artifact
+reader below remains the delivery authority. This mechanism is a bounded runtime conformance gate
+rather than an absolute isolation or security guarantee.
 
 After every referee Agent completion, including a failed final response, `start`, `resume`, and
 `continue` call `read_verdict_artifact --delivery` with the run's expected ID, scope, diff hash, and

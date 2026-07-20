@@ -117,6 +117,22 @@ class AgentStatusHookTest(unittest.TestCase):
         self.assertEqual(decision["decision"], "block")
         self.assertNotIn("Verdict summary", decision["reason"])
 
+    def test_referee_waiting_stub_is_blocked(self):
+        expected_id = "panel-20260718-120000-1234abcd"
+        with tempfile.TemporaryDirectory() as directory:
+            transcript = self.write_referee_transcript(
+                directory,
+                f"mode=fresh\nid={expected_id}\n",
+            )
+            result = self.run_hook(
+                "panel-review:panel-review-referee",
+                f"PANEL_REVIEW_WAITING id={expected_id}",
+                transcript,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["decision"], "block")
+
     def test_referee_without_readable_task_prompt_is_blocked(self):
         result = self.run_hook(
             "panel-review:panel-review-referee",
@@ -136,6 +152,17 @@ class AgentStatusHookTest(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout)["decision"], "block")
+
+    def test_invalid_referee_retry_is_allowed_while_stop_hook_is_active(self):
+        result = self.run_hook(
+            "panel-review:panel-review-referee",
+            "Still not exact.\nPANEL_VERDICT_READY id=wrong",
+            "/missing/agent-transcript.jsonl",
+            stop_hook_active=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "")
 
     def test_unrelated_agent_is_unchanged(self):
         result = self.run_hook("Explore", "arbitrary result")
