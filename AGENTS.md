@@ -138,6 +138,14 @@ workdir holds exactly one review; concurrent runs against the same workdir are u
   root each run — `cd`-ing the wrapper cannot move it. So an agy prompt needs an **absolute** path
   anchor (and ideally an explicit "set the tool `cwd` to `<workdir>`" directive) or it can drift
   (observed: anchored `/home/developer` instead of the workdir under a very large prompt).
+- **agy model pins are exact display labels, never slugs.** `run_agy` pins the Gemini seat as
+  `Gemini 3.7 Flash (High)`, not `gemini-3.7-flash-high`, and the effort rides in the label (so no
+  `--effort`). This is a property of agy, not of one script: a slug is not a stable identifier
+  across agy versions — on 1.1.10 the *listed* slug `gemini-3.1-pro-high` bound Gemini 3.6 Flash
+  (High) — and how a bad value fails changes too (1.1.10 silently ran the user's `settings.json`
+  model; 1.1.13 hard-errors). `check_contracts` rejects a slug-shaped pin;
+  `tests/live/agy_model_binding.sh` proves on demand that a pin really binds. Measurements and
+  rationale: `run_agy`'s header and `issues/20-agy-model-pin-contract.md`.
 - **Seat engagement is per-round, not sticky.** Round 0 freezes its configured panel and exact blind
   prompt on first preparation, retries actual down responses once, and may retry a still-down seat
   again when a later `resume` reports it available; complete seat passes are never rerun. In debate,
@@ -170,4 +178,8 @@ workdir holds exactly one review; concurrent runs against the same workdir are u
 
 # Important reference material
 Claude Code documentation: ~/github-repos-for-agents/claude-code-docs/
+Codex: ~/github-repos-for-agents/codex/
+Gemini, Antigravity (agy) - `antigravity-cli/CHANGELOG.md` is the release record: ~/github-repos-for-agents/antigravity/
+  The agy model-pin bug this repository works around is recorded in `issues/20-agy-model-pin-contract.md`
+  (measurements for agy 1.1.10 and 1.1.13); `tests/live/agy_model_binding.sh` re-checks it on demand.
 Agent Skills standard: ~/github-repos-for-agents/agentskills/

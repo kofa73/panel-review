@@ -18,9 +18,10 @@
 #    "fallback" was really two Pro runs. Fix: feed the prompt on stdin (a non-TTY
 #    pipe that hits EOF) with NO `--print`; agy then reads stdin non-interactively
 #    and the flags below actually bind. Confirmed in agy's own CLI logs: this form
-#    logs model="Gemini 3.5 Flash (High)" and honors --print-timeout to the second.
+#    logs the model label that was actually requested (`Propagating selected model
+#    override to backend: label="…"`) and honors --print-timeout to the second.
 #  - --print-timeout=15m, =FORM. agy's default is 5m0s, which guillotines a heavy
-#    review mid-investigation. 15m is enough for a thorough Pro/Flash pass; the
+#    review mid-investigation. 15m is enough for a thorough Flash/Pro pass; the
 #    outer `timeout WALL_TIMEOUT` is the hard backstop if agy ever truly hangs.
 #  - --dangerously-skip-permissions: REQUIRED so the seat can actually RUN its tools
 #    non-interactively — tilth (native MCP), grep/read, and the scratch-script writes
@@ -28,11 +29,33 @@
 #    full agentic tool user, so this does not newly "unsandbox" it. Repo integrity is
 #    enforced by scripts/repo_guard (snapshot + auto-revert), not by agy, on top of
 #    the disposable-container trust model.
-#  - PRIMARY Pro, FALLBACK Flash. Now that --model binds, the fallback genuinely
-#    switches: Gemini 3.1 Pro (High) primary (best quality), Gemini 3.5 Flash (High)
-#    fallback (faster, finishes comfortably inside the budget, gave equivalent
-#    findings in testing). Verify names with `agy models`; do NOT use agy's
-#    Claude/GPT-OSS entries. Update these lines when a new top model ships.
+#  - PRIMARY Gemini 3.7 Flash (High), FALLBACK Gemini 3.1 Pro (High). 3.7 Flash is
+#    the current best Gemini seat model; 3.1 Pro is the previous pin, kept as the
+#    fallback so a primary failure still gets a full-quality second attempt from a
+#    DIFFERENT model family (the two failure modes are unlikely to coincide). NOTE:
+#    unlike the old Pro->Flash order, the fallback is NOT the faster model, so a
+#    primary --print-timeout expiry costs a second full PRINT_TIMEOUT budget before
+#    the seat is declared down; WALL_TIMEOUT bounds each attempt separately.
+#  - PIN THE EXACT DISPLAY LABEL ("Gemini 3.7 Flash (High)"), NEVER the slug
+#    ("gemini-3.7-flash-high"). The label form is the contract: it bound exactly on
+#    every version tested (1.1.10 and 1.1.13). Slugs are not reliable across
+#    versions — on 1.1.10 `gemini-3.1-pro-high` bound Gemini 3.6 Flash (High) and
+#    `gemini-3.5-flash-low` bound Medium effort (they resolve correctly again on
+#    1.1.13, so the misbind is a version-dependent regression, not a fixed rule).
+#    How an UNRECOGNIZED value fails has itself changed between versions, so do not
+#    rely on either behavior: 1.1.10 ran the user's ~/.gemini/antigravity-cli/
+#    settings.json model silently (a bad pin downgraded the seat invisibly), while
+#    1.1.13 hard-errors ("invalid model selection … is not recognized") and exits 1,
+#    which attempt() reads as a failed attempt and answers with the other pin.
+#    Effort is part of the label — do not add a separate --effort.
+#    `agy models` lists what exists; copy its LABEL column (the second, tab-separated
+#    field on 1.1.13 — on 1.1.10 piped output carried the slug column only, so on an
+#    older agy read the listing on a TTY: `script -qc "agy models" /dev/null`).
+#    `agy models --output-format json` does NOT exist in 1.1.13 despite the 1.1.12
+#    changelog. When a new top model ships, update these lines and re-verify with
+#    `tests/live/agy_model_binding.sh` — it proves through agy's own logs that the
+#    pins bind (and `--model "<candidate>"` checks a label before you adopt it).
+#    Never use agy's Claude/GPT-OSS entries: the Gemini seat must be a Gemini model.
 #  - "Error: timed out waiting for response" IS --print-timeout firing. agy prints
 #    that line and exits 0 (a clean exit, NOT a hang), leaving truncated output with
 #    no findings block. attempt() therefore treats output that ENDS with that line
@@ -42,8 +65,11 @@
 
 set -euo pipefail
 
-PRIMARY_MODEL="Gemini 3.1 Pro (High)"
-FALLBACK_MODEL="Gemini 3.5 Flash (High)"
+# Exact agy display labels (see header: never slugs; an unrecognized value silently
+# falls back to the user's settings.json default). Verified to bind on agy 1.1.13,
+# 2026-08-15.
+PRIMARY_MODEL="Gemini 3.7 Flash (High)"
+FALLBACK_MODEL="Gemini 3.1 Pro (High)"
 PRINT_TIMEOUT="15m"
 WALL_TIMEOUT=1020   # seconds, hard outer bound per attempt (>= PRINT_TIMEOUT 15m + startup slack)
 

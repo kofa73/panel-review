@@ -23,11 +23,36 @@ decision logic, or the SKILL debate loop.
 VERBOSE=1 ./tests/run_tests.sh                # also prints each PASS
 python3 -m unittest discover -s tests/python  # just the python suite
 python3 -m unittest discover -s tests/python -v   # verbose
+PANEL_REVIEW_LIVE=1 ./tests/run_tests.sh      # also run the opt-in live checks below
 ```
 
 Requires `jq`, `git`, **`python3`**, and the scripts under `../scripts`. Tests mint
 throwaway run ids under `/tmp` (the scripts hardcode `/tmp/<id>/` paths) and clean
 them up. No real run is touched.
+
+## Live checks (`tests/live/`, opt-in)
+
+Everything above is hermetic: no network, no external CLI, no quota. The checks under
+`tests/live/` are the opposite — they call a real seat CLI to verify something only the
+CLI can answer. They run **only** when you invoke them, or with `PANEL_REVIEW_LIVE=1`.
+Each exits `3` when its CLI is not installed, which the suite reports as a skip.
+
+- **`agy_model_binding.sh`** — proves agy actually runs the model `run_agy` pins, by reading
+  the label agy propagates to its backend in its own log. The offline suite can only check
+  the pins' *shape*; whether a label still **binds** is a property of the installed agy.
+  Run it when bumping a pin, after an agy update, or when a Gemini seat's findings look
+  like they came from another model.
+
+  ```bash
+  ./tests/live/agy_model_binding.sh                          # check both pins (~2 tiny prompts)
+  ./tests/live/agy_model_binding.sh --model "Gemini 3.7 Flash (Medium)"   # vet a candidate label
+  ./tests/live/agy_model_binding.sh --negative-control       # also show how a bad pin fails
+  ```
+
+  A missing log line fails the check as **stale** rather than passing it, so agy changing
+  its logging can never be mistaken for a healthy pin. See
+  `issues/20-agy-model-pin-contract.md` for why the check lives here instead of inside
+  `run_agy`.
 
 ## What the python suite covers (`tests/python/`)
 

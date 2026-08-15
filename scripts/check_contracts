@@ -371,6 +371,34 @@ def check_tree(errors, root):
     if "support_with_revision" in executable_text:
         fail(errors, "canonical-stance-values", "executable instructions", "contains retired stance support_with_revision")
 
+    # agy binds --model by DISPLAY LABEL ("Gemini 3.7 Flash (High)"), and a slug is not a stable
+    # identifier across agy versions: on 1.1.10 the listed slug `gemini-3.1-pro-high` bound
+    # Gemini 3.6 Flash (High) instead. How a bad value fails is version-dependent too (1.1.10 ran
+    # the user's settings.json model with no error), so a slug substitution can downgrade a review
+    # seat invisibly. Shape-check both pins here; `tests/live/agy_model_binding.sh` is the on-demand
+    # proof that a pin actually binds, which only the installed CLI can answer.
+    run_agy = read(root, "scripts/run_agy")
+    display_label = re.compile(r"^Gemini [0-9]+(?:\.[0-9]+)* [A-Z][A-Za-z-]* \((?:High|Medium|Low)\)$")
+    pins = {}
+    for pin_name in ("PRIMARY_MODEL", "FALLBACK_MODEL"):
+        match = re.search(rf'(?m)^{pin_name}="([^"]*)"$', run_agy)
+        if match is None:
+            fail(errors, "agy-model-pin-form", "scripts/run_agy", f"{pin_name} pin not found")
+            continue
+        pins[pin_name] = match.group(1)
+        if not display_label.match(pins[pin_name]):
+            fail(
+                errors,
+                "agy-model-pin-form",
+                "scripts/run_agy",
+                f"{pin_name} is not an agy display label (slug?): {pins[pin_name]!r}",
+            )
+    # A fallback identical to the primary is not a fallback: the retry would re-run the model that
+    # just failed. The label shape above already keeps both pins on Gemini, never agy's
+    # Claude/GPT-OSS entries.
+    if len(pins) == 2 and pins["PRIMARY_MODEL"] == pins["FALLBACK_MODEL"]:
+        fail(errors, "agy-model-pin-form", "scripts/run_agy", "fallback pin equals the primary pin")
+
 
 def main(argv=None):
     parser = argparse.ArgumentParser()

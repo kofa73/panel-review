@@ -547,20 +547,38 @@ run_agy_t() { # $1=mode $2=tag ; prompt on stdin (run_agy with no args)
     PATH="$agy_mockbin:$PATH" timeout 30 "$SC/run_agy" < "$TMP/agy.in" > "$TMP/agy.out.$2" 2>"$TMP/agy.err.$2"
 }
 
+# The pins themselves are read out of run_agy rather than duplicated here, so a model
+# bump does not need a test edit. Their FORM (display label, never a slug; fallback
+# distinct from primary) is owned by scripts/check_contracts' agy-model-pin-form
+# invariant, covered in tests/python/test_contract_consistency.py; what the tests
+# below fix is that the pinned string reaches agy intact.
+agy_pin() { sed -n "s/^$1=\"\(.*\)\"$/\1/p" "$SC/run_agy"; }
+PRIMARY_PIN="$(agy_pin PRIMARY_MODEL)"; FALLBACK_PIN="$(agy_pin FALLBACK_MODEL)"
+# The value agy received for --model on call $2 of the recorded argv file $1.
+# Reads the token AFTER --model, which is exactly what a desynced parse (e.g. a
+# bare --print swallowing the flag) would get wrong.
+agy_model_arg() { awk -v want="$2" 'BEGIN{c=1} $0=="<<<CALL>>>"{c++; prev=""; next} {if (c==want && prev=="--model") {print; exit} prev=$0}' "$1"; }
+
 section "run_agy — invocation binds flags (no bare --print, prompt via stdin)"
+# Both pins must be readable; every assertion below compares against them, and the
+# form check that owns them lives in check_contracts (see the note above).
+if [ -n "$PRIMARY_PIN" ] && [ -n "$FALLBACK_PIN" ]; then ok "both model pins readable from run_agy"; else bad "model pin not found in run_agy" "primary=[$PRIMARY_PIN] fallback=[$FALLBACK_PIN]"; fi
 run_agy_t good p1; assert_exit "primary good -> exit 0" 0 "$?"
 if grep -Fxq -- '--print' "$TMP/agy.argv.p1"; then bad "run_agy must NOT pass a bare --print (it swallows --model)"; else ok "no bare --print token"; fi
 assert_file_contains "passes --print-timeout=15m (=form, bound budget)" '--print-timeout=15m' "$TMP/agy.argv.p1"
 assert_file_contains "passes --dangerously-skip-permissions"            '--dangerously-skip-permissions' "$TMP/agy.argv.p1"
-if grep -Fxq -- 'Gemini 3.1 Pro (High)' "$TMP/agy.argv.p1"; then ok "primary model is Pro (High)"; else bad "primary model not Pro (High)"; fi
+# One argv token, immediately after --model, byte-identical to the pin: the label
+# contains spaces, so a quoting slip would split it and agy would bind something
+# else without erroring.
+assert_eq "primary --model receives the exact primary pin" "$PRIMARY_PIN" "$(agy_model_arg "$TMP/agy.argv.p1" 1)"
 assert_file_contains "prompt reaches agy via stdin" 'SENTINEL-7Q' "$TMP/agy.stdin.p1"
 assert_eq "primary success = single dispatch" '1' "$(cat "$TMP/agy.count.p1")"
 assert_file_contains "primary output carries the findings block" '```findings' "$TMP/agy.out.p1"
 
-section "run_agy — print-timeout (exit 0 + error tail) triggers the Flash fallback"
+section "run_agy — print-timeout (exit 0 + error tail) triggers the fallback model"
 run_agy_t timeout_then_good p2; assert_exit "fallback recovers -> exit 0" 0 "$?"
 assert_eq "primary timeout + fallback = two dispatches" '2' "$(cat "$TMP/agy.count.p2")"
-if grep -Fxq -- 'Gemini 3.5 Flash (High)' "$TMP/agy.argv.p2"; then ok "fallback model is Flash (High)"; else bad "fallback did not switch to Flash (High)"; fi
+assert_eq "second dispatch --model receives the exact fallback pin" "$FALLBACK_PIN" "$(agy_model_arg "$TMP/agy.argv.p2" 2)"
 assert_file_contains "fallback output carries the findings block" '```findings' "$TMP/agy.out.p2"
 assert_file_contains "logs the fallback switch" 'retrying with fallback' "$TMP/agy.err.p2"
 
@@ -726,6 +744,19 @@ if py_out="$(python3 -m unittest discover -s "$here/python" 2>&1)"; then
   ok "python unittest suite — $(printf '%s\n' "$py_out" | grep -oE 'Ran [0-9]+ tests' | head -1)"
 else
   bad "python unittest suite" "$(printf '%s\n' "$py_out" | tail -20)"
+fi
+
+# ---------------------------------------------------------------------------
+# Opt-in live checks. These call a real external CLI (network, auth, a little quota),
+# so the default suite stays hermetic and offline; PANEL_REVIEW_LIVE=1 adds them.
+if [ "${PANEL_REVIEW_LIVE:-0}" = 1 ]; then
+  section "live — agy honors run_agy's model pins (PANEL_REVIEW_LIVE=1)"
+  live_out="$("$here/live/agy_model_binding.sh" 2>&1)"; live_rc=$?
+  case "$live_rc" in
+    0) ok "agy model binding — $(printf '%s\n' "$live_out" | grep -c '^  PASS:') checks passed";;
+    3) echo "  SKIP: $(printf '%s\n' "$live_out" | head -1)";;
+    *) bad "agy model binding" "$(printf '%s\n' "$live_out" | grep -A2 '^  FAIL:' | head -12)";;
+  esac
 fi
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,7 @@
 """Black-box coverage for executable-instruction ownership checks."""
 
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -31,6 +32,8 @@ class ContractConsistencyTest(unittest.TestCase):
             shutil.copytree(ROOT / name, root / name)
         (root / "scripts").mkdir()
         shutil.copy2(ROOT / "scripts/read_protocol_phase", root / "scripts/read_protocol_phase")
+        # run_agy carries the agy model pins the checker shape-validates.
+        shutil.copy2(ROOT / "scripts/run_agy", root / "scripts/run_agy")
         shutil.copy2(ROOT / "CONTRACTS.md", root / "CONTRACTS.md")
         shutil.copy2(ROOT / "README.md", root / "README.md")
 
@@ -161,6 +164,40 @@ class ContractConsistencyTest(unittest.TestCase):
 
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(invariant, result.stderr)
+
+    def test_agy_model_pin_drift_is_reported(self):
+        """A slug-shaped or duplicated agy pin must fail the checker, not a review.
+
+        The pins are read out of run_agy rather than written here, so bumping a model does not
+        need a test edit; what is fixed is the form both pins must keep.
+        """
+        source = (ROOT / "scripts/run_agy").read_text(encoding="utf-8")
+        pins = dict(re.findall(r'(?m)^(PRIMARY_MODEL|FALLBACK_MODEL)="([^"]*)"$', source))
+        self.assertEqual(set(pins), {"PRIMARY_MODEL", "FALLBACK_MODEL"})
+        # A slug of the pinned model, and a fallback that repeats the primary: the two ways a pin
+        # stops selecting the intended second opinion without any syntax error.
+        slug = pins["PRIMARY_MODEL"].lower().replace(" (", "-").replace(")", "").replace(" ", "-")
+        cases = (
+            ("PRIMARY_MODEL", pins["PRIMARY_MODEL"], slug),
+            ("FALLBACK_MODEL", pins["FALLBACK_MODEL"], pins["PRIMARY_MODEL"]),
+        )
+
+        for pin_name, old, new in cases:
+            with self.subTest(pin=pin_name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.copy_contract_tree(root)
+                target = root / "scripts/run_agy"
+                target.write_text(
+                    target.read_text(encoding="utf-8").replace(
+                        f'{pin_name}="{old}"', f'{pin_name}="{new}"', 1
+                    ),
+                    encoding="utf-8",
+                )
+
+                result = self.run_check(root)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("agy-model-pin-form", result.stderr)
 
     def test_round0_retry_contract_drift_is_reported(self):
         with tempfile.TemporaryDirectory() as directory:
