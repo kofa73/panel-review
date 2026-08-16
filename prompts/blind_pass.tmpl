@@ -21,7 +21,9 @@ overwrite each other:
 {{SCRATCH}}
 
 That tree is git-ignored and deleted when the review ends. Do NOT read or depend
-on sibling subdirectories there.
+on sibling subdirectories there. If a script of yours `cd`s into a directory, never
+delete that directory while still inside it: the shell is left with no working
+directory and the whole command reports failure even though your work succeeded.
 
 Hard rule: never modify, create, or delete any version-controlled (git-tracked)
 file, or anything else under .panel-review/ outside your own scratch subdir.

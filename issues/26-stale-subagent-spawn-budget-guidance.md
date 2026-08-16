@@ -57,3 +57,11 @@ The fail-closed *behavior* is right and stays. Only the trigger it names is wron
   cannot read.
 - Do not remove the fail-closed guidance; only re-aim it.
 - Do not fold in the depth-limit documentation — that is issue 22.
+
+## Comments
+
+Re-raised independently by all three seats at Round 0 of panel review
+`panel-20260816-080558-5ab680af` (2026-08-16). The panel enumerated the five instruction sites that
+must change together: `README.md:264`, `skills/start/SKILL.md:165`, `skills/resume/SKILL.md:134`,
+`skills/continue/SKILL.md:96`, `skills/panel-review-for-agent/SKILL.md:126` — plus the three
+`scripts/check_contracts` assertions (lines 181, 225, 284) that pin the wording.

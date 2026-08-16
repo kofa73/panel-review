@@ -149,3 +149,12 @@ forbids it.
 - Do not add any guard that assumes a tampering seat.
 - Do not attempt to detect cross-seat copying at parse time. The referee already caught this one by
   byte-identity comparison, and that judgment stays with the referee.
+
+## Comments
+
+Re-raised independently by all three seats at Round 0 of panel review
+`panel-20260816-080558-5ab680af` (2026-08-16), which rated it the run's most severe finding. The
+panel added one point not in the problem statement above: `prompts/blind_pass.tmpl:23`'s "Do NOT read
+or depend on sibling subdirectories there" cannot stop a search *tool* from returning a sibling's
+file as an unrequested hit, and repository-wide search is exactly what the review method encourages —
+so the prose countermeasure does not address the observed failure mode at all.
