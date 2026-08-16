@@ -70,9 +70,26 @@ if [ "$1" = login ] && [ "$2" = status ]; then
 fi
 EOF
 chmod +x "$mockbin/codex"
-pf="$(CODEX_LOG="$TMP/codex.log" PATH="$mockbin:$PATH" "$SC/preflight" 2>&1)"; assert_exit "preflight succeeds with mocked Codex" 0 "$?"
+# CLAUDE_CODE_FORK_SUBAGENT=0 is a hard prerequisite (issue 25), and the suite must be
+# runnable from any session, so set it explicitly here rather than inheriting it.
+pf="$(CLAUDE_CODE_FORK_SUBAGENT=0 CODEX_LOG="$TMP/codex.log" PATH="$mockbin:$PATH" "$SC/preflight" 2>&1)"; assert_exit "preflight succeeds with mocked Codex" 0 "$?"
 case "$pf" in *"WARNING: run 'codex login'"*) bad "logged-in Codex does not warn";; *) ok "logged-in Codex does not warn";; esac
 assert_eq "preflight calls codex login status" 'login status' "$(cat "$TMP/codex.log")"
+
+section "preflight — fork mode gate (issue 25)"
+# Only the literal "0" counts as off: unset means the harness default, which is ON in
+# interactive sessions from Claude Code 2.1.232, so the gate must refuse unset too.
+for bad_value in "" "1" "false" "off"; do
+  if [ -z "$bad_value" ]; then
+    out="$(env -u CLAUDE_CODE_FORK_SUBAGENT PATH="$mockbin:$PATH" CODEX_LOG="$TMP/codex2.log" "$SC/preflight" 2>&1)"; rc=$?
+    label="unset"
+  else
+    out="$(CLAUDE_CODE_FORK_SUBAGENT="$bad_value" PATH="$mockbin:$PATH" CODEX_LOG="$TMP/codex2.log" "$SC/preflight" 2>&1)"; rc=$?
+    label="$bad_value"
+  fi
+  assert_exit "preflight blocks with CLAUDE_CODE_FORK_SUBAGENT=$label" 1 "$rc"
+  case "$out" in *"CLAUDE_CODE_FORK_SUBAGENT=0 claude"*) ok "block names the remedy ($label)";; *) bad "block names the remedy ($label)";; esac
+done
 
 section "protocol and template contracts"
 protocol="$root/skills/panel-review-for-agent/references/protocol.md"

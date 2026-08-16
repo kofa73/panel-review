@@ -20,6 +20,29 @@ hard_fail=0
 command -v jq    >/dev/null 2>&1 || { echo "ERROR: install jq"; hard_fail=1; }
 command -v git   >/dev/null 2>&1 || { echo "ERROR: install git"; hard_fail=1; }
 
+# Fork mode must be OFF. It removes the Agent tool's run_in_background parameter and
+# schedules EVERY subagent in the background, so the referee's two seat-dispatch Agent
+# calls stop blocking: the referee is woken once PER SEAT and must decide, by
+# instruction-following alone, not to collect on a partial wake. Measured on 2.1.233
+# (4 trials, issues/25-fork-mode-backgrounds-seat-agents.md): none collected early, but
+# 1 of 4 abandoned yielding and improvised a polling wait — the ~130-turn blow-up
+# issue 15 removed. Blocking dispatch has no such variance, which is why this is a hard
+# failure rather than a warning.
+#
+# Only the literal "0" is detectable as off: UNSET means "harness default", which is ON
+# in interactive sessions from Claude Code 2.1.232. So require the explicit value and
+# refuse everything else, including unset. This also refuses a `claude -p` session, where
+# the default is already off — accepted, because the variable is harmless to set there and
+# an undocumented entrypoint sniff would be a worse dependency.
+if [ "${CLAUDE_CODE_FORK_SUBAGENT:-}" != "0" ]; then
+  echo "ERROR: fork mode may be on — seat dispatch would not block, so the referee could"
+  echo "       read seat output before the seats have written it. Start a NEW session with:"
+  echo "           CLAUDE_CODE_FORK_SUBAGENT=0 claude"
+  echo "       Do not export it globally (it disables forks for all your work); see README"
+  echo "       \"Requirements\" for the recommended alias/wrapper."
+  hard_fail=1
+fi
+
 # At least one peer seat must be present.
 have_codex=no;  command -v codex >/dev/null 2>&1 && have_codex=yes
 have_gemini=no; command -v agy   >/dev/null 2>&1 && have_gemini=yes

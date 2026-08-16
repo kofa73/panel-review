@@ -2,11 +2,22 @@
 
 Priority: 25
 
-Status: Pending
+Status: Completed
 
 Source: Claude Code documentation review (2.1.222 → 2.1.233), 2026-08-15
 
-Triage: ready-for-human
+Triage: ready-for-agent
+
+## Resolution (2026-08-16)
+
+Fix **A**, enforced as a **hard block** rather than an advisory:
+
+- `scripts/preflight` refuses to run unless `CLAUDE_CODE_FORK_SUBAGENT` is literally `0`.
+- README gains a "Start the session with fork mode off" section with the reason and an
+  alias/wrapper recipe, since the variable should **not** be exported globally.
+
+The measurements below narrowed the defect from the one originally predicted. See
+"Measured: does a backgrounded referee actually collect early?".
 
 ## Problem
 
@@ -26,10 +37,17 @@ Panel-review's entire seat-dispatch design depends on foreground Agent calls tha
 
 On a session with fork mode on, that mechanism is gone: the instruction to pass
 `run_in_background: false` names a parameter that no longer exists, and the seat Agents return
-through completion notifications in later turns instead. The referee can therefore reach its
-collection step before any seat has written its raw file, which the pipeline reads as a
-**down-seat pass** — a false degraded round, a wrong `fully_vetted=false` label, and in the worst
-case a verdict synthesized from no seat output at all.
+through completion notifications in later turns instead. The referee is then woken **once per seat**
+and must decide, by instruction-following alone, not to collect on a partial wake. Collecting early
+would read seat raw files that do not exist yet, which the pipeline treats as a **down-seat pass** —
+a false degraded round, a wrong `fully_vetted=false` label, and in the worst case a verdict
+synthesized from no seat output at all.
+
+**This paragraph originally asserted that the referee "can therefore reach its collection step
+before any seat has written its raw file", implying the failure is the normal outcome. That was
+inference, and measurement did not support it** — see "Measured: does a backgrounded referee
+actually collect early?" below. The real defect is that the wait stops being a property of the
+mechanism and becomes a per-round behaviour of the model.
 
 ## What fork mode does and does not change
 
@@ -113,6 +131,80 @@ background children** — the first, partial wake stayed internal.
 Caveats: n=1 per variant, both on Sonnet, and the wake count is self-reported (the `WAKE_LOG`
 timestamps corroborate it independently).
 
+## Measured: does a backgrounded referee actually collect early?
+
+Four trials on this machine (Claude Code 2.1.233, interactive, fork mode at its default; parents and
+children all `general-purpose` on Opus 5). Each parent received the protocol's own dispatch wording
+verbatim — *"Issue every non-null returned Agent call together in one assistant response, then take
+no turns until they have returned"* (`protocol.md:259`) — then dispatched a **fast seat (~25 s)** and
+a **slow seat (~110 s)**, each of which wrote its raw file only on completion. The collect step was a
+stand-in for `round collect-round0 --final`: it reads the filesystem and reports a still-running seat
+as status 4, so an early call **succeeds with a plausible wrong answer**, exactly as in production.
+The instrument was the collect script's own log — every invocation recorded which raw files existed —
+so nothing depended on the parent's self-report.
+
+| Outcome | Trials |
+| :--- | :--- |
+| Collected early (the predicted failure) | **0 / 4** |
+| Woken partially, correctly ended the turn without collecting | **3 / 4** |
+| Abandoned yielding and improvised a blocking wait | **1 / 4** |
+
+The partial wakes were real: t1, t3 and t4 each ended their turn **twice** — once on the fast seat's
+wake, once more on nothing — before calling collect, and every collect call in all four trials logged
+both seats present.
+
+The failing trial is the informative one. t2 never yielded. It called `ToolSearch` hunting for a wait
+primitive, **read the experiment's own scripts to discover the seat runtimes**, then blocked ~90 s in
+a shell `until` loop before collecting — inventing a foreground barrier to replace the one fork mode
+removed. Right answer, forbidden method: that is the polling issue 15 eliminated after a real run
+spent ~130 full-context turns waiting. t3 also reached for `ToolSearch` before settling, so **2 of 4
+went looking for a blocking primitive that fork mode had taken away**.
+
+In production that improvisation degrades further: the referee cannot read seat runtimes off disk,
+and the wait is ~43 minutes rather than 110 seconds.
+
+**Conclusion.** Background dispatch did not corrupt a single result, so "panel-review breaks under
+fork mode" is too strong. What it does is replace a mechanical guarantee with a per-round behavioural
+one, whose observed variance includes a mode the design explicitly forbids. That is the ground for
+requiring fork mode off — not the predicted false-degraded round.
+
+Caveats: n=4; all Opus 5; a short, crisp protocol rather than the referee's much larger one; and
+110-second seats rather than a ~43-minute barrier.
+
+## Measured: `preflight` cannot detect fork mode, only its absence
+
+`CLAUDE_CODE_FORK_SUBAGENT` is **unset** in the Bash environment of an interactive 2.1.233 session in
+which fork mode is demonstrably on — because on 2.1.232+ "on" *is* the interactive default. Unset
+therefore means "harness default", which is on interactively and off under `-p`.
+
+Only the literal value `0` is positively detectable. So the gate must be a **positive** check —
+require `0`, refuse everything else including unset — which is what `scripts/preflight` now does. The
+cost is that a `claude -p` session, where fork mode is already off, is also refused unless it sets the
+variable; that is accepted, since setting it there is harmless and sniffing an undocumented entrypoint
+variable would be a worse dependency.
+
+## Recorded, not implemented: fail-closed collection
+
+A third option would give the same mechanical guarantee without the environment variable: make
+`round collect-*  --final` **refuse** (nonzero exit) while any dispatched seat is still live, so an
+early collect returns an error instead of a plausible answer.
+
+Half of it is already free. `cmd_collect_round0` emits `barrier_rc`, read from
+`await.round0.sentinel` (`scripts/round:500`), and that sentinel is written only after `await_seats`
+has fully exited — so `barrier_rc == null` positively means "CLI seats still running", not "down".
+
+The other half does not exist. For the Claude seat, `round0.attempts.json` records that the seat was
+**dispatched** (`scripts/round:405`), and `write_seat_raw` performs exactly one write — the final raw
+(`scripts/write_seat_raw:104`). Nothing marks the seat as *live*, so "raw absent" collapses "still
+running" and "failed without writing". A `SubagentStart` hook matched on
+`panel-review:panel-review-claude-seat`, paired with the existing `SubagentStop` hook, would create
+that signal; `hooks/enforce_agent_status_stub` already derives a run ID from the agent transcript, so
+the marker could be run-scoped the same way. Two unknowns first: whether `SubagentStop` fires when a
+subagent dies on an API error (if not, the guard needs its own bound), and whether `SubagentStart`
+fires early enough to close the race with a fast seat failure.
+
+Not implemented: it is a new component with a new unknown, and fix A costs nothing new.
+
 ## Candidate fixes
 
 **A. Require fork mode off for panel-review runs.** `CLAUDE_CODE_FORK_SUBAGENT=0` turns fork mode
@@ -159,11 +251,68 @@ the fork-mode override.
 
 ## Verification
 
-- With `CLAUDE_CODE_FORK_SUBAGENT=0`, confirm the Agent tool schema again carries
-  `run_in_background`, and that a real review keeps the referee blocked until both branches return
-  (no referee turns between dispatch and the combined return in the transcript).
-- With fork mode on (the 2.1.232+ default), reproduce the failure once and record what the referee
-  actually did, so the failure mode is documented rather than inferred.
+- **Done** — with fork mode on, four trials recorded what a backgrounded referee actually does; the
+  predicted early collect did not occur, and the improvised-polling mode did. See "Measured: does a
+  backgrounded referee actually collect early?".
+- **Done** — `scripts/preflight` blocks with `CLAUDE_CODE_FORK_SUBAGENT` unset and exits 0 with it
+  set to `0`.
+- **Done (2026-08-16)** — in a session started with `CLAUDE_CODE_FORK_SUBAGENT=0`, an Agent call
+  passing `run_in_background: false` was **accepted** (so the parameter exists again) and was
+  **genuinely synchronous**: the tool result carried the child's own output line rather than a
+  "launched in background" stub, and `duration_ms=26549` for a child that burns 20 s, so the call
+  blocked for the child's whole run. Fix A restores blocking dispatch as intended.
+
+  Procedure, to repeat after a Claude Code upgrade — test the behaviour, not just the schema:
+
+  ```bash
+  CLAUDE_CODE_FORK_SUBAGENT=0 claude
+  ```
+
+  Then prompt: *spawn a `general-purpose` subagent with `run_in_background: false` whose entire task
+  is to run one command that sleeps ~20 s and prints a token (`tests/`-independent; the throwaway
+  `seat.sh` used for the trials above is one such command), and report whether the Agent tool result
+  contained the child's output directly or a "launched in background" message.* Three readings: a
+  missing parameter fails input validation; the child's line in the tool result means foreground
+  dispatch is back; a "launched" stub means the variable did not take effect.
+
+- **Partly done** — whether an `env` entry in `settings.json` reaches a Bash tool call's environment,
+  and whether that is enough to satisfy `preflight` honestly.
+
+  **A. Does it propagate at all? — Yes (2026-08-16).** With
+  `{"env": {"PANEL_REVIEW_ENV_PROBE": "reached"}}` in `~/.claude/settings.json`, a new session's Bash
+  tool call printed `reached`, and the variable was **exported**
+  (`declare -x PANEL_REVIEW_ENV_PROBE="reached"`). So `preflight`, which reads its own environment,
+  *will* see a value set this way.
+
+  That makes step B necessary rather than optional: propagation to the child shell says nothing about
+  whether Claude Code applied the same value to its **own** fork-mode configuration.
+
+  **B. Does a green `preflight` then imply fork mode is really off? — Yes (2026-08-16).** With
+  `{"env": {"CLAUDE_CODE_FORK_SUBAGENT": "0"}}` in `~/.claude/settings.json` and a new session started
+  **without** any shell prefix: `preflight` exited 0, and in the same session an Agent call passing
+  `run_in_background: false` was accepted and blocked — tool `duration_ms=25138` for a 20 s child, no
+  completion notification, corroborated by a 33.4 s wall-clock span measured around the call. So
+  Claude Code applies `settings.env` to its own fork-mode resolution, not merely to child processes,
+  and the gate cannot be satisfied while fork mode is still on.
+
+  **Consequence for the docs:** the measurement matters — it proves the gate cannot go green over a
+  broken wait — but the route is **not documented as an option**. `settings.json` scopes to a
+  *location*, either the account (`~/.claude/settings.json`) or a whole repository (project
+  `.claude/settings.json`), never to the activity. Panel-review runs occasionally; disabling forks and
+  `/subtask` for every ordinary session in that location is the wrong trade. README offers only the
+  alias/wrapper, which scopes to the review session itself, and says in one line why the settings
+  route is rejected.
+
+  **Superseded procedure**, kept because it must be re-run after a Claude Code upgrade that changes
+  startup ordering: set
+  `{"env": {"CLAUDE_CODE_FORK_SUBAGENT": "0"}}`, start a new session, and check **both**
+  `scripts/preflight` *and* the behavioural test from the item above.
+
+  The failure to look for is **`preflight` passing while fork mode is still on** — possible if Claude
+  Code applies `settings.env` to child processes but resolves its own fork-mode configuration before
+  those values land. That would be a green gate over a broken wait, which is worse than no gate. If
+  it occurs, README must keep the launch-only instruction and state explicitly that the
+  `settings.json` route does not work.
 - `scripts/check_contracts --root .` and `./tests/run_tests.sh` pass.
 
 ## Non-goals

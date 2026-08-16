@@ -12,6 +12,47 @@ Built on the original version: https://github.com/jcputney/agent-peer-review.
 > versions may misbehave. The project is **work-in-progress**: as both this code and Claude Code
 > evolve, you may hit rough edges. Update Claude Code (`claude update`) before reporting an issue.
 
+### Start the session with fork mode off
+
+A panel review **must** run in a session started with **`CLAUDE_CODE_FORK_SUBAGENT=0`**:
+
+```bash
+CLAUDE_CODE_FORK_SUBAGENT=0 claude
+```
+
+`preflight` **refuses to run a review** without it, so this is a hard requirement, not advice. It
+cannot be fixed from inside a running session — the setting is read at session start, so you have to
+start a new one.
+
+**Why.** Claude Code turns *fork mode* on by default in interactive sessions (2.1.232+). Fork mode
+schedules **every** subagent in the background and removes the Agent tool's `run_in_background`
+parameter. The referee dispatches the Claude seat and the CLI barrier as two **blocking** Agent calls
+and reads their output only after both return; backgrounded, it is instead woken once per seat and
+has to decide, by instruction-following alone, not to collect on a partial wake. Turning fork mode
+off restores the blocking dispatch — and, as a bonus, removes the `fork` subagent type from the
+referee's tool schema, so the never-fork rule that protects seat blindness becomes structural rather
+than a written instruction. Measurements: `issues/25-fork-mode-backgrounds-seat-agents.md`.
+
+**Don't export it globally.** Putting `CLAUDE_CODE_FORK_SUBAGENT=0` in `~/.bashrc` turns forks off
+for *all* your Claude Code work, including sessions that have nothing to do with panel-review and
+benefit from `/subtask`. Scope it to review sessions instead — an alias:
+
+```bash
+alias claude-review='CLAUDE_CODE_FORK_SUBAGENT=0 claude'
+```
+
+or a small wrapper on your `PATH`, `claude-review`:
+
+```bash
+#!/usr/bin/env bash
+exec env CLAUDE_CODE_FORK_SUBAGENT=0 claude "$@"
+```
+
+A `settings.json` `env` entry does work, but don't use it: it scopes to a *location* — your whole
+account, or an entire repository — not to the activity. Every ordinary session there would lose
+forks and `/subtask`, for the sake of the occasional review. Start the review session explicitly
+instead.
+
 ---
 
 ## What it is

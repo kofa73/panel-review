@@ -42,6 +42,12 @@ skills/agents are Markdown. `python3`, `jq`, `git` are required.
   - `.claude-plugin/marketplace.json` lets the repo double as its own local marketplace: `/plugin
     marketplace add /path` then `/plugin install panel-review@panel-review` (installs into
     `~/.claude/plugins/cache`, independent of `install.sh`'s target — keep both working).
+- **Session requirement:** a review only runs in a session started with
+  **`CLAUDE_CODE_FORK_SUBAGENT=0 claude`**. `preflight` hard-blocks otherwise, and it cannot be fixed
+  from inside a running session. Fork mode (on by default interactively since 2.1.232) backgrounds
+  every subagent and removes `run_in_background`, so the referee's blocking seat dispatch stops
+  blocking. Rationale and measurements: README "Start the session with fork mode off" and
+  `issues/25-fork-mode-backgrounds-seat-agents.md`.
 - **Run a review** (from inside the repo under review, after install):
   `panel-review:start --base main` | `--uncommitted` | `--commit <SHA>` | `"<question>"`. Other verbs:
   `:status` (read-only), `:resume`, `:continue [unresolved|contested]`, `:result <ID>` (read-only),
@@ -152,8 +158,11 @@ workdir holds exactly one review; concurrent runs against the same workdir are u
   `--configured` = the current `preflight` panel;
   `--engaged` = whoever returned a parseable block *this pass* (`parse_block` exit 0). Every configured
   seat is dispatched in every debate round; a seat that fails or times out one round is retried the
-  next. The only persistent effect of a down-round is the informational `fully_vetted=false` label
-  (never re-flipped). "Down" means down *for that pass*, not excluded from the run.
+  next. The only persistent effect of a down-round is the informational `fully_vetted=false` label,
+  and even that is not permanent: it flips to `true` in the round where the **last** configured seat
+  finally evaluates the issue, including a seat that was down at Round 0 and re-engages later — it
+  only never *reverts* (`protocol.md:653`). "Down" means down *for that pass*, not excluded from the
+  run.
 - **CLI salvage is referee-owned.** `run_seat` dispatches and parses but never repairs or re-dispatches
   a seat. On parse status 4 (missing block) or 5 (malformed block), the referee may salvage a genuine
   completed CLI review without changing its conclusions. Debate salvage re-emits both required blocks
