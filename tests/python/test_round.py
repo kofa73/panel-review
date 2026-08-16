@@ -180,6 +180,19 @@ class RoundTest(unittest.TestCase):
         self.assertIn(hashlib.sha256(self.profile).hexdigest(), common)
         self.assertNotIn("Probe test-specific invariants.", common)
 
+    def test_prepare_round0_anchors_seat_scratch_outside_the_workdir(self):
+        # issue 24: scratch inside the repository under review turned any seat's repo-wide search
+        # into a blindness leak — the search returned a sibling seat's raw output as a hit.
+        prepared = self.prepare_round0()
+
+        scratch = self.run_dir / "work"
+        self.assertTrue(scratch.is_dir())
+        self.assertEqual(
+            (self.run_dir / "scratch.txt").read_text(encoding="utf-8"), f"{scratch}\n"
+        )
+        self.assertIn(str(scratch), Path(prepared["prompt"]).read_text(encoding="utf-8"))
+        self.assertEqual(list(self.workdir.glob(".panel-review/*/work")), [])
+
     def test_prepare_round0_renders_the_configured_panel_size(self):
         prepared = self.prepare_round0("claude", "codex")
         prompt = Path(prepared["prompt"]).read_text(encoding="utf-8")

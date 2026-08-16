@@ -101,7 +101,11 @@ round limit. Unanimity-or-human: no majority vote, no referee fact-checking insi
 **Persistence model:** `/tmp/<ID>/` is the **single source of truth** (manifest, index, sweeps, raw
 seat output, origins, audit). Cards under `<workdir>/.panel-review/<ID>/` are a regenerable,
 git-excluded cache (kept so a seat in a constrained/read-only workspace can still read them); seats
-write throwaway scratch under `.panel-review/<ID>/work/`. The per-workdir **marker** is the
+write throwaway scratch under `/tmp/<ID>/work/<seat-token>/`, **outside** the repository under review
+— inside it, one seat's repo-wide search returned another seat's raw output as an unrequested hit and
+broke blindness without any seat disobeying anything (`issues/24-seat-scratch-outside-workdir.md`).
+That move removes the accidental hit only; it is not confinement, since `/tmp/<ID>/` stays readable by
+every seat. The per-workdir **marker** is the
 `.panel-review/<ID>/` dir itself; `init_run` writes `/tmp` state first and the marker **last**, so a
 marker always implies valid state. The verdict is also saved to `/tmp/<ID>.md` — a **sibling** of
 `/tmp/<ID>/`, outside it so cleanup/discard never delete it. **Single-user, single-session:** one

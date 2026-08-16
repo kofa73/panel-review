@@ -110,7 +110,8 @@ either failure so the main conversation can report it and a later `panel-review:
 - ✅ Code-under-review integrity is enforced by **`repo_guard`**, not by per-seat sandboxes: snapshot
   the tracked tree after `resolve_diff`, `verify --restore` after every seat pass (Round 0 + each
   debate round), and surface any reverted drift in Process notes. Seats write only to the
-  `.panel-review/<id>/work` scratch subtree, except that the Claude seat must pass its response to
+  `/tmp/<id>/work` scratch subtree (outside the repository under review, so no seat's repo-wide
+  search returns another seat's work), except that the Claude seat must pass its response to
   `write_seat_raw`, which can atomically write only the derived `/tmp/<id>/raw/` destination.
 - ✅ Gemini seat uses a **Gemini** model (run_agy's pin), never agy's Claude/GPT-OSS entries.
 - ✅ `index.json` is written **only** through the `index`/`sweep` scripts; cards **only** through

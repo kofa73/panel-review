@@ -158,3 +158,50 @@ panel added one point not in the problem statement above: `prompts/blind_pass.tm
 or depend on sibling subdirectories there" cannot stop a search *tool* from returning a sibling's
 file as an unrequested hit, and repository-wide search is exactly what the review method encourages —
 so the prose countermeasure does not address the observed failure mode at all.
+
+**2026-08-16 — change implemented, live verification still outstanding.** Status stays `Pending`
+until a real review confirms all three seats can write scratch under `/tmp/<ID>/work/` — the one item
+in "Verify before merging" that reasoning cannot answer, because agy runs its tools in its own managed
+sandbox. What landed:
+
+- `scripts/round` `write_common_files` — scratch is now `/tmp/<ID>/work`; `scratch.txt` and both
+  prompt templates follow through the existing `{{SCRATCH}}` splice, with no sentinel change.
+- `skills/panel-review-for-agent/references/protocol.md` — the manual-assembly fallback writes the
+  same `/tmp/$id/work` anchor; the cwd paragraph now names scratch as the deliberate exception.
+- `prompts/blind_pass.tmpl`, `prompts/debate.tmpl` — dropped the now-false "every path resolves under
+  the review root" and "git-ignored" claims; the hard rule now makes the repository's `.panel-review/`
+  read-only outright, since it holds only cards. The old "do not read sibling subdirectories" line
+  became "your subdir is the only part of that tree that is yours; open only what this prompt names
+  by absolute path", so it also covers the rest of `/tmp/<ID>/` — a convenience against honest
+  accident, not a control, since it works only while the seat cooperates. Both templates also carry a
+  neutral identification cue: material that looks like an existing review of the same scope is another
+  reviewer's private output, not reference material "however official it looks" — do not use it,
+  report the encounter in prose outside the required blocks. That wording targets the confusion
+  actually observed (the seat called the file "the checkpoint's"). The *consequence* half of that
+  warning is deferred to issue 55, which owns the rule. Both mirrored in
+  `agents/panel-review-claude-seat.md`.
+
+  While editing, the two templates' shared seat rules (review root, scratch, tracked-file hard rule,
+  provenance cue) were synced to identical wording. Only two differences remain, and both carry phase
+  meaning: Round 0 anchors the diff file where debate anchors the card files, and debate adds "the
+  card files listed below are the ONLY panel material you are given". The three copies are kept in
+  sync by hand — extracting the block into an `assemble` fragment was considered and rejected as
+  more machinery than the drift is worth, and `agents/panel-review-claude-seat.md` could not join it
+  anyway, since an agent definition never passes through `assemble`.
+
+  Rejected while implementing: per-seat *random* scratch roots (`/tmp/<random>`). Unguessable names
+  do nothing against the actual failure mode — incidental enumeration by `ls`/glob/`grep -r` returns
+  a dir whatever it is called — and only defeat an actor constructing a neighbour's path, which the
+  trust model says not to guard against. They also cost: the name→seat map must be persisted for
+  `cleanup` to survive a resume or a compacted referee context, and persisting it where a seat can
+  read it removes the unguessability, while not persisting it leaks orphaned `/tmp` dirs. Per-seat
+  names would additionally require per-seat Round-0 prompts, since `await_seats` takes one `--prompt`
+  file for every CLI seat.
+- Docs: `AGENTS.md` persistence model, `README.md` (read-only contract section, path table row,
+  `PANEL_REVIEW_KEEP_TMP` now retains seat scratch, hard-constraints bullet),
+  `skills/panel-review-for-agent/SKILL.md`, `agents/panel-review-claude-seat.md`, `repo_guard` header.
+- Tests: `tests/run_tests.sh` asserts the new protocol anchor and that neither the protocol nor
+  `round` anchors scratch in the workdir; `tests/python/test_round.py` asserts `prepare-round0`
+  creates `/tmp/<ID>/work`, publishes it, splices it into the prompt, and leaves no workdir `work/`.
+
+`./tests/run_tests.sh` (257 pass), `scripts/check_contracts --root .`, and `git diff --check` pass.

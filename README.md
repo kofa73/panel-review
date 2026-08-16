@@ -105,8 +105,13 @@ panel-review does not install or manage tilth.
 ### Read-only review contract and tracked-tree restoration
 
 The seats may now **write throwaway scratch scripts** (to check arithmetic, parse, enumerate
-cases) under a git-ignored `.panel-review/<ID>/work/` subtree, and Codex runs with its sandbox
-bypassed so its MCP/tilth calls work. Every seat is instructed not to modify version-controlled code,
+cases) under a `/tmp/<ID>/work/` subtree, and Codex runs with its sandbox
+bypassed so its MCP/tilth calls work. That scratch tree deliberately sits **outside the repository
+under review**: when it lived inside, a seat running an ordinary repository-wide search got another
+seat's raw output back as an unrequested search hit, which broke blindness through a correct action
+(no seat had to disobey anything). Moving it removes that accidental hit; it is not confinement,
+because `/tmp/<ID>/` remains readable by every seat by design.
+Every seat is instructed not to modify version-controlled code,
 but the checkout is not preventively read-only: the referee snapshots the tracked tree at the start
 (`scripts/repo_guard`) and, after every seat pass, detects and reverts honest tracked-file drift and
 flags it loudly in the verdict's Process notes. This restores tracked repository content; it does not
@@ -498,6 +503,7 @@ derived, regenerable cache; state is never inferred from them.
 |------|-------|
 | `.panel-review/<ID>/issue-<id>.md` | the blind cards (kept in the repo so any seat running in a constrained/sandboxed workspace — e.g. a seat under an externally-imposed read-only mount — can still read them; git-excluded and kept out of every scope so they never contaminate an `--uncommitted` review) |
 | `.panel-review/<ID>/` (the dir) | the per-worktree marker / lock — its name carries `<ID>` |
+| `/tmp/<ID>/work/<seat-token>/` | seat scratch — each seat's own throwaway scripts and temp files, in a subdir it names itself. Deliberately outside the repository under review, so no seat's repository-wide search can return another seat's work as a hit |
 | `/tmp/<ID>/manifest.json` | scope, limits, diff hash, phase, and review-profile source path/size/SHA-256 |
 | `/tmp/<ID>/review-profile.md` | exact saved profile bytes used by every seat and every phase; the original source path is provenance only |
 | `/tmp/<ID>/round0.panel.json` | the configured panel frozen for the blind pass; current preflight filters which of these seats may be retried but never changes this set **Read back on resume and verdict synthesis** (referee only) |
@@ -515,7 +521,7 @@ both the cards and `/tmp/<ID>/`; an interruption leaves them for `panel-review:r
 `panel-review:status` to inspect a saved session and `panel-review:discard` to remove it.
 
 Setting **`PANEL_REVIEW_KEEP_TMP=true`** makes both `cleanup` and `discard` keep `/tmp/<ID>/` (the
-manifest, index, sweeps, raw seat output, and audit trail) for post-mortem inspection while still
+manifest, index, sweeps, raw seat output, audit trail, and the seats' scratch) for post-mortem inspection while still
 removing the workspace state (the cards, the marker, and the `.git/info/exclude` line). The durable
 verdict at `/tmp/<ID>.md` survives regardless.
 
@@ -617,7 +623,7 @@ discipline.
 - Seats must not modify version-controlled code. `scripts/repo_guard` snapshots the tracked tree and
   detects and auto-reverts honest tracked-file drift after every seat pass. This restoration is not
   confinement and does not protect untracked files or paths outside the repository. Intended seat
-  writes stay under `.panel-review/<ID>/work/`, except that the Claude seat passes its complete
+  writes stay under `/tmp/<ID>/work/` (outside the repository under review), except that the Claude seat passes its complete
   response to `write_seat_raw`, which can write only the derived `/tmp/<ID>/raw/` path.
 - `index.json` is written **only** through the `index` / `sweep` scripts; cards **only** through
   `project_card` / `regen_cards`. Never hand-write state files.

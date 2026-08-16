@@ -69,7 +69,8 @@ Seat wrappers take the prompt on stdin and print the **final response only**; no
 CLI missing → 127) means that seat is down → **degrade, never abort.** `parse_block` exit **4**
 means the seat returned no block at all (down / malfunctioned), distinct from an empty-but-present
 block (ran, found nothing). **Run everything from cwd = `workdir` (repo root)** so seat
-working-tree reads, scratch paths, and `repo_guard` all resolve against the same tree.
+working-tree reads and `repo_guard` resolve against the same tree. (Seat scratch is the exception:
+it is an absolute path under `/tmp/<id>/work`, deliberately outside every repository the seats search.)
 
 **CLI seats are long-running.** Run their prepared command only through the
 `panel-review-cli-barrier` Agent; never run or background `await_seats` yourself. Pass the Agent the
@@ -416,9 +417,11 @@ the common one-batch shape.
    # /tmp/$id/instructions.txt was resolved in Round 0 step 2; on a resume that began at the
    # debate loop, regenerate it the same way if absent before assembling. Same for the scratch
    # dir + its sentinel file (Round 0 step 3) — recreate both if a resume skipped Round 0.
-   mkdir -p "$workdir/.panel-review/$id/work"
+   mkdir -p "/tmp/$id/work"
    # Absolute scratch + review root (recreate if a resume skipped Round 0), same as Round 0 step 3.
-   [ -f /tmp/$id/scratch.txt ] || printf '%s\n' "$workdir/.panel-review/$id/work" > /tmp/$id/scratch.txt
+   # Scratch stays OUTSIDE the repository under review so a seat's repo-wide search cannot return a
+   # sibling seat's work as a hit.
+   [ -f /tmp/$id/scratch.txt ] || printf '%s\n' "/tmp/$id/work" > /tmp/$id/scratch.txt
    [ -f /tmp/$id/workdir.txt ] || printf '%s\n' "$workdir" > /tmp/$id/workdir.txt
    printf '%s stances\n' "$SC/check_draft" > /tmp/$id/check.stances.txt
    "$SC/seat_contract.py" render debate --panel-size "$panel_size" \

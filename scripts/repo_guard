@@ -6,8 +6,9 @@
 # user). Instead of trusting each seat's own sandbox to stay read-only, we take a
 # snapshot of the TRACKED working tree at the start of the review and, after every
 # seat pass, detect and auto-revert any tracked-file drift — then flag it loudly in
-# the verdict's Process notes. Untracked scratch (the seats' own work dirs, the
-# .panel-review/ card cache) is deliberately left alone.
+# the verdict's Process notes. Untracked files (the .panel-review/ card cache, and
+# any stray file a seat drops in the workdir) are deliberately left alone. Seat
+# scratch itself lives outside the repository, under /tmp/<id>/work/.
 #
 # Usage:
 #   repo_guard snapshot --id <id> --workdir <dir>

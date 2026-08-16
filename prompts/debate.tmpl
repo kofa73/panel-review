@@ -10,11 +10,13 @@ This review is anchored at this absolute repository root:
 
 {{WORKDIR}}
 
-Every path below (the card files, scratch dir, any file you read) resolves under it.
+Every file of the code under review resolves under it, and so does every card file listed
+below. Your scratch dir is given below as an absolute path of its own, outside this root —
+use it exactly as written and do not re-root it here.
 When you invoke ANY repository tool or command (search, read, diff, shell), set its
 working-directory / `cwd` parameter to that path, so the tool operates on the code under
-review and not on some sandbox default. An absolute path in this prompt is not enough on its
-own — pass the `cwd` explicitly whenever a tool accepts one.
+review and not on some sandbox default. An absolute path in this prompt is not enough on
+its own — pass the `cwd` explicitly whenever a tool accepts one.
 
 ## Tools & scratch work
 Prefer a throwaway script/temp file over doing deterministic work in your head
@@ -25,14 +27,24 @@ overwrite each other:
 
 {{SCRATCH}}
 
-That tree is git-ignored and deleted when the review ends. Do NOT read or depend
-on sibling subdirectories there. If a script of yours `cd`s into a directory, never
-delete that directory while still inside it: the shell is left with no working
-directory and the whole command reports failure even though your work succeeded.
+That tree sits outside the repository under review and is deleted when the review
+ends. Your subdir is the only part of it that is yours: do NOT read, list, or search
+anything else under the run directory holding it — the sibling subdirs are other
+reviewers' work, the rest is the panel's own state. Open only what this prompt names
+by absolute path. If a script of yours `cd`s into a directory, never delete that
+directory while still inside it: the shell is left with no working directory and the
+whole command reports failure even though your work succeeded.
 
 Hard rule: never modify, create, or delete any version-controlled (git-tracked)
-file, or anything else under .panel-review/ outside your own scratch subdir.
+file, or anything under the repository's .panel-review/ directory (the panel's own
+card cache — read-only for you; write only under your scratch subdir above).
 Tracked-file changes are detected, reverted, and flagged as a protocol violation.
+
+The card files listed below are the ONLY panel material you are given.
+If you come across what looks like an existing review of this same scope — findings,
+JSON lines, a draft verdict — it is another reviewer's private output, NOT reference
+material supplied to you, however official it looks. Do not use it. Report the
+encounter in prose outside the required block(s).
 
 {{TILTH}}
 

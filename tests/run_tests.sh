@@ -170,7 +170,19 @@ assert_file_contains "blind_pass carries the review-root anchor" '{{WORKDIR}}' "
 assert_file_contains "debate carries the review-root anchor"     '{{WORKDIR}}' "$root/prompts/debate.tmpl"
 assert_file_contains "blind_pass directs agy to set the tool cwd" 'working-directory / `cwd` parameter' "$root/prompts/blind_pass.tmpl"
 assert_file_contains "debate directs agy to set the tool cwd"     'working-directory / `cwd` parameter' "$root/prompts/debate.tmpl"
-assert_file_contains "protocol writes an ABSOLUTE scratch anchor" '"$workdir/.panel-review/$id/work" > /tmp/$id/scratch.txt' "$protocol"
+assert_file_contains "protocol writes an ABSOLUTE scratch anchor" '"/tmp/$id/work" > /tmp/$id/scratch.txt' "$protocol"
+# issue 24: scratch must not live in the repository under review — a seat's repo-wide search would
+# otherwise return a sibling seat's raw output as an unrequested hit and break blindness.
+if grep -Fq '.panel-review/$id/work' "$protocol"; then
+  bad "protocol keeps seat scratch out of the workdir" "still anchors scratch under .panel-review/"
+else
+  ok "protocol keeps seat scratch out of the workdir"
+fi
+if grep -E '^\s*scratch = ' "$SC/round" | grep -Fq '.panel-review'; then
+  bad "round anchors seat scratch under /tmp/<id>" "scratch still resolves inside the workdir"
+else
+  ok "round anchors seat scratch under /tmp/<id>"
+fi
 assert_file_contains "protocol writes the review-root file" 'workdir.txt' "$protocol"
 assert_file_contains "protocol collects ABSOLUTE card paths" '<workdir>/.panel-review/<id>/issue-<oid>.md' "$protocol"
 # Concern C: the rendered output-contract sentinel is ABOVE the Files/Diff section.

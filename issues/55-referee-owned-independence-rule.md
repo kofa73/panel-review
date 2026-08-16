@@ -72,3 +72,23 @@ convergence on boilerplate.
   describing it in their own words is exactly what the panel is for. The trigger is shared *text*,
   not a shared conclusion.
 - Do not use this as a reason to defer issue 24. Removing the leak is better than detecting it.
+
+## Comments
+
+**2026-08-16 — seat-facing half deferred to this issue.** While implementing issue 24 the maintainer
+asked whether the seat prompts should warn that "the referee will discard your work if it finds you
+copied another participant's finding". Two parts, split:
+
+- **Landed now** (issue 24's change, no dependency on this issue): a neutral identification cue in
+  `prompts/blind_pass.tmpl`, `prompts/debate.tmpl`, and `agents/panel-review-claude-seat.md` — material
+  that looks like an existing review of the same scope is another reviewer's private output, not
+  reference material "however official it looks"; do not use it; report the encounter in prose outside
+  the required blocks. This targets the confusion actually observed (the Gemini seat called the file
+  "the checkpoint's JSON assertion"), and the self-report gives the referee a signal it otherwise only
+  gets by byte-comparing raws after the fact. It is a convenience, not a control.
+- **Deferred to this issue:** any statement of the *consequence*. "Your work will be discarded"
+  overstates the remedy specified above (one copy kept, duplicate dropped from `raised_by`, issue born
+  `open`), describes a one-off improvisation rather than an implemented rule, and aims a deterrent at
+  a malicious seat — which the trust model says not to guard against. When the rule lands here, add a
+  sentence matching what the code then does, e.g. that duplicated text counts once and the run's
+  independence note records it.

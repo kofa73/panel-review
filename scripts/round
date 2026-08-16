@@ -149,7 +149,11 @@ def ensure_review_profile(directory, manifest):
 
 
 def write_common_files(directory, manifest, workdir):
-    scratch = Path(workdir) / ".panel-review" / manifest["id"] / "work"
+    # Seat scratch lives under /tmp/<ID>/, NOT in the repository under review: a seat running an
+    # ordinary repository-wide search would otherwise get a sibling seat's raw output back as an
+    # unrequested hit, breaking blindness through a correct action (issues/24). This guards an
+    # honest accident, not a seat that goes looking — everything here stays readable by every seat.
+    scratch = directory / "work"
     scratch.mkdir(parents=True, exist_ok=True)
     files = {
         "workdir": f"{workdir}\n",
