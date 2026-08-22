@@ -32,6 +32,14 @@ def issue(issue_id="i1", severity="medium", rounds=0):
     }
 
 
+# Verbatim claim of issue i1 from run panel-20260816-080558-5ab680af (issue 34): the text a
+# seat debating that card must be able to restate.
+CARD_I1_CLAIM = (
+    "an ordinary repo-wide search by one seat returns another seat's raw findings and "
+    "breaks blindness"
+)
+
+
 def stance(issue_id, seat, name="support", **extra):
     return {"id": issue_id, "stance": name, "rationale": "technical observation", "_source": seat, "fid": seat, **extra}
 
@@ -159,7 +167,10 @@ class DecideRoundTest(unittest.TestCase):
         advice = json.loads(advice_path.read_text(encoding="utf-8"))
         self.assertEqual(
             advice,
-            {"prose_revisions": [{"id": "i1", "proposals": [{"seat": "codex", "claim": revised_claim}]}]},
+            {
+                "prose_revisions": [{"id": "i1", "proposals": [{"seat": "codex", "claim": revised_claim}]}],
+                "withheld_text": [],
+            },
         )
 
     def test_effective_support_revision_promotes_its_rationale(self):
@@ -200,7 +211,10 @@ class DecideRoundTest(unittest.TestCase):
         payload = json.loads(result.stdout)
         self.assertNotIn("revise", payload)
         self.assertNotIn("add_evidence", payload)
-        self.assertEqual(json.loads(advice_path.read_text(encoding="utf-8")), {"prose_revisions": []})
+        self.assertEqual(
+            json.loads(advice_path.read_text(encoding="utf-8")),
+            {"prose_revisions": [], "withheld_text": []},
+        )
 
     def test_split_support_reject_stays_open_without_revision(self):
         self.write_stances(
@@ -264,32 +278,110 @@ class DecideRoundTest(unittest.TestCase):
         self.assertEqual(payload["set_state"], [{"id": "i1", "state": "accepted"}])
         self.assertNotIn({"id": "i1", "flag": "fully_vetted", "value": True}, payload["set_flag"])
 
-    def test_blindness_gate_rejects_all_promoted_fields_and_clean_round_passes(self):
+    def test_domain_vocabulary_is_promoted_verbatim(self):
+        # Issue 34: the gate no longer matches bare product names or role nouns. Every string
+        # here is a technical fact about this repository, and CARD_I1_CLAIM is the verbatim claim
+        # of issue i1 from run panel-20260816-080558-5ab680af — a seat asked to debate that card
+        # has to be able to restate it.
         cases = [
-            ("rationale", "all three seats agree this is broken"),
-            ("assertion", "Gemini identified the off-by-one"),
-            ("location", ["src/file.py:2", "Claude identified this path"]),
-            ("precondition", "Claude enables this mode"),
-            ("impact", "all three reviewers observe the failure"),
+            ("rationale", CARD_I1_CLAIM),
+            ("rationale", "run_agy pins the label Gemini 3.7 Flash (High)."),
+            ("rationale", "The protocol dispatches all three seats every debate round."),
+            ("assertion", "The Claude seat's prompt anchors the wrong path."),
+            ("location", "agents/panel-review-claude-seat.md:12"),
         ]
         for field, value in cases:
-            with self.subTest(field=field):
-                first = stance("i1", "codex")
+            with self.subTest(field=field, value=value):
+                first = stance("i1", "codex", "reject")
                 if field == "rationale":
                     first["rationale"] = value
-                    first["revision"] = {"severity": "low"}
                 else:
                     evidence = {"location": "src/file.py:2", "assertion": "the loop stops early"}
                     evidence[field] = value
                     first["new_evidence"] = evidence
                 self.write_stances([first, stance("i1", "claude")])
-                result = self.run_decide(engaged="codex claude")
-                self.assertEqual(result.returncode, 5)
-                self.assertEqual(result.stdout, "")
+                advice_path = self.run_dir / "advice.json"
+                result = self.run_decide(engaged="codex claude", advice=advice_path)
 
-        self.write_stances([stance("i1", "codex"), stance("i1", "claude")])
-        payload = self.payload(engaged="codex claude")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                payload = json.loads(result.stdout)
+                promoted = json.dumps(payload.get("add_evidence", []), ensure_ascii=False)
+                self.assertIn(value, promoted)
+                advice = json.loads(advice_path.read_text(encoding="utf-8"))
+                self.assertEqual(advice["withheld_text"], [])
+
+    def test_matching_evidence_location_is_exempt(self):
+        # A path is not prose. Contrived so it would match the surviving pattern, which pins the
+        # exemption itself rather than the fact that real paths happen not to match.
+        evidence = {"location": "docs/2 of 3 seats agree.md:1", "assertion": "the loop stops early"}
+        self.write_stances(
+            [stance("i1", "codex", new_evidence=evidence), stance("i1", "claude")]
+        )
+        advice_path = self.run_dir / "advice.json"
+        result = self.run_decide(engaged="codex claude", advice=advice_path)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertIn({"id": "i1", "side": "pro", "point": evidence}, payload["add_evidence"])
+        self.assertEqual(
+            json.loads(advice_path.read_text(encoding="utf-8"))["withheld_text"], []
+        )
+
+    def test_tally_rationale_is_withheld_and_reported_without_failing_the_round(self):
+        leak = "2 of 3 seats agree on high severity."
+        self.write_stances(
+            [
+                stance("i1", "codex", "reject", rationale=leak),
+                stance("i2", "codex", "reject", rationale="the bound is off by one"),
+                stance("i1", "claude", "reject"),
+                stance("i2", "claude", "reject"),
+            ]
+        )
+        self.write_run([issue("i1"), issue("i2")])
+        advice_path = self.run_dir / "advice.json"
+        result = self.run_decide(engaged="codex claude", advice=advice_path)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertNotIn(leak, json.dumps(payload, ensure_ascii=False))
+        # The stance still counts: both issues are decided, including the flagged one, and the
+        # unflagged issue keeps its evidence.
+        self.assertEqual(
+            sorted(payload["set_state"], key=lambda entry: entry["id"]),
+            [{"id": "i1", "state": "rejected"}, {"id": "i2", "state": "rejected"}],
+        )
+        self.assertIn(
+            {"id": "i2", "side": "contra", "point": {"location": "analysis", "assertion": "the bound is off by one"}},
+            payload["add_evidence"],
+        )
+        advice = json.loads(advice_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            advice["withheld_text"],
+            [{"seat": "codex", "id": "i1", "field": "rationale", "match": "2 of 3 seats"}],
+        )
+        self.assertIn("withheld", result.stderr)
+
+    def test_agreement_verb_in_new_evidence_withholds_the_whole_point(self):
+        evidence = {
+            "location": "src/file.py:2",
+            "assertion": "the loop stops early",
+            "impact": "the reviewers agree that output is truncated",
+        }
+        self.write_stances(
+            [stance("i1", "codex", new_evidence=evidence), stance("i1", "claude")]
+        )
+        advice_path = self.run_dir / "advice.json"
+        result = self.run_decide(engaged="codex claude", advice=advice_path)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertNotIn("add_evidence", payload)
         self.assertEqual(payload["set_state"], [{"id": "i1", "state": "accepted"}])
+        advice = json.loads(advice_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            advice["withheld_text"],
+            [{"seat": "codex", "id": "i1", "field": "new_evidence.impact", "match": "reviewers agree"}],
+        )
 
     def test_evaluated_by_is_sorted_unique_and_commits(self):
         self.write_run([issue("i1")], evaluated_by={"i1": ["gemini", "codex"]})

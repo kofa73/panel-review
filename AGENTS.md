@@ -118,10 +118,13 @@ workdir holds exactly one review; concurrent runs against the same workdir are u
 - Never hand-create/edit/delete `~/.codex/config.toml`; `run_codex` owns
   `~/.codex/panel-review.config.toml`.
 - `index.json` written only via `index`/`sweep`; cards only via `project_card`/`regen_cards`.
-- Seats are instructed not to modify tracked code. `repo_guard snapshot` records the initial tracked
+- Seats are instructed to write nothing inside the repository under review — tracked or not, which
+  rules out builds (`make`, `ninja`, `cargo build`, …); write-free checks are encouraged instead.
+  Only the tracked half is enforced: `repo_guard snapshot` records the initial tracked
   tree and `verify --restore` detects and reverts honest tracked-file drift after every seat pass;
   reverted drift is flagged in the verdict's Process notes. This is restoration, not confinement: it
-  does not protect untracked files or anything outside the repository.
+  does not protect untracked files or anything outside the repository
+  (`issues/57-seats-rebuild-the-repository-under-review.md`).
 - Claude seat is spawned fresh (`panel-review:panel-review-claude-seat`), never forked.
 - The referee persists the synthesized verdict artifact and returns **only** a fixed ready/failure
   stub — never the verdict body, raw seat output, card text, or per-round transcripts. The main

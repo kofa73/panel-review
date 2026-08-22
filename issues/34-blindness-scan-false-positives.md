@@ -2,11 +2,11 @@
 
 Priority: 34
 
-Status: Pending
+Status: Completed
 
 Source: Panel review `panel-20260816-080558-5ab680af` (Claude + Codex + Gemini), 2026-08-16 — accepted; severity `detail_contested` (two seats `high`, one `medium`)
 
-Triage: ready-for-human
+Triage: ready-for-human (decided 2026-08-22; implemented)
 
 ## Problem
 
@@ -97,7 +97,8 @@ who raised a point.
 
 ## Expected behavior
 
-The design tension is real and needs a maintainer decision, so this issue is `ready-for-human`.
+The design tension is real and needed a maintainer decision; it was taken on 2026-08-22 and is
+recorded below.
 
 **The discriminator is attribution, not vocabulary.** "The Claude seat's prompt anchors the wrong
 path" is a fact about the code; "the Claude seat flagged this" reveals who raised the point. The noun
@@ -113,13 +114,62 @@ and a finding about its prompt naturally says "the Claude seat". The co-occurren
 most likely legitimate phrasing while looking more principled than the bare match. Do not implement
 it.
 
+### Decision (2026-08-22, maintainer)
+
+**Chosen: option 2 (the referee owns the judgment) plus option 1 (per-stance blast radius), with
+option 4 reduced to its deterministic backstop, option 5 kept as a regression guard, and option 6
+scoped to that backstop plus a seat-facing statement of the rule. Option 3 is rejected.**
+
+The resulting mechanism has three parts:
+
+1. **The vocabulary alternatives are deleted.** Alternatives 1-3 — bare product names,
+   `(an)?other <role>`, `(all|both|two|the other) <roles>` — cannot discriminate a technical fact
+   from an attribution, and in this domain the false positives dominate. They go.
+2. **Alternatives 4-5 survive as a deterministic backstop** (agreement verbs, numeric tallies).
+   `2 of 3 seats agree` is never a technical fact about any codebase, so the pair has no meaningful
+   false-positive tail, and it is the only part of blindness a test can prove — a model guard fails
+   silently. Two true positives are knowingly lost with alternatives 1-3: `Both reviewers converged
+   on medium` and `the other seat flagged this too`. The referee catches those; catching them
+   mechanically would require the noun-plus-verb rule below, which is not worth its tail.
+3. **A match no longer fails a round.** It **withholds that one string from promotion** and reports
+   it to the referee (seat, issue id, field, matched span) through `advice.<round>.json`. The
+   stance itself still counts normally — the decision, the `bump`, the enum convergence and the
+   revised fields are unaffected — so a match costs one sentence of evidence, not a round and not a
+   15-40 minute CLI re-dispatch. The referee, which already reworks promoted text at step 11, may
+   restate the substance in its addendum or let it drop. **Exit 5 is gone**, and with it the
+   protocol's content-reword re-dispatch instruction.
+
+Why the remaining options fall out:
+
+- **Option 3 (advisory gate) is rejected.** Its only gain over option 2 is salience — the referee
+  already reads every promoted string to dedup, merge revisions and write cards, so a report is not
+  extra coverage. With the broad pattern intact most flags here are false (19 of 148 tracked paths,
+  plus any sentence about the tools), which trains the referee to dismiss the true positive too.
+  Note that the withholding report in part 3 is *not* option 3: it fires only on the narrow
+  surviving pattern, and it is the record of an action already taken, not a request to judge a
+  match.
+- **Option 4's rescue clause is dropped.** Noun plus a closed attribution-verb list is narrower
+  than co-occurrence, but a seat is never told who else is on the panel (`seat_contract.py:230`
+  renders only "{N} reviewer seats"), so writing "as Codex noted" takes a guess rather than an
+  accident — outside what ADR-0005 says guards are for. It also still has a tail ("the manifest
+  records that another seat found the card"). Add it only if a real case appears.
+- **Option 5 becomes a no-op and is kept anyway.** Both surviving alternatives need internal
+  spaces, and an evidence `location` is a `file:line` path, so the 13%-of-tracked-files problem
+  dies with alternatives 1-3. The explicit skip stays as a one-line regression guard so a future
+  pattern edit cannot silently reintroduce it.
+- **Option 6 is scoped to two things.** The surviving pattern also runs in `diag_stances`, so
+  `check_draft` shows a seat the problem while the content is still in context; and the rule is
+  stated to seats at all, which it currently is not. Note the deliberate asymmetry this creates:
+  everywhere else `diag_stances` saying "invalid" means `valid_stances` discards the item, whereas
+  a blindness match discards only the *text*. The seat-facing message says so.
+
 ### Options
 
-1. **Narrow the failure blast radius** (uncontested, cheap, do this first whatever else is decided):
+1. **Narrow the failure blast radius** — CHOSEN (uncontested, cheap, do this first whatever else is decided):
    a marker match rejects the offending *stance* — reported with seat, issue id and field — and the
    referee re-dispatches only that seat, rather than discarding a whole round's payload. Everything
    below is survivable once a false positive costs one seat instead of a round.
-2. **Give the judgment to the referee outright** (recommended). Delete the vocabulary alternatives
+2. **Give the judgment to the referee outright** — CHOSEN (recommended). Delete the vocabulary alternatives
    and state the criterion as a referee rule at the commit step: promoted text must not attribute a
    point to a seat or state a tally; reword or drop what does. Three things support this over any
    pattern:
@@ -143,22 +193,22 @@ it.
    true of the current arrangement — the existing tests prove the regex matches strings, not that
    blindness holds — and it is true of the majority of channels today.
 
-3. **Or keep a gate, but advisory.** Report matches to the referee with
+3. **Or keep a gate, but advisory.** — REJECTED. Report matches to the referee with
    seat, issue id, field and the matched span; the referee decides whether to reword, drop the
    stance, or promote it as written. This is the ADR-0004 split — the script flags deterministically,
    the model judges — and the referee is the only participant who holds the origins map and can
    therefore actually tell an attribution leak from a technical fact. It also lets the pattern stay
    broad, catching true positives the current one misses, without any false positive costing a round.
-4. **Or keep a hard gate, narrowed.** Delete alternatives 1-3 (bare
+4. **Or keep a hard gate, narrowed.** — PARTLY CHOSEN (alternatives 4-5 only; the noun-plus-verb rescue clause dropped). Delete alternatives 1-3 (bare
    product names, bare role nouns) and keep 4-5 (agreement verbs, numeric tallies). This loses one
    real case — "the other seat flagged this too" — which can be recovered by replacing the bare noun
    alternative with noun **plus a closed list of attribution verbs** (`said`, `flagged`, `raised`,
    `noted`, `reported`, `found`, `objected`, `agreed`). That is a narrower and more defensible rule
    than co-occurrence, because it keys on the predicate that does the leaking rather than on a noun
    the domain uses innocently. It still has a false-positive tail, which is why option 1 comes first.
-5. **Exempt `new_evidence.location` outright.** A path is not prose and cannot carry a tally; 19 of
+5. **Exempt `new_evidence.location` outright.** — CHOSEN as a regression guard (a no-op under the narrowed pattern). A path is not prose and cannot carry a tally; 19 of
    this repository's 148 tracked paths currently match. Uncontested regardless of the above.
-6. **Move whatever survives into `diag_stances`**, so `check_draft` catches it before a seat emits
+6. **Move whatever survives into `diag_stances`** — CHOSEN, plus a seat-facing statement of the rule, so `check_draft` catches it before a seat emits
    and the round is never paid for twice.
 
 ### Considered and not recommended: accept that panel-review cannot review itself
@@ -185,18 +235,25 @@ existing true-positive cases.
 
 ## Verification
 
-- `tests/python/test_decide_round.py` gains cases for: a domain-legitimate product name in a
-  rationale, the phrase `another seat's raw output` in a rationale, `all three seats` in a rationale,
-  a matching path in `new_evidence.location`, and a genuine tally leak (still rejected).
+- `tests/python/test_decide_round.py` gains cases for text that must now be **promoted verbatim**: a
+  domain-legitimate product name in a rationale, `another seat's raw output` in a rationale, `all
+  three seats` in a rationale, and a matching path in `new_evidence.location`.
 - A regression fixture built from card i1 of run `panel-20260816-080558-5ab680af`: a stance whose
-  rationale restates that card's own claim must not be refused.
-- A test that a single offending stance does not discard the other issues' decisions.
+  rationale restates that card's own claim is promoted unchanged.
+- A genuine tally leak (`2 of 3 seats agree`) and an agreement leak (`the seats agree`) are
+  **withheld from the payload** and reported in the advice file with seat, issue id and field —
+  while the round still exits 0 and every issue, including the flagged one, is decided normally.
+- `tests/python/test_check_draft.py` gains a stance whose rationale states a tally: `check_draft`
+  fails it pre-emit with a message saying the text will not be promoted.
 - `./tests/run_tests.sh` passes.
 
 ## Non-goals
 
 - Do not drop the blindness gate. Its true-positive cases (naming another reviewer, stating a tally)
-  are what keeps promoted evidence blind.
+  are what keeps promoted evidence blind. The decision above refines this rather than breaking it:
+  the mechanical half narrows to attribution verbs and tallies and stops failing the round, and the
+  "naming another reviewer" half moves to the referee, which is the only participant able to judge
+  it.
 - Do not scan Round-0 findings as a side effect of this change; if that is wanted it is a separate
   decision with its own cost, and issue 35 covers the channels the gate currently misses.
 
@@ -215,3 +272,11 @@ the Round-0 channel, as issue 55.
 the two role-noun alternatives, which no longer look safer than the product names — including on the
 text of a card produced by this repository's own run. The issue was rewritten around attribution
 rather than vocabulary, and the "cannot review itself" option recorded as considered.
+
+2026-08-22, implemented. `BLINDNESS_PATTERN` and the new `blindness_match`/`blindness_fields`
+helpers moved to `seat_contract.py` (the contract owner) narrowed to the tally/agreement pair;
+`decide_round` withholds instead of exiting 5 and reports `withheld_text` in the advice file;
+`round` treats a withholding as judgment work, so `round commit` asks for the addendum; the referee
+rule is in `protocol.md` at the commit step; the seat contract now states the rule to seats, and
+`diag_stances` surfaces it through `check_draft` before a seat emits. Issue 35 covers the channels
+this backstop still does not see.

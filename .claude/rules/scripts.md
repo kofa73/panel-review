@@ -24,7 +24,10 @@ byte-exact.
 - `decide_round` / `decide_degraded_round` — the **only** builders of normal and degraded debate
   `commit-sweep` payloads. They apply the Transitions table mechanically (stance counting, `bump`,
   `peer_reviewed`/`fully_vetted`, enum convergence, forced-terminal). Normal path carries evidence
-  verbatim with no seat identity/tally (blind); degraded path does not promote evidence. They do **no**
+  verbatim, withholding (never failing on) the one string that states a reviewer tally or their
+  agreement and reporting it as `withheld_text` advice — the rest of blindness is referee judgment,
+  since attribution and not vocabulary is the discriminator (issue 34); degraded path does not
+  promote evidence. They do **no**
   judgment: prose `claim` revisions and new-finding clustering come back as "advice" for the referee.
   They **validate** input (exactly one canonical `support`/`reject` stance per engaged-seat ×
   open-issue; reject rationale present; no unknown/duplicate `_source`); `support` affirms issue

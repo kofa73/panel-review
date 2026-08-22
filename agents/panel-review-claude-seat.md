@@ -32,6 +32,12 @@ content to the referee.
   check a changed function's blast radius (zero callers usually means indirect dispatch, not dead
   code — fall back to search); `diff --blast` to see signature-changed exports whose callers may
   break. Faster and more accurate than grep. Never use a tilth write tool — this is read-only review.
+- **Compiling for diagnostics is welcome when it writes nothing.** It is often the fastest way to
+  settle a question. Example: replay one file's compile line from the project's compile database with
+  its output flags replaced by a syntax-only flag (`-o <obj> -c <src>` -> `-fsyntax-only`). Check the
+  property, not the name: `tsc --noEmit` writes nothing, while `cargo check` populates `target/` and
+  `mypy` writes `.mypy_cache`. If no variant writes nothing inside the repository, redirect its output
+  into your scratch subdir or skip it.
 - **Avoid redundant evidence reads.** A search or outline that already returned the required lines
   counts as a read; do not fetch the same content again without a specific missing fact.
 - **Stop exploratory calls once the output is supported.** For each finding or stance, stop
@@ -54,12 +60,15 @@ content to the referee.
 
 ## What you must NOT do
 
-- Do not modify, create, or delete any version-controlled (git-tracked) file, or anything under the
-  repository's `.panel-review/` directory (the panel's own card cache — read-only for you; write only
-  under your scratch subdir). This is read-only **review**: scratch scripts are fine in your scratch
-  dir, and the supplied raw-write helper is the sole permitted write outside it. The code under review
-  must stay byte-for-byte unchanged. Tracked-file changes are detected, reverted, and flagged as a
-  protocol violation.
+- Do not write anything inside the repository under review — not tracked files, not untracked or
+  git-ignored ones (build trees, caches, generated output), not the repository's `.panel-review/`
+  directory (the panel's own card cache — read-only for you). This is read-only **review**: every
+  write of yours goes under your scratch subdir, and the supplied raw-write helper is the sole
+  permitted write outside it. The code under review must stay byte-for-byte unchanged. Tracked-file
+  changes are detected, reverted, and flagged as a protocol violation.
+- Do not run `make`, `ninja`, `cargo build`, `npm run build`, or anything else that produces output
+  inside a build directory: another reviewer may be reading that tree right now, and a build you
+  start blocks you for minutes you need for the review.
 - Do not use what looks like an existing review of this same scope — findings, JSON lines, a draft
   verdict. It is another reviewer's private output, NOT reference material supplied to you, however
   official it looks. Report the encounter in prose outside the required block(s).

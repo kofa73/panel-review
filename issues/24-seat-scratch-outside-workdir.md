@@ -2,7 +2,7 @@
 
 Priority: 24
 
-Status: Pending
+Status: Completed
 
 Source: post-hoc audit of run `panel-20260810-172731-c895b986` (darktable GTK4-prep review), 2026-08-10
 
@@ -216,3 +216,28 @@ absolute path `/tmp/agyprobe-2026/work/seatX/probe.txt`; the seat answered `WROT
 existed with the requested contents. So `--dangerously-skip-permissions` still covers writes outside
 the workspace, and no scratch-root change is needed for 1.1.18. This does not close the issue's own
 outstanding live verification, which is about a real review run, not one write.
+
+**2026-08-22 — live verification done; issue Completed.** The one item reasoning could not answer —
+whether Codex and especially agy actually write scratch under `/tmp/<ID>/work/`, since agy runs its
+tools in its own managed sandbox — is answered by three completed reviews, all run after the change
+landed in `4cee275`. Every configured seat has a populated scratch subdir in every run:
+
+| Run | Workdir / scope | Gemini (agy) | Codex | Claude |
+|---|---|---|---|---|
+| `panel-20260816-155811-2e9db8e7` | `/workspace/dt-pr`, `base=7ea82ae2b2f5f656d` | `seat-gemini/` — `draft.jsonl`, `test_choleski.c` + its compiled binary | `gpt5_review_84c1/` — 2153 files, 614M (`build/`, `cache/`, probe binaries, `findings.jsonl`) | `opus5/` — 9 files |
+| `panel-20260819-172715-7be4ac07` | `/workspace/darktable`, `base=56b28cf7093f7d` | `antigravity/` — `diff.patch`, `draft_stances.jsonl`, `draft_new_findings.jsonl`; `rev_gemini/` | `gpt5root/` — 1445 files, 831M (a full `build/` tree); `gpt5-9f3c/` | `opus5-seat/` — 4 files |
+| `panel-20260822-071254-fc74a565` | `/workspace/darktable`, `commit=ecce8af23893d5061` | `antigravity_gemini/draft.jsonl` | `gpt56sol-root-8c19/` | `opus5-seat/` — 2 files |
+
+Two things follow beyond the write test itself:
+
+- **agy writes there under its own sandbox**, in three separate runs and (for the last one) on agy
+  1.1.18, which is the version whose narrowed "outside your workspace" setting prompted the probe
+  recorded above. The counter-consideration about a constrained/read-only workspace does not bind for
+  any shipped seat; the cards stay in the workdir for their own stated reason, not this one.
+- **Both CLI seats compile inside their scratch subdir when they want to** — a 614M and an 831M build
+  tree, outside the repository under review. That is the behaviour issue 57's rule now asks for in
+  words, observed before it was written down.
+
+Not re-verifiable from these runs: `<workdir>/.panel-review/<ID>/` holding cards only, because
+cleanup removed each workdir marker tree at run end. That half is covered by the code path and its
+tests (`prepare-round0` creates `/tmp/<ID>/work` and leaves no workdir `work/`).

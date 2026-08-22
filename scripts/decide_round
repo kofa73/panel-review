@@ -10,11 +10,9 @@ import sys
 here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, here)
 import panel_common  # noqa: E402
-from seat_contract import STANCE_VALUES  # noqa: E402
+from seat_contract import STANCE_VALUES, blindness_fields, blindness_match  # noqa: E402
 
 
-BLINDNESS_PATTERN = r"\b(codex|gpt|gemini|claude)\b|\b(an)?other (reviewer|seat|model|ai)s?\b|\b(all( ?(three|3))?|both|two|the other) (seats|reviewers|models|ais)\b|\b(seats?|reviewers?|models?|the others?|we|every(one|body)) (all )?(agree|disagree|concur)\b|\b[0-9]+ ?(/|of) ?(the )?(three|3) (seats|reviewers)\b"
-BLINDNESS_RE = re.compile(BLINDNESS_PATTERN, re.IGNORECASE)
 ENUM_FIELDS = ("severity", "location", "category")
 REVISION_FIELDS = ENUM_FIELDS + ("claim",)
 
@@ -122,41 +120,24 @@ def integrity_errors(index, stances, engaged, configured):
     return errors
 
 
-def blindness_errors(index, stances):
-    errors = []
-    issues = {issue.get("id"): issue for issue in index.get("issues", [])}
-    for stance in stances:
-        evidence = stance.get("new_evidence")
-        issue = issues.get(stance.get("id"))
-        values = []
-        if stance.get("stance") == "reject" or (
-            isinstance(issue, dict) and effective_revision(stance, issue)
-        ):
-            values.append(("rationale", stance.get("rationale")))
-        if isinstance(evidence, dict):
-            values.extend(
-                [
-                    ("new_evidence.assertion", evidence.get("assertion")),
-                    ("new_evidence.precondition", evidence.get("precondition")),
-                    ("new_evidence.impact", evidence.get("impact")),
-                ]
-            )
-            location = evidence.get("location")
-            if isinstance(location, list):
-                values.extend(("new_evidence.location", value) for value in location)
-            else:
-                values.append(("new_evidence.location", location))
-        for field, value in values:
-            if isinstance(value, str) and BLINDNESS_RE.search(value):
-                errors.append(
-                    f"seat={jq_display(stance.get('_source'))} issue={jq_display(stance.get('id'))} "
-                    f"field={field}: blindness marker in promoted text"
-                )
-    return errors
+def withhold(stance, field, value, withheld):
+    """Record and refuse promotion of one leaking string (issue 34).
+
+    A match costs that one string, never the round: the stance still counts, its revision is still
+    adopted, and every other issue in the round still commits. The referee gets the report through
+    the advice file and may restate the substance in its addendum.
+    """
+    span = blindness_match(value)
+    if span:
+        withheld.append(
+            {"seat": stance.get("_source"), "id": stance.get("id"), "field": field, "match": span}
+        )
+    return bool(span)
 
 
 def decide(index, stances, round_number, issue_rounds, max_rounds, configured, evaluated):
     decisions = []
+    withheld = []
     for issue in index.get("issues", []):
         if issue.get("state") != "open":
             continue
@@ -190,16 +171,31 @@ def decide(index, stances, round_number, issue_rounds, max_rounds, configured, e
         for stance in issue_stances:
             if stance.get("stance") == "reject" or effective_revision(stance, issue):
                 assertion = stance.get("rationale") or ""
-                if isinstance(assertion, str) and assertion:
-                    evidence.append({"side": "contra", "point": {"location": "analysis", "assertion": assertion}})
+                if not isinstance(assertion, str) or not assertion:
+                    continue
+                if withhold(stance, "rationale", assertion, withheld):
+                    continue
+                evidence.append({"side": "contra", "point": {"location": "analysis", "assertion": assertion}})
         for stance in issue_stances:
-            if stance.get("new_evidence") is not None:
-                evidence.append(
-                    {
-                        "side": "contra" if stance.get("stance") == "reject" else "pro",
-                        "point": stance.get("new_evidence"),
-                    }
-                )
+            point = stance.get("new_evidence")
+            if point is None:
+                continue
+            # One leaking field withholds the whole point: an evidence point stripped of its
+            # assertion or impact is no longer the fact the seat submitted. Every leaking field is
+            # still recorded, so the referee sees all of them at once rather than one per round.
+            leaks = [
+                field
+                for field, value in blindness_fields(stance)
+                if field.startswith("new_evidence.") and withhold(stance, field, value, withheld)
+            ]
+            if leaks:
+                continue
+            evidence.append(
+                {
+                    "side": "contra" if stance.get("stance") == "reject" else "pro",
+                    "point": point,
+                }
+            )
 
         peer_now = n >= 2
         all_reject = peer_now and all(name == "reject" for name in stance_names)
@@ -279,7 +275,8 @@ def decide(index, stances, round_number, issue_rounds, max_rounds, configured, e
             {"id": decision["id"], "proposals": decision["claim_props"]}
             for decision in decisions
             if decision["claim_props"]
-        ]
+        ],
+        "withheld_text": withheld,
     }
     evaluated_by = {decision["id"]: decision["eval_cum"] for decision in decisions}
     return payload, advice, evaluated_by
@@ -335,13 +332,6 @@ def main():
             print(f"  - {error}", file=sys.stderr)
         raise SystemExit(3)
 
-    errors = blindness_errors(index, stances)
-    if errors:
-        print("decide_round: blindness violation(s) (seat identity / tally in promoted evidence):", file=sys.stderr)
-        for error in errors:
-            print(f"  - {error}", file=sys.stderr)
-        raise SystemExit(5)
-
     payload, advice, evaluated_by = decide(
         index,
         stances,
@@ -351,6 +341,12 @@ def main():
         configured,
         evaluated,
     )
+    for entry in advice["withheld_text"]:
+        print(
+            f"decide_round: withheld from promotion (tally/agreement): seat={jq_display(entry['seat'])} "
+            f"issue={jq_display(entry['id'])} field={entry['field']} match={jq_display(entry['match'])}",
+            file=sys.stderr,
+        )
     if values["advice"]:
         with open(values["advice"], "w", encoding="utf-8") as handle:
             json.dump(advice, handle, ensure_ascii=False)

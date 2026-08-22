@@ -9,6 +9,35 @@ from panel_common import CATEGORIES, SEVERITIES, valid_location, valid_point
 
 
 STANCE_VALUES = ("support", "reject")
+
+# Blindness backstop for the free text the referee promotes verbatim onto cards (issue 34).
+# It matches ONLY the two constructions that can never be a technical fact about a codebase:
+# an agreement predicate over reviewers, and a numeric tally of them. It deliberately does NOT
+# match product names (`codex`, `gemini`, `claude`) or bare role nouns (`another seat`) — in a
+# repository whose subject matter IS multi-seat AI review those are ordinary vocabulary, and
+# matching them cost a whole round per false positive. Attribution, not vocabulary, is the
+# discriminator, and only the referee (the sole holder of the origins map) can judge it; the
+# protocol's commit step carries that rule.
+BLINDNESS_PATTERN = (
+    r"\b(seats?|reviewers?|models?|the others?|we|every(one|body)) (all )?(agree|disagree|concur)\b"
+    r"|\b[0-9]+ ?(/|of) ?(the )?(three|3) (seats|reviewers)\b"
+)
+BLINDNESS_RE = re.compile(BLINDNESS_PATTERN, re.IGNORECASE)
+
+BLINDNESS_ADVICE = (
+    "states how many reviewers hold a position, or that they agree; that text will not be "
+    "promoted onto the card. Restate the technical substance on its own."
+)
+
+
+def blindness_match(value):
+    """Return the matched span when a string leaks a tally/agreement, else None."""
+    if not isinstance(value, str):
+        return None
+    found = BLINDNESS_RE.search(value)
+    return found.group(0) if found else None
+
+
 PHASES = {
     "round0": {
         "required_blocks": ("findings",),
@@ -133,6 +162,20 @@ def valid_findings(obj):
     return False, None
 
 
+def blindness_fields(obj):
+    """The stance strings the referee promotes verbatim; `new_evidence.location` is a path, not
+    prose, so it is exempt (it cannot carry a tally, and matching paths once made an accurate
+    evidence location a hard error for 13% of this repository)."""
+    fields = [("rationale", obj.get("rationale"))]
+    evidence = obj.get("new_evidence")
+    if isinstance(evidence, dict):
+        fields.extend(
+            (f"new_evidence.{key}", evidence.get(key))
+            for key in ("assertion", "precondition", "impact")
+        )
+    return fields
+
+
 def diag_stances(obj):
     if not ok_object(obj):
         return "not a JSON object"
@@ -142,6 +185,14 @@ def diag_stances(obj):
         return f"missing/invalid `stance` (one of: {', '.join(STANCE_VALUES)})"
     if not ok_reject_rationale(obj):
         return "reject requires non-empty `rationale` counter-evidence"
+    # Unlike every other diagnostic here, a blindness match does not discard the ITEM: the stance
+    # still counts and any revision is still adopted. Only the offending STRING is withheld from
+    # the card. It is reported as invalid anyway because check_draft's exit code is the sole
+    # seat-facing channel, and rewording now costs the seat nothing.
+    for field, value in blindness_fields(obj):
+        span = blindness_match(value)
+        if span:
+            return f"`{field}` ({span!r}) {BLINDNESS_ADVICE}"
     return "valid"
 
 
@@ -227,7 +278,9 @@ def render_contract(phase, panel_size, check_command):
 
     context = (
         f"The configured panel has {panel_size} reviewer seats, including you. "
-        "Seats work independently and never receive origins or stance tallies."
+        "Seats work independently and never receive origins or stance tallies. "
+        "So write only technical substance: never say who raised a point, how many seats hold a "
+        "position, or that the seats agree — such text is withheld from the shared record."
     )
     if phase == "round0":
         return f"""You are performing an independent code review. {context}

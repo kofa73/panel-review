@@ -66,3 +66,13 @@ pattern survives is what these channels would be scanned with.
   scope discussion in issue 34.
 - Do not move claim synthesis out of the referee. The gate checks the seat's proposal; the referee
   keeps the judgment.
+
+## Comments
+
+2026-08-22: issue 34 is decided and implemented, which reframes this one. The scanned channels now
+carry only a tally/agreement backstop (`seat_contract.blindness_match`), and the rest of blindness is
+an explicit referee rule at `protocol.md`'s commit step. So the question here is no longer "extend a
+broad pattern to more channels" — that pattern is gone — but whether the narrow backstop is worth
+applying to `revision.claim`, `revision.location` and `new_findings` too. It is cheap (one helper
+call per string, no false-positive tail) but it is not the guard those channels lack: the referee
+rule is.

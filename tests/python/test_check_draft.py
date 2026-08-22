@@ -22,6 +22,12 @@ INVALID_FINDING = ('{"location":"f.c:2","category":"correctness","severity":"hig
                    '"points":[{"assertion":"x","location":"f.c:2"}]}')
 VALID_STANCE = '{"id":"i1","stance":"support","rationale":"ok"}'
 INVALID_STANCE = '{"id":"i2","stance":"maybe","rationale":"bad enum"}'
+# issue 34: a tally in text the referee promotes verbatim onto a card
+TALLY_STANCE = ('{"id":"i3","stance":"reject",'
+                '"rationale":"2 of 3 seats agree the bound is wrong"}')
+# the same rationale minus the tally — domain vocabulary alone is not a leak
+DOMAIN_STANCE = ('{"id":"i4","stance":"reject",'
+                 '"rationale":"the Claude seat prompt anchors another seat\'s path"}')
 
 
 class TestCheckDraft(unittest.TestCase):
@@ -66,6 +72,15 @@ class TestCheckDraft(unittest.TestCase):
         res = self.run_stdin(["stances"], INVALID_STANCE + "\n")
         self.assertEqual(res.returncode, 1)
         self.assertIn("missing/invalid `stance`", res.stdout)
+
+    def test_tally_rationale_is_flagged_before_the_seat_emits(self):
+        res = self.run_stdin(["stances"], TALLY_STANCE + "\n")
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("will not be promoted", res.stdout)
+
+    def test_domain_vocabulary_rationale_passes(self):
+        res = self.run_stdin(["stances"], DOMAIN_STANCE + "\n")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
 
     def test_bad_tag_is_usage_error(self):
         res = self.run_stdin(["bogus"], "")

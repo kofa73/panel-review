@@ -815,7 +815,13 @@ def cmd_commit(run_id, addendum):
         path.is_file() and any(line for line in path.read_text(encoding="utf-8").splitlines() if line)
         for path in new_finding_paths
     )
-    judgment_required = bool(advice_value.get("prose_revisions")) or new_findings_present
+    # withheld_text is referee work too: decide_round kept the leaking string out of the
+    # payload, and only the referee can decide whether to restate its substance.
+    judgment_required = (
+        bool(advice_value.get("prose_revisions"))
+        or bool(advice_value.get("withheld_text"))
+        or new_findings_present
+    )
     if judgment_required and addendum is None:
         emit(
             {

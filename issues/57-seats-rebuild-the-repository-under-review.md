@@ -2,7 +2,7 @@
 
 Priority: 57
 
-Status: Pending
+Status: Completed
 
 Source: post-hoc audit of run `panel-20260822-071254-fc74a565` (darktable commit review), 2026-08-22
 
@@ -127,3 +127,31 @@ No corruption has ever been observed. Only one seat built, its build exited 0, a
 not overlap (Gemini's build finished 07:16:08; Codex's syntax checks ran 07:17:47). The concurrency
 hazard — two seats writing one build tree, which `make` does not lock — remains hypothetical; this
 fix removes the writer, which is what would prevent it.
+
+## Resolution
+
+**2026-08-16 → landed in `6dc4b20` (2026-08-22), completed 2026-08-22.** Prompt-only, as proposed.
+
+- The hard rule in `prompts/blind_pass.tmpl` and `prompts/debate.tmpl` now states the **property**:
+  write NOTHING anywhere inside the repository under review — not tracked files, not untracked or
+  git-ignored ones (build trees, caches, generated output), not `.panel-review/`. Every seat write
+  goes under its scratch subdir, which since issue 24 is outside the repository entirely.
+- The forbidden shape is named, because "prefer read-only checks" demonstrably does not exclude
+  `make -C build -j4`: `make`, `ninja`, `cargo build`, `npm run build`, or anything else producing
+  output inside a build directory. Both reasons are given — another reviewer may be reading that
+  tree, and the build blocks the seat for minutes it needs for the review.
+- Read-only checks are encouraged in their place, with Codex's `-fsyntax-only` compile-database
+  replay as the worked example, and with the property/name distinction spelled out (`tsc --noEmit`
+  writes nothing; `cargo check` populates `target/`; `mypy` writes `.mypy_cache`). Output that cannot
+  avoid being written goes to the seat's scratch subdir.
+
+**2026-08-22 — the third copy synced.** `6dc4b20` changed the two templates but not
+`agents/panel-review-claude-seat.md`, which carries the same rules for the Claude seat and is kept in
+sync by hand (see issue 24's note on why it cannot join an `assemble` fragment). Until this the Claude
+seat's agent definition still said "any version-controlled (git-tracked) file", contradicting its own
+task prompt. It now carries the write-nothing rule, the named build commands as a separate bullet, and
+the write-free-compile guidance under "How you review".
+
+Prior art for the behaviour this asks of a seat, from the runs cited in issue 24: both CLI seats
+already build inside their own scratch subdir when they want a compiler — `gpt5root/build` (831M) in
+`panel-20260819-172715-7be4ac07`, `gpt5_review_84c1/build` (614M) in `panel-20260816-155811-2e9db8e7`.

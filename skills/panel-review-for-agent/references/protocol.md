@@ -541,13 +541,25 @@ the common one-batch shape.
    `support`/`reject` stance per (engaged seat, open issue), non-empty rationale on reject, no
    unknown/duplicate `_source`, no omissions — a violation is a hard
    error (exit 3) and means a seat block was incomplete/garbled, so **salvage or re-dispatch that
-   seat** (don't hand-edit the stances). It also runs a **blindness scan** over the free text it
-   promotes verbatim onto cards (reject/effective-revision `rationale`, `new_evidence`): a stance that names a seat, references
-   the other reviewers, or states a tally is a hard error (**exit 5**, no payload). Re-dispatch that
-   one seat asking it to restate the **same technical substance** with no reference to other
-   reviewers / their count / their agreement — a content reword (a genuine re-review by the seat),
-   distinct from the shape-only **salvage** you do on a slipped block — then re-parse and re-run
-   `decide_round`. Cumulative per-issue `evaluated_by` is private index metadata:
+   seat** (don't hand-edit the stances). It also runs a **blindness backstop** over the free text it
+   promotes verbatim onto cards (reject/effective-revision `rationale`, `new_evidence` prose; an
+   evidence `location` is a path and is exempt). It matches only a **tally of reviewers or a
+   statement that they agree** — never product names or role nouns, which in a codebase about AI
+   review are ordinary technical vocabulary. A match is **not** an error and never fails the round:
+   that one string (or, for `new_evidence`, that one point) is **withheld** from the payload, listed
+   under `withheld_text` in the advice file with seat, issue id, field and matched span, and the
+   round commits normally — the stance still counts and its revision is still adopted. Treat each
+   entry as judgment work at step 11: restate the technical substance yourself as an `add_evidence`
+   point, or let it drop. Do **not** re-dispatch the seat for it.
+
+   **The rest of blindness is yours, and it is judgment, not vocabulary.** Before you commit any
+   text onto a card — your merged `claim`, a folded new finding, an addendum evidence point — check
+   that it neither attributes a point to a seat nor states a tally. The discriminator is
+   attribution: "the Claude seat's prompt anchors the wrong path" is a fact about the code and must
+   pass through unchanged; "the Claude seat flagged this" reveals who raised the point and must be
+   reworded. No pattern can separate those two, and you are the only participant holding the origins
+   map, so no pattern is asked to. Reword what leaks, preserving the technical substance; drop it
+   only if nothing survives the rewording. Cumulative per-issue `evaluated_by` is private index metadata:
    initialize it from Round-0 engaged seats, then `decide_round`/`decide_degraded_round` include the
    update in their payload and `index commit-sweep` persists it atomically. `decide_round`
    does **no judgment**: it never picks a winning value for the prose `claim` field. A `support`
@@ -563,7 +575,13 @@ the common one-batch shape.
      entry, your call: synthesize ONE merged `claim` → a `revise` for that id; or if the proposals
      genuinely conflict → `set_flag detail_contested=true`; or, if they are mere wording
      refinements → nothing (the original claim stands). **Never** write a claim/evidence string
-     that names or counts seats.
+     that attributes a point to a seat or counts seats — this is the same judgment as step 10's,
+     applied to text you author.
+   - **Withheld text** — the same file's `withheld_text` entries, each naming the seat, issue id,
+     field and matched span of a string `decide_round` kept out of the payload. Read the original in
+     `/tmp/$id/stances.$round.json`, and either restate its technical substance as an `add_evidence`
+     point for that id (dropping the tally/agreement clause, keeping the located fact) or leave it
+     out when nothing but the tally was being said. Never re-dispatch the seat for this.
    - **New findings.** For each `new_findings` item, either **fold** it into an existing issue (same
      merge test as Round 0 step 4) or add a NEW issue via `add_issues`. A fold adds every materially
      distinct point as `add_evidence`. **Preserve its current state** when the new evidence is

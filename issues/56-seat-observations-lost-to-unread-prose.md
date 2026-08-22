@@ -2,7 +2,7 @@
 
 Priority: 56
 
-Status: Pending
+Status: Completed
 
 Source: post-hoc audit of run `panel-20260822-071254-fc74a565` (darktable commit review), 2026-08-22
 
@@ -100,3 +100,24 @@ Filing these as `low` would not have got them debated in this run: the Round-0 s
 the loop when only low-severity findings exist, so they would have appeared under **Minor — not
 peer-reviewed**. Visible and durable, but not vetted. That is the gate working as designed
 (`--debate-low` overrides it), not a further defect.
+
+## Resolution
+
+**2026-08-16 → landed in `6dc4b20` (2026-08-22).** Prompt-only, as proposed; no code, no contract
+change.
+
+- `prompts/blind_pass.tmpl` Calibration gained the exception that overrides its own anti-filler
+  paragraph: anything the seat noticed, weighed and DECIDED NOT TO RAISE — too small, not provably
+  observable, or a trap for future maintainers rather than a bug today — is a finding at `low` or
+  `style`, with the reason for its borderline status inside the finding (`claim` or a `points`
+  entry). It states plainly that only the fenced block is read, and that this is a licence to file
+  the small real thing, not to file filler.
+- The Grounding line that caused the loss is requalified rather than deleted: prose now carries
+  uncertainty about the **pass as a whole** (what the seat could not reach, execute, or rule out);
+  uncertainty about whether one specific defect matters belongs in a `low`/`style` finding.
+
+`scripts/seat_contract.py:250` still asks for the 2-3 prose sentences, deliberately — the prose is
+where a seat reports what it could not cover, and (per issue 24) where it reports encountering
+another reviewer's output. The rejected alternatives stand as written: a third fenced `notes` block
+remains the structurally cleanest fix and remains unjustified by one observed instance. Revisit it if
+a later run still shows real defects dying in prose.

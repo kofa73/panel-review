@@ -68,7 +68,8 @@ Each exits `3` when its CLI is not installed, which the suite reports as a skip.
   sub-field stripping; empty-vs-real stances block idiom; `--response` phase block
   cardinality (missing and duplicate blocks).
 - **check_draft** (`test_check_draft.py`): valid bare JSONL and already-fenced input; empty drafts;
-  findings, stances, and new-findings validation; mixed valid/invalid item detection; file input;
+  findings, stances, and new-findings validation; mixed valid/invalid item detection; a tally in a
+  rationale flagged pre-emit while domain vocabulary passes; file input;
   invalid tags and missing arguments.
 - **instruction contracts** (`test_contract_consistency.py`): the live tree passes the ownership
   checker; known barrier/path/return/panel/health/delivery/stance drift is reintroduced one case at a
@@ -79,8 +80,10 @@ Each exits `3` when its CLI is not installed, which the suite reports as a skip.
   support claim revisions reach referee advice while exact no-op revisions and
   unused support rationale remain inert;
   integrity gate (duplicate/missing/unknown `_source` → exit 3); dropped seat
-  decides on the remainder and withholds `fully_vetted`; the blindness gate
-  (rationale/assertion/precondition/impact/array-location markers → exit 5);
+  decides on the remainder and withholds `fully_vetted`; the blindness backstop
+  (domain vocabulary and a matching evidence `location` promoted verbatim; a
+  reviewer tally or agreement withheld from the payload, reported as
+  `withheld_text` advice, round still exits 0 and decides every issue);
   sorted-unique `evaluated_by`.
 - **decide_degraded_round** (`test_decide_degraded_round.py`): zero/one-seat
   terminal outcomes (`unresolved`/`contested`), `fully_vetted` only on full

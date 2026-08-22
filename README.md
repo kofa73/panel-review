@@ -376,6 +376,16 @@ Blindness is the whole point, and two choices enforce it:
   memory. A fork would inherit the referee's context and defeat blindness. So all three seats are
   genuinely independent and can fail independently.
 
+Keeping promoted text blind is then **referee judgment with a narrow scripted backstop**. The
+discriminator is *attribution*, not vocabulary: "the Claude seat's prompt anchors the wrong path" is
+a fact about the code and must survive verbatim, while "the Claude seat flagged this" reveals who
+raised the point. The noun phrase is identical, so no word list can separate them — and the referee
+is the only participant holding the origins map. It therefore checks every string it promotes and
+rewords what attributes or counts. `decide_round` adds one mechanical backstop over the seat text it
+carries verbatim: a tally of reviewers or a statement that they agree. That pair is never a technical
+fact about any codebase, so it is safe to automate. A match withholds only that string — the stance
+still counts, the round still commits — and is reported to the referee to restate or drop.
+
 ### How an issue moves (transitions)
 
 An issue's **state** follows the **stances** the seats take on it, never whether an evidence array
