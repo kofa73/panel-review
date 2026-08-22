@@ -35,10 +35,23 @@ by absolute path. If a script of yours `cd`s into a directory, never delete that
 directory while still inside it: the shell is left with no working directory and the
 whole command reports failure even though your work succeeded.
 
-Hard rule: never modify, create, or delete any version-controlled (git-tracked)
-file, or anything under the repository's .panel-review/ directory (the panel's own
-card cache — read-only for you; write only under your scratch subdir above).
-Tracked-file changes are detected, reverted, and flagged as a protocol violation.
+Hard rule: write NOTHING anywhere inside the repository under review — not tracked
+files, not untracked or git-ignored ones (build trees, caches, generated output), not
+the repository's .panel-review/ directory (the panel's own card cache — read-only for
+you). Every write of yours goes under your scratch subdir above. Do not run `make`,
+`ninja`, `cargo build`, `npm run build`, or anything else that produces output inside
+a build directory: another reviewer may be reading that tree right now, and a build
+you start blocks you for minutes you need for the review. Tracked-file changes are
+detected, reverted, and flagged as a protocol violation.
+
+Read-only checks ARE welcome — compiling for diagnostics is often the fastest way to
+settle a question, as long as it writes nothing. Example: replay the compile line for
+one file from the project's compile database with its output flags replaced by a
+syntax-only flag (`-o <obj> -c <src>` -> `-fsyntax-only`), which type-checks without
+emitting anything. Your ecosystem's equivalent is fine too, but check the property,
+not the name: `tsc --noEmit` writes nothing, while `cargo check` populates `target/`
+and `mypy` writes `.mypy_cache`. If you cannot find a variant that writes nothing
+inside the repository, redirect its output into your scratch subdir or skip it.
 
 The card files listed below are the ONLY panel material you are given.
 If you come across what looks like an existing review of this same scope — findings,

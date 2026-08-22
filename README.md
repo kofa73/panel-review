@@ -111,8 +111,17 @@ under review**: when it lived inside, a seat running an ordinary repository-wide
 seat's raw output back as an unrequested search hit, which broke blindness through a correct action
 (no seat had to disobey anything). Moving it removes that accidental hit; it is not confinement,
 because `/tmp/<ID>/` remains readable by every seat by design.
-Every seat is instructed not to modify version-controlled code,
-but the checkout is not preventively read-only: the referee snapshots the tracked tree at the start
+Every seat is instructed to write **nothing inside the repository under review** — not tracked files,
+and not untracked or git-ignored ones either, which in practice means **no builds**: no `make`,
+`ninja`, `cargo build`, or anything else that writes into a build tree. Read-only checks are
+explicitly encouraged instead (replaying a compile line with `-fsyntax-only`, `tsc --noEmit`, and so
+on), because they settle real questions without touching the tree. Two reasons: a build tree that
+nobody writes to is a safe shared input for all three seats, and a seat that starts a build blocks on
+it — one measured Gemini pass spent 1m48s of its 2m54s waiting for a build it then never used
+(`issues/57-seats-rebuild-the-repository-under-review.md`).
+
+That instruction is a convenience, not a control, and only the tracked half of it is enforced: the
+checkout is not preventively read-only, so the referee snapshots the tracked tree at the start
 (`scripts/repo_guard`) and, after every seat pass, detects and reverts honest tracked-file drift and
 flags it loudly in the verdict's Process notes. This restores tracked repository content; it does not
 confine a seat, protect untracked files, or protect anything outside the repository. Safety rests on
@@ -620,7 +629,9 @@ discipline.
 - **Never** hand-create, edit, or delete `~/.codex/config.toml`. `run_codex` owns
   `~/.codex/panel-review.config.toml` (auto-created from a shipped default); leave it and any other
   `~/.codex/*.config.toml` profile to their tools.
-- Seats must not modify version-controlled code. `scripts/repo_guard` snapshots the tracked tree and
+- Seats must write nothing inside the repository under review — tracked or not, which rules out
+  builds into a build tree; read-only compile checks are encouraged in their place.
+  `scripts/repo_guard` snapshots the tracked tree and
   detects and auto-reverts honest tracked-file drift after every seat pass. This restoration is not
   confinement and does not protect untracked files or paths outside the repository. Intended seat
   writes stay under `/tmp/<ID>/work/` (outside the repository under review), except that the Claude seat passes its complete

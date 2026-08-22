@@ -148,9 +148,11 @@ workdir holds exactly one review; concurrent runs against the same workdir are u
   root each run — `cd`-ing the wrapper cannot move it. So an agy prompt needs an **absolute** path
   anchor (and ideally an explicit "set the tool `cwd` to `<workdir>`" directive) or it can drift
   (observed: anchored `/home/developer` instead of the workdir under a very large prompt).
-- **agy model pins are exact display labels, never slugs.** `run_agy` pins the Gemini seat as
-  `Gemini 3.7 Flash (High)`, not `gemini-3.7-flash-high`, and the effort rides in the label (so no
-  `--effort`). This is a property of agy, not of one script: a slug is not a stable identifier
+- **agy model pins are exact display labels, never slugs.** `run_agy` pins the Gemini seat by
+  display label — the form is `Gemini 3.1 Pro (High)`, never the slug `gemini-3.1-pro-high` — and
+  the effort rides in the label (so no `--effort`). The pins in force are `PRIMARY_MODEL` /
+  `FALLBACK_MODEL` in `scripts/run_agy`; read them there rather than from any copy, as the tests and
+  `check_contracts` do. This is a property of agy, not of one script: a slug is not a stable identifier
   across agy versions — on 1.1.10 the *listed* slug `gemini-3.1-pro-high` bound Gemini 3.6 Flash
   (High) — and how a bad value fails changes too (1.1.10 silently ran the user's `settings.json`
   model; 1.1.13 hard-errors). `check_contracts` rejects a slug-shaped pin;
@@ -190,9 +192,13 @@ workdir holds exactly one review; concurrent runs against the same workdir are u
 - Per user instructions (`~/.claude/CLAUDE.md`): do not commit or push unless explicitly asked.
 
 # Important reference material
+
+The commit each of these was last reviewed at is in `docs/agents/external-cli-baselines.md`. Read it
+first when asked what changed in the external CLIs, and update it when you finish such a review.
+
 Claude Code documentation: ~/github-repos-for-agents/claude-code-docs/
 Codex: ~/github-repos-for-agents/codex/
-Gemini, Antigravity (agy) - `antigravity-cli/CHANGELOG.md` is the release record: ~/github-repos-for-agents/antigravity/
+Gemini, Antigravity (agy) - `CHANGELOG.md` at the repo root is the release record: ~/github-repos-for-agents/antigravity/
   The agy model-pin bug this repository works around is recorded in `issues/20-agy-model-pin-contract.md`
   (measurements for agy 1.1.10 and 1.1.13); `tests/live/agy_model_binding.sh` re-checks it on demand.
 Agent Skills standard: ~/github-repos-for-agents/agentskills/

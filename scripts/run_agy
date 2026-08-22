@@ -20,6 +20,9 @@
 #    and the flags below actually bind. Confirmed in agy's own CLI logs: this form
 #    logs the model label that was actually requested (`Propagating selected model
 #    override to backend: label="…"`) and honors --print-timeout to the second.
+#    agy 1.1.18 fixed the swallowing itself — a valueless `--print` and a stray trailing
+#    argument are both hard errors now — but keep the stdin form: it is the one this
+#    wrapper is verified against, and it works on every version tested, fix or no fix.
 #  - --print-timeout=15m, =FORM. agy's default is 5m0s, which guillotines a heavy
 #    review mid-investigation. 15m is enough for a thorough Flash/Pro pass; the
 #    outer `timeout WALL_TIMEOUT` is the hard backstop if agy ever truly hangs.
@@ -66,10 +69,10 @@
 set -euo pipefail
 
 # Exact agy display labels (see header: never slugs; an unrecognized value silently
-# falls back to the user's settings.json default). Verified to bind on agy 1.1.13,
-# 2026-08-15.
-PRIMARY_MODEL="Gemini 3.7 Flash (High)"
-FALLBACK_MODEL="Gemini 3.1 Pro (High)"
+# falls back to the user's settings.json default). Verified to bind by
+# tests/live/agy_model_binding.sh on agy 1.1.13 (2026-08-15) and 1.1.18 (2026-08-22).
+PRIMARY_MODEL="Gemini 3.1 Pro (High)"
+FALLBACK_MODEL="Gemini 3.7 Flash (High)"
 PRINT_TIMEOUT="15m"
 WALL_TIMEOUT=1020   # seconds, hard outer bound per attempt (>= PRINT_TIMEOUT 15m + startup slack)
 

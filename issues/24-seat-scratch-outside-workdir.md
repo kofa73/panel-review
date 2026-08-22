@@ -205,3 +205,14 @@ sandbox. What landed:
   creates `/tmp/<ID>/work`, publishes it, splices it into the prompt, and leaves no workdir `work/`.
 
 `./tests/run_tests.sh` (257 pass), `scripts/check_contracts --root .`, and `git diff --check` pass.
+
+**2026-08-22 — the agy seat can still write `/tmp` scratch on agy 1.1.18.** Recorded because agy
+1.1.14 narrowed the "allow access outside your workspace" setting to *read* access only (writes
+"auto approved according to the cycle mode setting"), which reads as a threat to this issue's
+design: agy runs its tools in its own managed sandbox and the scratch root is now outside both that
+sandbox and the workdir. Probe, run exactly as `run_agy` invokes agy (prompt on stdin,
+`--dangerously-skip-permissions`, `--model "Gemini 3.7 Flash (High)"`): asked for a write to the
+absolute path `/tmp/agyprobe-2026/work/seatX/probe.txt`; the seat answered `WROTE` and the file
+existed with the requested contents. So `--dangerously-skip-permissions` still covers writes outside
+the workspace, and no scratch-root change is needed for 1.1.18. This does not close the issue's own
+outstanding live verification, which is about a real review run, not one write.

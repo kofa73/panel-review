@@ -15,7 +15,7 @@ but both are the value a *new* installation gets, and neither reflects what is n
 
 | Where | Pinned | Status on the current CLI |
 |---|---|---|
-| ~~`scripts/run_agy` `PRIMARY_MODEL` / `FALLBACK_MODEL`~~ | ~~`Gemini 3.1 Pro (High)` / `Gemini 3.5 Flash (High)`~~ | **Resolved 2026-08-15** — now `Gemini 3.7 Flash (High)` primary, `Gemini 3.1 Pro (High)` fallback |
+| ~~`scripts/run_agy` `PRIMARY_MODEL` / `FALLBACK_MODEL`~~ | ~~`Gemini 3.1 Pro (High)` / `Gemini 3.5 Flash (High)`~~ | **Resolved 2026-08-15**, **revised 2026-08-22** — see "agy decision" below for the order in force |
 | `assets/default-panel-review.config.toml` | `model = "gpt-5.5"`, `model_reasoning_effort = "xhigh"` | 5.6-family models are current here; the effort enum now also has `max` and `ultra` above `xhigh` |
 
 Model selection is a quality and cost decision for the panel owner, so this issue records the facts
@@ -88,6 +88,21 @@ order a primary `--print-timeout` expiry was followed by a quicker attempt; now 
 followed by a second full 15-minute budget on Pro, so a doubly-unlucky Gemini seat can occupy up to
 2×`WALL_TIMEOUT` before it is declared down. That is deliberate: quality over worst-case latency,
 and the two models fail independently enough that the retry is worth the wait.
+
+### Reversed 2026-08-22 (agy 1.1.18)
+
+Owner's call after live experiments: the order goes back to `Gemini 3.1 Pro (High)` primary,
+`Gemini 3.7 Flash (High)` fallback. Both labels were re-verified to bind by
+`tests/live/agy_model_binding.sh` on 1.1.18. The "consequence to accept" above is therefore undone —
+the fallback is again the faster model, and a primary expiry is once more followed by a quicker
+second attempt.
+
+Neither suite needed an edit: both read the pins out of `scripts/run_agy` and assert only their form
+(display label, fallback ≠ primary), which is the property `check_contracts`' `agy-model-pin-form`
+invariant owns.
+
+Nothing here decides which model reviews *better*; that judgement is the owner's, from runs not
+recorded in this repository. What the pin order costs and buys mechanically is stated above.
 
 ## Non-goals
 
