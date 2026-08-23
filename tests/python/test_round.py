@@ -802,6 +802,37 @@ class RoundTest(unittest.TestCase):
         self.assertEqual(collected.returncode, 0, collected.stderr)
         self.assertNotIn("claude", json.loads(collected.stdout)["engaged"])
 
+    def test_prepare_debate_clears_stale_cli_and_barrier_files(self):
+        # `continue` restarts the round counter for the next cycle, so the previous
+        # cycle's round-1 files are still on disk when this round is prepared. A
+        # surviving await sentinel makes the CLI-barrier agent report instantly
+        # (issue 58), so preparation must clear them.
+        self.prepare_round0()
+        self.install_open_index()
+        raw_dir = self.run_dir / "raw"
+        raw_dir.mkdir(exist_ok=True)
+        stale = [
+            raw_dir / "round1.codex.1.txt",
+            raw_dir / "round1.codex.1.txt.salvaged",
+            self.run_dir / "nf.1.codex.1.json",
+            self.run_dir / "status.round1.codex.1",
+            self.run_dir / "status.nf.1.codex.1",
+            self.run_dir / "await.round1.1.txt",
+            self.run_dir / "await.round1.1.sentinel",
+        ]
+        for path in stale:
+            path.write_text("0\n", encoding="utf-8")
+
+        prepared = self.run_round("prepare-debate", self.run_id, "claude", "codex")
+
+        self.assertEqual(prepared.returncode, 0, prepared.stderr)
+        for path in stale:
+            with self.subTest(leftover=path.name):
+                self.assertFalse(path.exists())
+        barrier = json.loads(prepared.stdout)["barriers"][0]
+        self.assertTrue(Path(barrier["command"]).is_file())
+        self.assertFalse(Path(barrier["sentinel"]).exists())
+
     def test_prepare_debate_renders_two_stance_contract(self):
         self.prepare_round0()
         self.install_open_index()

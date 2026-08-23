@@ -619,6 +619,27 @@ def cmd_prepare_debate(run_id, seats):
         )
         claude_prompt = write_claude_prompt(directory, prompt, round_number, batch)
     cli_seats = [seat for seat in incomplete if seat != "claude"]
+    # Clear this round's barrier files and the leftovers of every CLI seat about to be
+    # dispatched, exactly as prepare-round0 does. A round number is unique within one
+    # debate cycle, but `reopen` restarts the counter at 1 for the next cycle while the
+    # finished cycle's round-numbered files stay in place (its epochs/ snapshot is a
+    # copy, not a move). The surviving sentinel is the harmful one: the CLI-barrier
+    # agent's wait signal is that file's mere existence, so it returns instantly,
+    # reports the previous cycle's per-seat statuses as this round's result, and the
+    # seats it launched moments earlier are reaped mid-review (issue 58).
+    remove_files(
+        directory / f"await.round{round_number}.{batch}.txt",
+        directory / f"await.round{round_number}.{batch}.sentinel",
+        directory / f"cli_barrier.round{round_number}.{batch}.sh",
+    )
+    for seat in cli_seats:
+        remove_files(
+            directory / "raw" / f"round{round_number}.{seat}.{batch}.txt",
+            directory / "raw" / f"round{round_number}.{seat}.{batch}.txt.salvaged",
+            directory / f"nf.{round_number}.{seat}.{batch}.json",
+            directory / f"status.round{round_number}.{seat}.{batch}",
+            directory / f"status.nf.{round_number}.{seat}.{batch}",
+        )
     barriers = []
     if cli_seats:
         barrier, done = barrier_command(directory, "new_findings", prompt, round_number, batch, cli_seats)
