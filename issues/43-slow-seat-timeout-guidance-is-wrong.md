@@ -48,3 +48,31 @@ that has no steps 1-2, leftover from an earlier edit.
 
 - Do not change any default. Current values fit under the ceiling; this issue is about documenting
   the ceiling before someone raises a value into it.
+
+## Comments
+
+### 2026-09-05 — the ceiling this issue is written around may no longer exist
+
+Claude Code 2.1.260's changelog says:
+
+> Removed the one-hour time limit on background commands started by subagents; they now run until
+> they exit or are stopped, matching the main session
+
+That is precisely the `CLAUDE_SUBAGENT_BG_SHELL_MAX_MS` ceiling this issue exists to document. **The
+documentation contradicts the changelog on the installed version (2.1.261)**, so neither can be
+trusted without a measurement:
+
+- `docs/tools-reference.md` "Background commands" no longer mentions any 60-minute cap. It keeps
+  only the rule that matters more here: *a command started by a **foreground** subagent stops when
+  that subagent gives its final response.*
+- `docs/env-vars.md` still documents `CLAUDE_SUBAGENT_BG_SHELL_MAX_MS` with "Default `3600000`
+  (60 minutes)", and `docs/interactive-mode.md` still says subagent-owned background commands "are
+  instead terminated after 60 minutes".
+
+Resolve this before rewriting the guidance, or the rewrite pins a second wrong number. Measure on
+the installed version rather than picking a doc to believe.
+
+Note that the CLI barrier is unaffected either way while it stays a **blocking foreground** Agent:
+the cap only ever applied to *background* shells. The rewrite should say that explicitly — it is the
+reason the panel has not hit the ceiling in practice, and it is the property that would be lost if
+anyone reintroduced a backgrounded wait.

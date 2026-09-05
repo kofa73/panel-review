@@ -2,7 +2,7 @@
 
 Priority: 58
 
-Status: Pending
+Status: Completed
 
 Source: observed live in run `panel-20260822-162515-0c2ab5b1` (darktable review, workdir
 `/workspace/dt-pr`), 2026-08-22
@@ -69,24 +69,17 @@ it is about to dispatch, that seat's `raw`, `raw*.salvaged`, `nf`, `status.round
 files — the same discipline `prepare-round0` already applies. Regression test:
 `tests/python/test_round.py::test_prepare_debate_clears_stale_cli_and_barrier_files`.
 
-**Still open (this issue):** removing the general hazard rather than the one instance of it. Two
-candidates:
+## Resolution
 
-1. **Put the epoch in the filenames** — `round<E>.<N>.<seat>.<batch>.txt`, `await.<E>.<N>.<batch>.*`,
-   and so on, so a reused round number cannot collide at all and the archive stops being load-bearing
-   for correctness. Touches `round`, `await_seats` call sites, `sweep`'s per-batch paths, the
-   barrier/Claude-seat prompt fragments, `inspect_run`, and the protocol's file table.
-2. **Make `reopen` move instead of copy** — archive the finished cycle's per-round files into
-   `epochs/epoch-<prev>/` and delete the originals, leaving the top level holding only the current
-   cycle. Much smaller, but keeps the "the writer must clear its own leftovers" obligation for every
-   future round-numbered file, and needs care over which top-level files are cycle-scoped
-   (`raw/`, `status.*`, `await.*`, `nf.*`, prompts, `plan.*`, `stances.*`, `payload.*`, `cards.*`,
-   `batch.*`) versus run-scoped (`manifest.json`, `index.json`, `diff.txt`, `review-profile.md`,
-   `instructions.txt`, `guard/`, `origins/`, `audit/`, `work/`).
+**Completed 2026-09-05.** The landed `prepare-debate` cleanup is the complete fix for the observed
+failure. It removes the stale existence signal and every CLI artifact the new pass will consume or
+replace before dispatch. The sweep checkpoint is independently protected by its epoch stamp, and no
+second path that reads a previous cycle's round-numbered output was found.
 
-Option 1 is the durable one; option 2 is a cheap strict improvement over the landed fix. Either way
-the invariant to state and test is: **no file a pass will produce may exist when that pass is
-prepared.**
+Epoch-qualified filenames and a broad `reopen` move/cleanup were considered and rejected as
+speculative complexity. They would expand the persistence contract across scripts, prompts and
+recovery tooling without fixing another demonstrated failure. The existing local rule remains: a
+pass preparer clears the files whose existence or content it will use before dispatch.
 
 ## Related
 

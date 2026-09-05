@@ -62,6 +62,7 @@ grep -Fq 'new file mode' "$TMP/fresh.out"; assert_exit "no-HEAD fallback emits s
 
 section "preflight — authenticated Codex status does not warn"
 mockbin="$TMP/mockbin"; mkdir -p "$mockbin"
+empty_claude_config="$TMP/empty-claude-config"; mkdir -p "$empty_claude_config"
 cat > "$mockbin/codex" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "$CODEX_LOG"
@@ -72,7 +73,7 @@ EOF
 chmod +x "$mockbin/codex"
 # CLAUDE_CODE_FORK_SUBAGENT=0 is a hard prerequisite (issue 25), and the suite must be
 # runnable from any session, so set it explicitly here rather than inheriting it.
-pf="$(CLAUDE_CODE_FORK_SUBAGENT=0 CODEX_LOG="$TMP/codex.log" PATH="$mockbin:$PATH" "$SC/preflight" 2>&1)"; assert_exit "preflight succeeds with mocked Codex" 0 "$?"
+pf="$(CLAUDE_CODE_FORK_SUBAGENT=0 CLAUDE_CONFIG_DIR="$empty_claude_config" CODEX_LOG="$TMP/codex.log" PATH="$mockbin:$PATH" "$SC/preflight" 2>&1)"; assert_exit "preflight succeeds with mocked Codex" 0 "$?"
 case "$pf" in *"WARNING: run 'codex login'"*) bad "logged-in Codex does not warn";; *) ok "logged-in Codex does not warn";; esac
 assert_eq "preflight calls codex login status" 'login status' "$(cat "$TMP/codex.log")"
 
@@ -81,15 +82,65 @@ section "preflight — fork mode gate (issue 25)"
 # interactive sessions from Claude Code 2.1.232, so the gate must refuse unset too.
 for bad_value in "" "1" "false" "off"; do
   if [ -z "$bad_value" ]; then
-    out="$(env -u CLAUDE_CODE_FORK_SUBAGENT PATH="$mockbin:$PATH" CODEX_LOG="$TMP/codex2.log" "$SC/preflight" 2>&1)"; rc=$?
+    out="$(env -u CLAUDE_CODE_FORK_SUBAGENT CLAUDE_CONFIG_DIR="$empty_claude_config" PATH="$mockbin:$PATH" CODEX_LOG="$TMP/codex2.log" "$SC/preflight" 2>&1)"; rc=$?
     label="unset"
   else
-    out="$(CLAUDE_CODE_FORK_SUBAGENT="$bad_value" PATH="$mockbin:$PATH" CODEX_LOG="$TMP/codex2.log" "$SC/preflight" 2>&1)"; rc=$?
+    out="$(CLAUDE_CODE_FORK_SUBAGENT="$bad_value" CLAUDE_CONFIG_DIR="$empty_claude_config" PATH="$mockbin:$PATH" CODEX_LOG="$TMP/codex2.log" "$SC/preflight" 2>&1)"; rc=$?
     label="$bad_value"
   fi
   assert_exit "preflight blocks with CLAUDE_CODE_FORK_SUBAGENT=$label" 1 "$rc"
   case "$out" in *"CLAUDE_CODE_FORK_SUBAGENT=0 claude"*) ok "block names the remedy ($label)";; *) bad "block names the remedy ($label)";; esac
 done
+
+section "preflight — outside-workdir read block (issue 62)"
+pf_repo="$TMP/preflight-repo"; mkdir -p "$pf_repo/.claude"
+git -C "$pf_repo" init -q
+cat > "$pf_repo/.claude/settings.json" <<'EOF'
+{"permissions":{"blockReadsOutsideWorkingDirectories":true}}
+EOF
+(
+  cd "$pf_repo" || exit 1
+  CLAUDE_CODE_FORK_SUBAGENT=0 CLAUDE_CONFIG_DIR="$empty_claude_config" \
+    CODEX_LOG="$TMP/codex3.log" PATH="$mockbin:$PATH" "$SC/preflight"
+) > "$TMP/preflight-block.out" 2>&1; rc=$?
+assert_exit "preflight blocks outside-workdir setting" 1 "$rc"
+assert_file_contains "preflight names blocking project file" "$pf_repo/.claude/settings.json" "$TMP/preflight-block.out"
+assert_file_contains "preflight prints exact additionalDirectories config" '"additionalDirectories": ["/tmp"]' "$TMP/preflight-block.out"
+assert_file_contains "preflight names repository config path" "repository: $pf_repo/.claude/settings.json" "$TMP/preflight-block.out"
+assert_file_contains "preflight names user config path" "user:       $empty_claude_config/settings.json" "$TMP/preflight-block.out"
+assert_file_contains "preflight prints add-dir launch" 'PANEL_REVIEW_TMP_ADDED=1 CLAUDE_CODE_FORK_SUBAGENT=0 claude --add-dir /tmp' "$TMP/preflight-block.out"
+
+cat > "$empty_claude_config/settings.json" <<'EOF'
+{"permissions":{"additionalDirectories":["/tmp"]}}
+EOF
+(
+  cd "$pf_repo" || exit 1
+  CLAUDE_CODE_FORK_SUBAGENT=0 CLAUDE_CONFIG_DIR="$empty_claude_config" \
+    CODEX_LOG="$TMP/codex4.log" PATH="$mockbin:$PATH" "$SC/preflight"
+) > "$TMP/preflight-configured.out" 2>&1; rc=$?
+assert_exit "configured /tmp grant satisfies preflight" 0 "$rc"
+assert_file_not_contains "configured /tmp grant emits no block" 'blockReadsOutsideWorkingDirectories blocks' "$TMP/preflight-configured.out"
+
+rm "$empty_claude_config/settings.json"
+(
+  cd "$pf_repo" || exit 1
+  PANEL_REVIEW_TMP_ADDED=1 CLAUDE_CODE_FORK_SUBAGENT=0 CLAUDE_CONFIG_DIR="$empty_claude_config" \
+    CODEX_LOG="$TMP/codex5.log" PATH="$mockbin:$PATH" "$SC/preflight"
+) > "$TMP/preflight-add-dir.out" 2>&1; rc=$?
+assert_exit "add-dir launch marker satisfies preflight" 0 "$rc"
+assert_file_not_contains "add-dir launch marker emits no block" 'blockReadsOutsideWorkingDirectories blocks' "$TMP/preflight-add-dir.out"
+
+rm "$pf_repo/.claude/settings.json"
+cat > "$empty_claude_config/settings.json" <<'EOF'
+{"permissions":{"blockReadsOutsideWorkingDirectories":true}}
+EOF
+(
+  cd "$pf_repo" || exit 1
+  CLAUDE_CODE_FORK_SUBAGENT=0 CLAUDE_CONFIG_DIR="$empty_claude_config" \
+    CODEX_LOG="$TMP/codex6.log" PATH="$mockbin:$PATH" "$SC/preflight"
+) > "$TMP/preflight-user-block.out" 2>&1; rc=$?
+assert_exit "preflight blocks user outside-workdir setting" 1 "$rc"
+assert_file_contains "preflight names blocking user file" "$empty_claude_config/settings.json" "$TMP/preflight-user-block.out"
 
 section "protocol and template contracts"
 protocol="$root/skills/panel-review-for-agent/references/protocol.md"

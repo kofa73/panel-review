@@ -79,3 +79,21 @@ this one guard survives a rule that rejects guards against a tampering local act
 - Do not remove the temp-file-and-rename rotation. Both sides of the panel agreed it stays.
 - Do not extend either implementation with further hardening; that is the direction `AGENTS.md`
   rules out.
+
+## Comments
+
+### 2026-09-05 — the host now does its own symlink refusal, for a different target
+
+Claude Code (in the 2.1.240–2.1.261 range) added: "Fixed plugins being able to read files outside
+their own directory through a declared command, agent, skill, hooks or other component path that is
+a symlink; such paths are now refused with an error."
+
+This does **not** decide this issue. The host's refusal covers the *plugin tree's* declared component
+paths; `panel_atomic_write` guards *run state* under `/tmp/<ID>/`, which the host never inspects. The
+two protect different things.
+
+What it does supply is one data point for the argument the panel could not settle: a runtime whose
+own trust model is far stricter than this plugin's still judged symlink refusal worth implementing on
+the paths it owns. That is evidence about the general question, not about whether the duplicated
+bash/Python checks here earn their keep — and it says nothing at all about the drift between the two
+copies, which is this issue's one undisputed defect.

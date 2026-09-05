@@ -111,3 +111,42 @@ recorded in this repository. What the pin order costs and buys mechanically is s
 - Do not add automatic model discovery or "latest model" resolution to either wrapper. Pins are
   deliberate: a silently changing seat model makes review results incomparable between runs.
 - Do not adopt `--strict-config` for Codex; it fails on user config keys the plugin does not own.
+
+## Comments
+
+### 2026-09-05 — both pins are behind again (agy 1.1.27, codex-cli 0.153.4)
+
+Two new candidates, both raised by the panel owner or found in the same CLI-delta review. Neither is
+adopted here: the choice of review model is still the owner's call, and this section only records
+what exists.
+
+**Gemini seat — `Gemini 3.8 Flash (High)` is now available and is the owner's preferred candidate.**
+`agy models` on 1.1.27 lists, in catalogue order:
+
+```
+gemini-3.8-flash-{high,medium,low}    Gemini 3.8 Flash (High|Medium|Low)
+gemini-3.7-flash-{high,medium,low}
+gemini-3.6-flash-{high,medium,low}
+gemini-3.1-pro-{high,low}
+```
+
+The Pro line still has not moved past 3.1, and 3.1 Pro is still the primary pin (reversed 2026-08-22,
+above). The owner's assessment is that 3.8 Flash may now beat 3.1 Pro outright, which — if adopted —
+would reverse the order a *second* time and restore the 2026-08-15 consequence: the fallback would no
+longer be the faster model. Note that agy 1.1.25's changelog announces 3.8 Flash only "when
+connecting with a `GEMINI_API_KEY`", yet it is listed under this machine's current auth; if the pin
+is adopted, verify it binds under the auth the panel actually runs on, not just that it is listed
+(`tests/live/agy_model_binding.sh`).
+
+**Codex seat — the shipped asset is now two generations behind.** `assets/default-panel-review.config.toml`
+still ships `model = "gpt-5.5"`, `model_reasoning_effort = "xhigh"`. The bundled catalogue in the
+installed codex-cli 0.153.4 carries `gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`,
+`gpt-5.5` and `gpt-5.2` as listed entries (`gpt-6-astra` was added hidden in the 0.153 line and
+un-hidden shortly after, per codex commits `ed391d4dd2` and `a97cf1b72e`). This machine's already
+hand-corrected `~/.codex/panel-review.config.toml` runs `gpt-5.6-sol` at `high` — note the effort
+has drifted from `max` as recorded in the body above, so whatever ships should be re-read from that
+file rather than from this issue.
+
+The recommendation in "Decisions required" item 3 stands but its value is stale: match what is
+actually proven on this machine (`gpt-5.6-sol`), or take `gpt-6-astra` only after a real review run
+on it. Do not adopt a model on catalogue position alone.

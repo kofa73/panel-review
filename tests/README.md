@@ -121,7 +121,9 @@ Each exits `3` when its CLI is not installed, which the suite reports as a skip.
 ## What the bash suite covers (`run_tests.sh`)
 
 - **resolve_diff**: combined staged + unstaged tracked diff; no-`HEAD` fallback.
-- **preflight**: recognizes authenticated `codex login status`.
+- **preflight**: recognizes authenticated `codex login status`; rejects
+  `blockReadsOutsideWorkingDirectories` without a persistent `/tmp` grant or the explicit
+  `--add-dir` launch marker.
 - **birth_index**: birth-unanimity state/flags/coverage (unanimous→accepted/peer,
   full-panel→fully_vetted, divergence→detail_contested, partial/single→open),
   `evaluated_by` from raisers, and validation rejects (style severity, unknown

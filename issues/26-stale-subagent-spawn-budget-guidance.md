@@ -65,3 +65,12 @@ Re-raised independently by all three seats at Round 0 of panel review
 must change together: `README.md:264`, `skills/start/SKILL.md:165`, `skills/resume/SKILL.md:134`,
 `skills/continue/SKILL.md:96`, `skills/panel-review-for-agent/SKILL.md:126` — plus the three
 `scripts/check_contracts` assertions (lines 181, 225, 284) that pin the wording.
+
+### 2026-09-05 — re-confirmed on Claude Code 2.1.261
+
+`docs/sub-agents.md` "Concurrent subagent limit" still reads: "when 20 subagents are running in a
+session, spawning another with the Agent tool fails with `Concurrent subagent limit reached`, and the
+error tells Claude not to retry", configurable with `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS`, with
+ultracode sessions exempt. The `Subagent spawn limit reached` wording README and `check_contracts`
+pin has not returned in the 2.1.240–2.1.261 range. This issue's fix is still needed and its target
+wording is still correct.

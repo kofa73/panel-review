@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # preflight — verify the panel-review environment.
 #
-# Hard requirements: jq, git, a git work tree, a writable cwd, and at least one
-# PEER seat — the codex CLI or agy (Gemini). The Claude seat is the host and is
-# always present; Codex and Gemini are interchangeable optional peers, so the
-# review only needs Claude + one of them.
+# Hard requirements: jq, git, a git work tree, a writable cwd, access to /tmp,
+# and at least one PEER seat — the codex CLI or agy (Gemini). The Claude seat is
+# the host and is always present; Codex and Gemini are interchangeable optional
+# peers, so the review only needs Claude + one of them.
 #
 # Exit 1 if the core is unusable; exit 0 otherwise. Prints human-readable
 # status. The final two lines are "CODEX: yes|no" and "GEMINI: yes|no" for
@@ -41,6 +41,68 @@ if [ "${CLAUDE_CODE_FORK_SUBAGENT:-}" != "0" ]; then
   echo "       Do not export it globally (it disables forks for all your work); see README"
   echo "       \"Requirements\" for the recommended alias/wrapper."
   hard_fail=1
+fi
+
+# Panel state and the canonical seat inputs live under /tmp, outside the repository.
+# Claude Code 2.1.257+ can block the native file tools and recognized shell reads
+# there even in bypassPermissions mode. An opaque script cannot query Claude Code's
+# effective working-directory list, so a --add-dir launch carries an explicit marker;
+# persistent additionalDirectories entries can be verified directly below.
+if command -v jq >/dev/null 2>&1; then
+  config_home="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+  project_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd -P)"
+  # The two project-scoped files have DIFFERENT bases on purpose — this is not a typo.
+  # Claude Code reads the shared .claude/settings.json from the session's primary working
+  # directory, but .claude/settings.local.json from the git repository root (since 2.1.211;
+  # in a worktree, the main checkout's root). So "$project_root/.claude/settings.json" is
+  # deliberately absent: Claude Code never reads it, and a /tmp grant placed there would not
+  # take effect. Documented under "Where Claude Code keeps the local file in a git
+  # repository" in the settings reference.
+  #
+  # Known gap: in the documented cases where the local file stays beside settings.json
+  # instead (outside a repository, repo root == $HOME, Windows, root not owned by the user),
+  # and for a pre-2.1.211 leftover in the starting directory, "$PWD/.claude/settings.local.json"
+  # is not inspected. That can miss either an enabling `true` or a /tmp grant.
+  settings_files=(
+    "$config_home/settings.json"
+    "$PWD/.claude/settings.json"
+    "$project_root/.claude/settings.local.json"
+    "/etc/claude-code/managed-settings.json"
+    "/Library/Application Support/ClaudeCode/managed-settings.json"
+  )
+  for file in /etc/claude-code/managed-settings.d/*.json \
+              "/Library/Application Support/ClaudeCode/managed-settings.d/"*.json; do
+    [ -f "$file" ] && settings_files+=("$file")
+  done
+
+  blocking_files=()
+  tmp_configured=0
+  for file in "${settings_files[@]}"; do
+    [ -f "$file" ] || continue
+    jq -e '.permissions.blockReadsOutsideWorkingDirectories == true' "$file" >/dev/null 2>&1 \
+      && blocking_files+=("$file")
+    jq -e '(.permissions.additionalDirectories // []) | any(. == "/tmp" or . == "/tmp/")' \
+      "$file" >/dev/null 2>&1 && tmp_configured=1
+  done
+
+  if [ "${#blocking_files[@]}" -gt 0 ] \
+     && [ "$tmp_configured" -ne 1 ] \
+     && [ "${PANEL_REVIEW_TMP_ADDED:-}" != "1" ]; then
+    echo "ERROR: permissions.blockReadsOutsideWorkingDirectories blocks panel-review's /tmp state."
+    echo "       Enabled by:"
+    for file in "${blocking_files[@]}"; do echo "           $file"; done
+    echo "       Add this object (merge it with existing permissions) to either:"
+    echo "           repository: $PWD/.claude/settings.json"
+    echo "           user:       $config_home/settings.json"
+    echo '       {'
+    echo '         "permissions": {'
+    echo '           "additionalDirectories": ["/tmp"]'
+    echo '         }'
+    echo '       }'
+    echo "       Then start a new session. Alternatively, launch it with:"
+    echo "           PANEL_REVIEW_TMP_ADDED=1 CLAUDE_CODE_FORK_SUBAGENT=0 claude --add-dir /tmp"
+    hard_fail=1
+  fi
 fi
 
 # At least one peer seat must be present.

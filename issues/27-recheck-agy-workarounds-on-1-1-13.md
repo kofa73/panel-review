@@ -72,3 +72,22 @@ does not exist in 1.1.13 (usage error, exit 1). `scripts/run_agy`'s header alrea
 - Do not delete a hard-won fact on changelog evidence alone; measure first.
 - Do not change `run_agy`'s invocation form or model pins here (issues 20 and 21).
 - Do not raise the prompt-size budget as part of this issue.
+
+## Comments
+
+### 2026-09-05 — the version this issue names is four releases stale
+
+Installed agy is now **1.1.27**; this issue is written against 1.1.13, and the recorded baseline in
+`docs/agents/external-cli-baselines.md` is 1.1.18. Two things follow.
+
+**The measurements are still the right ones, but must be taken on 1.1.27.** Both workarounds this
+issue re-checks — the absolute path anchor (agy guesses its repo root) and the prompt-size limit
+(prose-not-JSONL above ~99 KB) — are behavioral, not versioned, so re-running them on 1.1.13 would
+prove nothing about what the panel runs today.
+
+**The repo-root question has new evidence in it.** `issues/60` may put the Gemini seat under
+`/boost`, which runs subagents in "ephemeral isolated worktrees". Where those land is the same
+question this issue asks about the anchor, one level down. Take the two measurements together if
+both are live; they share a setup.
+
+Nothing here changes this issue's scope or its non-goals — only the version to measure on.

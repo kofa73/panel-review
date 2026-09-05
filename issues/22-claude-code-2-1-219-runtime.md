@@ -122,3 +122,61 @@ from working; the stale spawn-budget guidance is **issue 26**.
 - Do not add a runtime version or environment check to `preflight`.
 - Do not change any agent or skill frontmatter.
 - Do not re-run the referee cost measurements as part of this issue.
+
+## 6. Additions from the 2.1.240 → 2.1.261 review (2026-09-05)
+
+Baseline reviewed: `docs/agents/external-cli-baselines.md` records 2.1.239; installed is **2.1.261**.
+Facts below are documentation-only for this issue; the ones that need work of their own are filed
+separately and named.
+
+**Subagent model resolution changed under the panel.** Before 2.1.251, `CLAUDE_CODE_SUBAGENT_MODEL`
+overrode both a per-spawn model and an agent definition's `model:` field. From 2.1.251 it is only a
+*default*, and the definition's `model:` and an explicit per-spawn model take precedence. New
+`CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` (2.1.257+) restores the old override behavior for every
+subagent. This matters to the panel in both directions: the seat and referee agents pin
+`model: opus` in their own frontmatter, so on 2.1.251+ that pin now wins by default — but a user who
+sets `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` silently overrides the Claude seat's model and makes results
+incomparable between runs, exactly the failure the model pins exist to prevent. Worth a `preflight`
+line in the same spirit as `issues/62`, or at minimum a README note.
+
+**Prompt-cache TTL is now configurable for subagents.** `subagentPromptCacheTtl` /
+`CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL` (`5m` or `1h`, 2.1.242+), plus per-agent
+`experimental.cacheTtl` in agent frontmatter. Relevant to `issues/09` and the referee context-cost
+record: the referee is spawned once and runs for the whole review, so a 1-hour subagent TTL changes
+the cost profile of a long panel. Measure before adopting — 1-hour cache *writes* bill higher.
+
+**Output-size settings replaced the env vars.** `bashOutputMaxChars` (up to 128K) supersedes
+`BASH_MAX_OUTPUT_LENGTH`, and `taskOutputMaxChars` supersedes `TASK_MAX_OUTPUT_LENGTH`; when the
+setting is present the variable is ignored. Any guidance the panel gives about seat or barrier
+output limits should name the settings first.
+
+**`maxTurns` returns are now marked partial (2.1.246+).** A subagent that hits its `maxTurns` limit
+returns its output "marked as partial, with a hint to continue it via `SendMessage`", instead of
+appearing finished. No panel agent sets `maxTurns`, so this is latent — but if one ever does, a
+partial return is a non-exact status stub and the `SubagentStop` hook (`issues/13`) will block it.
+Record the interaction rather than adding a guard for a configuration the plugin does not ship.
+
+**`--append-subagent-system-prompt-file` (2.1.261)** reads a subagent system prompt from a file, for
+prompts too large for the command line. Not needed — the panel delivers seat prompts as task text,
+not as system-prompt appendices — but it is the flag to reach for if prompt size ever forces a
+change (see the prompt-size fact in `AGENTS.md`).
+
+**Plugin component paths that are symlinks are now refused (in the 2.1.240–2.1.261 range):** "Fixed
+plugins being able to read files outside their own directory through a declared command, agent,
+skill, hooks or other component path that is a symlink; such paths are now refused with an error."
+This is host-side evidence for `issues/40` — the harness now does its own symlink refusal on the
+plugin tree — but it does not touch `panel_atomic_write`, which guards *run state* under `/tmp`, not
+plugin components. It does not settle that issue; it only narrows what the plugin has to worry about.
+
+**`${CLAUDE_PLUGIN_ROOT}` in hook error messages is now resolved** rather than printed literally.
+Cosmetic, but it means a hook failure report from `hooks/enforce_agent_status_stub` will now name a
+real path.
+
+**Confirms `issues/26`.** The current `docs/sub-agents.md` still names the error `Concurrent
+subagent limit reached` (20 concurrent subagents by default,
+`CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS`), not the `Subagent spawn limit reached` wording README and
+`check_contracts` still pin. Re-confirmed at 2.1.261; that issue's fix is still needed.
+
+**Filed separately from this review:** `issues/62` (reads outside the working directories can be
+blocked outright, 2.1.257+) and the update to `issues/43` (the 60-minute subagent background-shell
+cap may have been removed in 2.1.260, with the docs contradicting the changelog).

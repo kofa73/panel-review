@@ -80,3 +80,32 @@ why it is there — matching that wrapper's existing convention.
 - Do not create, edit, or delete any file under `~/.codex/` other than the profile `run_codex`
   already owns.
 - Do not adopt a flag whose effect has not been observed on this machine.
+
+## Comments
+
+### 2026-09-05 — flag and behavior surface to triage on codex-cli 0.153.4
+
+The recorded baseline is 0.149.0; installed is **0.153.4**. Every flag `run_codex` passes still
+exists on 0.153.4 (`--profile`, `--dangerously-bypass-approvals-and-sandbox`, `-c`, `-o`, `--json`),
+so this remains a decision register, not a defect. New or newly-relevant surface:
+
+| Flag / behavior | Why it might matter here |
+|---|---|
+| `--enable <FEATURE>` / `--disable <FEATURE>` | Sugar for `-c features.<name>=true\|false`. Cheap way to turn a specific behavior off per run without touching the profile. |
+| `--strict-config` | Still ruled out by this issue's non-goals and `issues/21`'s — it errors on user config keys the plugin does not own. |
+| `--approve-for-me` | "Route approval requests through automatic review using the workspace-write sandbox." A milder alternative to `--dangerously-bypass-approvals-and-sandbox`, but it introduces a *second model* deciding what the seat may run, which is a blindness and determinism question, not just a permissions one. |
+| `--thread-source <SOURCE>` | Classification only; no effect on the seat. Record as declined. |
+| `--add-dir <DIR>` | Additional writable directories. Convenience, not a control — same trust-model caveat as agy's. |
+| `--ignore-user-config` | Skips `$CODEX_HOME/config.toml`. Does **not** solve `issues/47`: that issue is about the cwd/tree/repo config layers sitting *above* the profile, which this flag does not touch. Say so there rather than letting the flag look like a fix. |
+| `codex exec` managed worktrees (commit `eb5a00b068`) | New in this range. Same class of question as `issues/60`'s worktree measurement: if the Codex seat can be made to work in a worktree, it changes what `repo_guard` is guarding. |
+| "Warn when saved model defaults are overridden" (`68e9c4a31a`) | Direct evidence for `issues/47` — the CLI now surfaces the override this panel cannot currently detect. Worth reading before that issue's fix is designed. |
+
+**Guardian.** A substantial share of the 0.149→0.153 commits add a "Guardian" review layer with
+model-provided review policies, per-model requirements, and compaction checkpoints. It is not a flag
+and its interaction with `codex exec --dangerously-bypass-approvals-and-sandbox` is unmeasured. Read
+before the next Codex-seat change; do not assume the bypass flag still bypasses everything it used to.
+
+**Delta not fully triaged.** 608 commits separate the baseline from HEAD, filtered here for the
+surfaces the plugin touches (`codex exec` flags, config layering, sandbox, MCP, bundled models). The
+Codex baseline in `docs/agents/external-cli-baselines.md` should therefore **not** be advanced on the
+strength of this comment alone.

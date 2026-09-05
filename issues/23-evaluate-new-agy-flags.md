@@ -85,3 +85,27 @@ it is there — matching the existing convention that every flag in that wrapper
 - Do not change the Gemini seat's output contract or `parse_block`'s interface.
 - Do not adopt `--effort` (see issue 20).
 - Do not add flags whose effect has not been observed on this machine.
+
+## Comments
+
+### 2026-09-05 — flag surface to triage on agy 1.1.27
+
+The recorded baseline is 1.1.18; installed is 1.1.27. `agy --help` on 1.1.27 shows these flags,
+which need a recorded decision each in the table above (some may predate 1.1.18 and already have
+one — check before re-analysing):
+
+| Flag | Why it might matter here |
+|---|---|
+| `--disable-slash-commands` | Would make the seat prompt immune to accidental leading-command expansion — and would break `issues/60`. The two must be decided together; `issues/61` owns the question. |
+| `--json-schema <schema>` | "Enforce structured output". The seat contract is exactly a structured-output contract enforced today by prose plus `parse_block`. If this binds, it is the strongest available answer to the prose-not-JSONL failure mode recorded in `AGENTS.md`. Highest-value candidate in this list. |
+| `--output-format json` / `stream-json` | Would give a machine-readable envelope instead of raw stdout, and (1.1.27) carries `denied_actions`. Changes what `run_seat` and the fence scan parse; see `issues/61`. |
+| `--input-format stream-json` | Not needed — the panel sends one prompt per pass. |
+| `--mode accept-edits\|plan` | `plan` is a read-only-ish posture that may suit a reviewer seat better than `--dangerously-skip-permissions`. Measure whether a plan-mode seat can still run its read tools. |
+| `--sandbox` | "Run in a sandbox with terminal restrictions enabled". Reconcile with the no-security-theatre rule: this is a real host control, not a seat-cooperative one, so it is admissible — but it may block the seat's tool use. |
+| `--add-dir` | Could scope what the seat can reach. Note the trust model: seats are unconstrained by design, so treat this as convenience, not a control. |
+| `--agent`, `--effort` | `--effort` remains ruled out by `issues/20` (effort rides in the model label). `--agent` would let the seat run under a named agent definition instead of a long inline prompt. |
+
+Also new in the unreviewed range and worth noting even though they are not flags: an **embedded
+`ripgrep`** replaces whatever the machine provides (1.1.21), so seat search behavior no longer
+varies with the container's tooling; and **`always-proceed` now auto-approves MCP tool calls**
+(1.1.21), which is the mode the tilth MCP server runs under.

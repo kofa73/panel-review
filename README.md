@@ -12,6 +12,34 @@ Built on the original version: https://github.com/jcputney/agent-peer-review.
 > versions may misbehave. The project is **work-in-progress**: as both this code and Claude Code
 > evolve, you may hit rough edges. Update Claude Code (`claude update`) before reporting an issue.
 
+### Allow panel state under `/tmp`
+
+Panel-review keeps its canonical state and seat scratch under `/tmp`, outside the repository under
+review. If any Claude Code settings source enables
+`permissions.blockReadsOutsideWorkingDirectories`, add `/tmp` as an additional working directory.
+Merge this object into either the repository settings at `.claude/settings.json` or the user settings
+at `~/.claude/settings.json` (`$CLAUDE_CONFIG_DIR/settings.json` when that variable is set):
+
+```json
+{
+  "permissions": {
+    "additionalDirectories": ["/tmp"]
+  }
+}
+```
+
+Start a new Claude Code session after changing the file. As a session-only alternative, launch with
+both the Claude Code grant and the marker that lets the script-only `preflight` verify how the
+session was started:
+
+```bash
+PANEL_REVIEW_TMP_ADDED=1 CLAUDE_CODE_FORK_SUBAGENT=0 claude --add-dir /tmp
+```
+
+`preflight` refuses a detected outside-read block unless it also finds the persistent `/tmp` grant
+or that launch marker. The marker is necessary because Claude Code does not expose its effective
+`--add-dir` list to subprocesses.
+
 ### Start the session with fork mode off
 
 A panel review **must** run in a session started with **`CLAUDE_CODE_FORK_SUBAGENT=0`**:
@@ -469,7 +497,7 @@ independent, deterministic authority for user-visible report delivery.
 
 | Component | Job |
 |-----------|-----|
-| `preflight` | Check jq / git / work-tree / writable cwd and that ≥1 peer seat (`codex` or `agy`) is present; emit `CODEX:` / `GEMINI:` availability |
+| `preflight` | Check jq / git / work-tree / writable cwd, detect a configured outside-workdir read block without a `/tmp` grant, and require that ≥1 peer seat (`codex` or `agy`) is present; emit `CODEX:` / `GEMINI:` availability |
 | `resolve_diff` | Turn a scope token into the diff text — **one** place owns scope→diff (`start`/`resume`/`continue` hash it, referee reviews it) |
 | `diff_hash` | Stable hash of the resolved diff, for the manifest and the resume/diverged check |
 | `assemble` | Splice scope + a diff **reference** (or card paths) + the rendered seat contract into a prompt template without an LLM retyping them |
