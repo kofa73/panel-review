@@ -2,7 +2,7 @@
 
 Priority: 35
 
-Status: Pending
+Status: Optional
 
 Source: Panel review `panel-20260816-080558-5ab680af` (Claude + Codex + Gemini), 2026-08-16 — raised in debate round 1, accepted unanimously in round 2
 

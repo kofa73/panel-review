@@ -105,7 +105,9 @@ from working; the stale spawn-budget guidance is **issue 26**.
   blocking-return semantics are.
 - **Task/todo tools are gone on current models.** 2.1.233 removed `TaskCreate`/`TaskGet`/
   `TaskUpdate`/`TaskList`/`TodoWrite` from Opus 4.8, Sonnet 5, Fable 5, Mythos 5 and newer.
-  Panel-review never uses them; recorded so the absence is not investigated again.
+  The referee's "Progress reporting" section did call `TaskCreate`; that section was deleted
+  by `issues/41-referee-taskcreate-instructions-are-dead.md`, so the tree no longer uses any of
+  them. Recorded so the absence is not investigated again.
 - **Skill argument substitution no longer re-expands argument values as template markers**
   (2.1.233). Relevant to `panel-review:start "<question>"`, where a question containing something
   like `${CLAUDE_PLUGIN_ROOT}` could previously be re-expanded. Upstream fix, no action.

@@ -2,7 +2,7 @@
 
 Priority: 41
 
-Status: Pending
+Status: Completed
 
 Source: Simplification panel (Opus, Sol, Gemini Pro, Gemini Flash), 2026-08-16 — raised independently
 by Opus (§4.2) and Sol (§3); verified in the working tree
@@ -46,3 +46,24 @@ counter-example.
 - Do not add `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` to the session requirements to keep the section
   working. The session already carries one mandatory environment requirement
   (`CLAUDE_CODE_FORK_SUBAGENT=0`); a second one bought for a progress spinner is not worth it.
+
+## Resolution
+
+**Completed 2026-09-05.** All three items landed:
+
+1. The "Progress reporting" section is deleted from `agents/panel-review-referee.md` (13 lines,
+   former 58-70); the file now goes from "Mandatory contract" straight to "Output".
+2. `issues/22-claude-code-2-1-219-runtime.md`'s "Panel-review never uses them" is replaced by a true
+   statement: the referee's section did call `TaskCreate`, it was deleted here, and the tree uses
+   none of the five tools now.
+3. Nothing had to be dropped from `check_contracts` or the test suite — the search for
+   `TaskCreate`/`TaskGet`/`TaskUpdate`/`TaskList`/`TodoWrite`/`activeForm`/`Progress reporting` over
+   the whole tree found the section itself and the two issue files, and no pin anywhere.
+
+Verification: `grep -rn "TaskCreate\|TodoWrite\|activeForm" agents skills scripts tests README.md
+docs .claude` returns nothing; `scripts/check_contracts --root .` prints `instruction contracts: OK`;
+`./tests/run_tests.sh` reports `PASS: 269   FAIL: 0`; `git diff --check` is clean.
+
+No replacement progress channel was added. The foreground Agent call already shows the referee's
+subagent row for the run's duration, and the seat dispatches are themselves foreground Agent calls,
+so the user's view of where a run stands is unchanged by the deletion.

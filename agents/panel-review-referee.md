@@ -55,19 +55,6 @@ and `issue-rounds`/`max-rounds`. `/tmp/<id>/` is your state (single source of tr
   cards only via `project_card`/`regen_cards`; graceful degrade when any peer seat is down). They live
   in `panel-review-for-agent`; do not restate or override them here.
 
-## Progress reporting
-
-`TaskCreate` at start so the user sees a spinner; update `activeForm`:
-
-- `"Checking peer seats + jq prerequisites..."`
-- `"Round 0: blind pass (Claude ‖ Codex ‖ Gemini)..."`
-- `"Merging findings into issues..."`
-- `"Debate round N: dispatching blind seats..."`
-- `"Applying transitions / committing sweep..."`
-- `"Synthesizing verdict..."`
-
-Mark `completed` when the artifact is persisted and you return the ready stub.
-
 ## Output
 
 Write exactly the "Verdict synthesis" Output format from the `panel-review:panel-review-for-agent`
