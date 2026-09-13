@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Scripts</title><link rel="stylesheet" href="../assets/style.css"></head>
+<body><main class="slide">
+  <div class="topline"><span>16 · Lessons learned</span><span>17 / 21</span></div>
+  <div class="content"><div class="eyebrow">Engineering lessons</div><h2>Scripts</h2>
+    <div class="quote">Agents make the technical judgment calls. Scripts enforce everything else.</div>
+    <div class="grid four spaced">
+      <div class="card blue"><h3>Flow</h3><p>Enforce phase order — no step skipped or repeated by accident.</p></div>
+      <div class="card coral"><h3>Format</h3><p>Enforce the output shape (JSONL), so a response is parseable before anything reads it.</p></div>
+      <div class="card green"><h3>Content</h3><p>Enforce that required fields are actually present, not silently omitted.</p></div>
+      <div class="card gold"><h3>Persistence</h3><p>Enforce that state and history survive a crash or a resume.</p></div>
+    </div>
+    <p class="note spaced">Keep salvage separate from re-review. Record what actually happened, including degraded seats.</p>
+  </div>
+  <div class="footer"><span>Panel-review</span><nav class="nav"><a data-prev href="13-trust.html">←</a><a data-next href="15-cli-reality.html">→</a></nav></div>
+</main><script src="../assets/presentation.js"></script></body></html>

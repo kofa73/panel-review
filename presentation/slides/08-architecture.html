@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Architecture</title><link rel="stylesheet" href="../assets/style.css"></head>
+<body><main class="slide">
+  <div class="topline"><span>10 · Architecture zoom-in</span><span>11 / 21</span></div>
+  <div class="content"><div class="eyebrow">What is running?</div><h2>Architecture</h2>
+    <div class="agent-diagram" aria-label="Agent hierarchy and information flow diagram">
+      <svg viewBox="0 0 1000 500" role="img" aria-labelledby="diagram-title diagram-description">
+        <title id="diagram-title">Panel-review agent hierarchy</title>
+        <desc id="diagram-description">The main conversation sends scope and options to the referee. The referee sends blind prompts to the Claude seat and the CLI barrier. The barrier sends blind prompts to Codex and Gemini and returns parsed status. Seats return findings and stances to the referee. The referee persists run state and the verdict and returns a fixed status stub to the main conversation.</desc>
+        <defs>
+          <marker id="arrow" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#2563eb"></path></marker>
+          <marker id="arrow-coral" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#e26d5a"></path></marker>
+          <marker id="arrow-muted" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#657284"></path></marker>
+        </defs>
+
+        <rect class="node" x="25" y="45" width="190" height="72" rx="16"></rect>
+        <text class="node-title" x="120" y="76">Main conversation</text><text class="node-subtitle" x="120" y="98">starts the review</text>
+
+        <rect class="node referee" x="365" y="35" width="250" height="92" rx="18"></rect>
+        <text class="node-title" x="490" y="72">Referee</text><text class="node-subtitle" x="490" y="96">orchestrates · stays non-reviewing</text>
+
+        <rect class="node artifact" x="785" y="45" width="190" height="72" rx="16"></rect>
+        <text class="node-title" x="880" y="76">Run artifacts</text><text class="node-subtitle" x="880" y="98">state · evidence · verdict</text>
+
+        <rect class="node seat" x="125" y="320" width="190" height="78" rx="16"></rect>
+        <text class="node-title" x="220" y="352">Claude seat</text><text class="node-subtitle" x="220" y="376">fresh subagent</text>
+
+        <rect class="node barrier" x="405" y="235" width="170" height="78" rx="16"></rect>
+        <text class="node-title" x="490" y="267">CLI barrier</text><text class="node-subtitle" x="490" y="291">waits + parses</text>
+
+        <rect class="node seat" x="690" y="205" width="170" height="72" rx="16"></rect>
+        <text class="node-title" x="775" y="237">Codex seat</text><text class="node-subtitle" x="775" y="259">external CLI</text>
+
+        <rect class="node seat" x="690" y="335" width="170" height="72" rx="16"></rect>
+        <text class="node-title" x="775" y="367">Gemini seat</text><text class="node-subtitle" x="775" y="389">external CLI</text>
+
+        <path class="flow-line" d="M215 81 C270 81, 300 81, 365 81"></path><text class="flow-label" x="290" y="69">scope + options</text>
+        <path class="flow-line control" d="M365 107 C300 145, 270 145, 215 107"></path><text class="flow-label" x="290" y="159">fixed status stub</text>
+        <path class="flow-line" d="M420 127 C365 190, 285 235, 240 320"></path><text class="flow-label" x="303" y="218">blind prompt</text>
+        <path class="flow-line return" d="M270 320 C320 245, 380 190, 455 127"></path><text class="flow-label" x="345" y="285">findings / stances</text>
+        <path class="flow-line" d="M490 127 L490 235"></path><text class="flow-label" x="548" y="187">seat commands</text>
+        <path class="flow-line return" d="M455 235 L455 127"></path><text class="flow-label" x="395" y="187">parsed status</text>
+        <path class="flow-line" d="M575 255 C620 240, 645 241, 690 241"></path><text class="flow-label" x="632" y="224">blind prompt</text>
+        <path class="flow-line" d="M575 291 C620 335, 645 371, 690 371"></path><text class="flow-label" x="632" y="347">blind prompt</text>
+        <path class="flow-line return" d="M690 263 C640 268, 620 272, 575 272"></path><text class="flow-label" x="632" y="286">raw output</text>
+        <path class="flow-line return" d="M690 389 C640 365, 620 320, 575 286"></path><text class="flow-label" x="632" y="414">raw output</text>
+        <path class="flow-line" d="M615 81 L785 81"></path><text class="flow-label" x="700" y="69">persist decisions</text>
+      </svg>
+    </div>
+    <div class="diagram-key"><span>review material</span><span class="return">seat output</span><span class="control">control / status</span></div>
+    <p class="note center spaced">Seats communicate with the referee through blind, structured artifacts. They do not communicate directly with one another.</p>
+  </div>
+  <div class="footer"><span>Panel-review</span><nav class="nav"><a data-prev href="07-debate.html">←</a><a data-next href="09-lifecycle.html">→</a></nav></div>
+</main><script src="../assets/presentation.js"></script></body></html>

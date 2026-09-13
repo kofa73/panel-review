@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Issue lifecycle</title><link rel="stylesheet" href="../assets/style.css"></head>
+<body><main class="slide">
+  <div class="topline"><span>11 · Architecture zoom-in</span><span>12 / 21</span></div>
+  <div class="content"><div class="eyebrow">One issue’s life</div><h2>Issue states</h2>
+    <div class="agent-diagram" aria-label="Issue lifecycle state diagram">
+      <svg viewBox="0 0 900 430" role="img" aria-labelledby="lifecycle-title lifecycle-desc">
+        <title id="lifecycle-title">Issue lifecycle state diagram</title>
+        <desc id="lifecycle-desc">An issue starts Open. If every available seat already raised it independently at birth, it is Accepted immediately, skipping debate. Otherwise it enters Debated, and may loop through another round. Debated resolves to Accepted on unanimous support, Rejected on unanimous rejection, or — at the round limit — Contested if seats are split, or Unresolved if too few seats engaged. Contested and Unresolved both go to a human.</desc>
+        <defs>
+          <marker id="arrow" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#2563eb"></path></marker>
+          <marker id="arrow-muted" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#657284"></path></marker>
+        </defs>
+
+        <rect class="node" x="20" y="175" width="150" height="80" rx="16"></rect>
+        <text class="node-title" x="95" y="207">Open</text><text class="node-subtitle" x="95" y="229">active concern</text>
+
+        <rect class="node referee" x="300" y="165" width="180" height="100" rx="18"></rect>
+        <text class="node-title" x="390" y="205">Debated</text><text class="node-subtitle" x="390" y="229">bounded rounds</text>
+
+        <rect class="node seat" x="650" y="20" width="180" height="70" rx="16"></rect>
+        <text class="node-title" x="740" y="51">Accepted</text><text class="node-subtitle" x="740" y="73">unanimous support</text>
+
+        <rect class="node artifact" x="650" y="110" width="180" height="70" rx="16"></rect>
+        <text class="node-title" x="740" y="141">Rejected</text><text class="node-subtitle" x="740" y="163">unanimous reject</text>
+
+        <rect class="node barrier" x="650" y="260" width="180" height="70" rx="16"></rect>
+        <text class="node-title" x="740" y="291">Contested</text><text class="node-subtitle" x="740" y="313">round limit, split</text>
+
+        <rect class="node barrier" x="650" y="350" width="180" height="70" rx="16"></rect>
+        <text class="node-title" x="740" y="381">Unresolved</text><text class="node-subtitle" x="740" y="403">round limit, thin</text>
+
+        <path class="flow-line" d="M170 215 L300 215"></path>
+        <path class="flow-line control" d="M370 165 C370 105, 430 105, 430 165"></path><text class="flow-label" x="400" y="98">another round</text>
+        <path class="flow-line" d="M140 175 C260 60, 500 20, 650 45"></path><text class="flow-label" x="360" y="45">unanimous at birth</text>
+        <path class="flow-line" d="M480 190 C560 150, 600 90, 650 55"></path>
+        <path class="flow-line" d="M480 205 C560 190, 600 165, 650 145"></path>
+        <path class="flow-line" d="M480 235 C560 250, 600 275, 650 295"></path>
+        <path class="flow-line" d="M480 250 C560 290, 600 345, 650 385"></path>
+      </svg>
+    </div>
+    <p class="note center spaced">Contested and Unresolved both go to a human — the difference is a split vote vs. too few engaged seats when the round limit hit.</p>
+  </div>
+  <div class="footer"><span>Panel-review</span><nav class="nav"><a data-prev href="08-architecture.html">←</a><a data-next href="10-results.html">→</a></nav></div>
+</main><script src="../assets/presentation.js"></script></body></html>
