@@ -58,15 +58,23 @@ m_profile_size=$(jq -r '.review_profile.size // 0' "$man" 2>/dev/null) || stale
 
 # Re-resolve THIS manifest's own scope and compare hashes — divergence check.
 diff_file="$(mktemp /tmp/inspect_run_diff.XXXXXX)"
-trap 'rm -f "$diff_file"' EXIT
+divergence_file="$(mktemp /tmp/inspect_run_divergence.XXXXXX)"
+trap 'rm -f "$diff_file" "$divergence_file"' EXIT
 state=""
-if "$here/resolve_diff" "$m_scope" > "$diff_file" 2>/dev/null; then
+printf 'null\n' > "$divergence_file"
+if (cd "$workdir" && "$here/resolve_diff" "$m_scope") > "$diff_file" 2>/dev/null; then
   cur_dh="$("$here/diff_hash" < "$diff_file")"
   [ "$cur_dh" = "$m_dh" ] || state="diverged"
 else
   # Scope no longer resolves (e.g. base branch deleted) — treat as diverged,
   # not stale: the run's own state is intact, only the snapshot's premise broke.
   state="diverged"
+fi
+if [ "$state" = "diverged" ]; then
+  if ! "$here/scope_diagnostics" compare --workdir "$workdir" --manifest "$man" \
+    --baseline-diff "/tmp/$id/diff.txt" > "$divergence_file" 2>/dev/null; then
+    printf '%s\n' '{"available":false,"reason":"diagnostics could not be computed"}' > "$divergence_file"
+  fi
 fi
 
 counts="$(jq -c '{
@@ -95,7 +103,8 @@ jq -n --arg id "$id" --arg state "$state" --arg scope "$m_scope" --arg instr "$m
       --argjson iss "$m_iss" --argjson mx "$m_mx" --arg created "$m_created" \
       --arg profile_path "$m_profile_path" --arg profile_hash "$m_profile_hash" \
       --argjson profile_size "$m_profile_size" \
+      --slurpfile divergence "$divergence_file" \
       --argjson counts "$counts" \
   '{id:$id, state:$state, scope:$scope, instructions:$instr,
     review_profile:{source_path:$profile_path, sha256:$profile_hash, size:$profile_size},
-    issue_rounds:$iss, max_rounds:$mx, created:$created} + $counts'
+    issue_rounds:$iss, max_rounds:$mx, created:$created, divergence:$divergence[0]} + $counts'

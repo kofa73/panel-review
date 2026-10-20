@@ -344,7 +344,24 @@ def cmd_prepare_round0(run_id, seats, attempt_kind):
     diff = run_command([HERE / "resolve_diff", manifest["scope"]], cwd=workdir).stdout
     actual_hash = hashlib.sha256(diff).hexdigest()
     if actual_hash != manifest.get("diff_hash"):
-        raise RoundError("resolved diff hash does not match the manifest")
+        diagnostic = run_command(
+            [
+                HERE / "scope_diagnostics",
+                "compare",
+                "--workdir",
+                workdir,
+                "--manifest",
+                directory / "manifest.json",
+                "--baseline-diff",
+                directory / "diff.txt",
+            ],
+            allow=(0, 1),
+        )
+        detail = diagnostic.stdout.decode("utf-8", "replace").strip()
+        raise RoundError(
+            "resolved diff hash does not match the manifest"
+            + (f"; divergence: {detail}" if diagnostic.returncode == 0 else "")
+        )
     diff_path = directory / "diff.txt"
     if diff_path.is_file():
         if hashlib.sha256(diff_path.read_bytes()).hexdigest() != actual_hash:

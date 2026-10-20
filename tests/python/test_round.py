@@ -16,6 +16,7 @@ RESOLVE_DIFF = ROOT / "scripts" / "resolve_diff"
 SWEEP = ROOT / "scripts" / "sweep"
 WRITE_RAW = ROOT / "scripts" / "write_seat_raw"
 PARSE_BLOCK = ROOT / "scripts" / "parse_block"
+SCOPE_DIAGNOSTICS = ROOT / "scripts" / "scope_diagnostics"
 
 FINDING = {
     "claim": "new value is ignored",
@@ -70,12 +71,28 @@ class RoundTest(unittest.TestCase):
             capture_output=True,
             check=True,
         ).stdout
+        divergence_snapshot = json.loads(
+            subprocess.run(
+                [
+                    str(SCOPE_DIAGNOSTICS),
+                    "snapshot",
+                    "--workdir",
+                    str(self.workdir),
+                    "--scope",
+                    "uncommitted",
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout
+        )
         manifest = {
             "id": self.run_id,
             "workdir": str(self.workdir),
             "scope": "uncommitted",
             "limits": {"issue_rounds": 2, "max_rounds": 4},
             "diff_hash": hashlib.sha256(diff).hexdigest(),
+            "divergence_snapshot": divergence_snapshot,
             "instructions": "",
             "phase": "round0",
             "state_version": 1,
@@ -237,6 +254,15 @@ class RoundTest(unittest.TestCase):
 
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("review profile snapshot does not match the manifest", result.stderr)
+
+    def test_prepare_round0_reports_tracked_content_divergence(self):
+        (self.workdir / "a.txt").write_text("changed after init\n", encoding="utf-8")
+
+        result = self.run_round("prepare-round0", self.run_id, "claude", "codex")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("resolved diff hash does not match the manifest", result.stderr)
+        self.assertIn('"tracked_content_changed":true', result.stderr)
 
     def test_collect_round0_parses_claude_raw_and_returns_compact_summary(self):
         self.prepare_round0()

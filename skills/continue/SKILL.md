@@ -58,7 +58,10 @@ longer resolves, emit the same diverged-family message `resume` does and stop.
   > Not finished — it was interrupted mid-debate. Did you mean `panel-review:resume`? `<details>`
   Build `<details>` the way `status` would (scope, instructions, progress via
   `"$SC/inspect_run" --id "$id" --workdir "$PWD"`), no ID. Stop.
-- **`diverged $id`** → same diverged message as `resume`'s Step 4. Stop.
+- **`diverged $id`** → same detailed divergence report as `resume`'s Step 4, suggesting removal or
+  `.git/info/exclude` for stray untracked files before retrying `panel-review:continue`. The run
+  proceeds only if its resolved diff hash matches the saved snapshot; otherwise use
+  `panel-review:discard` before starting a fresh review. Stop.
 - **`stale $id`** → same as `resume`'s Step 4: clean it, report cleared, "No saved review." Stop.
 - **`fresh`/`ambiguous`** → same fallback as `resume`'s Step 4. Stop.
 

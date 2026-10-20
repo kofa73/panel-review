@@ -157,7 +157,9 @@ byte-exact.
   and resume/diverged/stale classification. `PANEL_REVIEW_KEEP_TMP=true` makes `cleanup`/`discard` keep
   `/tmp/<id>/` (diagnostics) while still removing the workspace marker/cards/git-exclude. `init_run`
   selects the built-in profile when no external path is supplied and publishes the marker only after
-  the profile snapshot, manifest, and index exist.
+  the profile snapshot, uncommitted-scope divergence snapshot, manifest, and index exist.
+  `scope_diagnostics` owns that tracked-diff/untracked-path snapshot and its read-only comparison;
+  `inspect_run`, `resume_check`, and `round` report the results without weakening the hash gate.
 - `_panel_common.sh` (bash) / `panel_common.py` (Python) — parallel shared-helper libs kept in sync:
   `panel_valid_id`/`panel_require_id` (ID validation guarding `rm -rf` paths), `panel_atomic_write`
   (temp + fsync + rename, `.bak` rotation), git-exclude helpers. Python scripts import

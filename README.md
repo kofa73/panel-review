@@ -306,8 +306,13 @@ Four more behaviors worth knowing before you run it:
   uncommitted Round 0 may be tried again because the earlier failure may have gone away; a newly
   available seat joins later debate rather than changing the saved blind pass. Once the Round-0 issue
   index is installed, that blind pass is committed and is not rerun. If the code under review changed
-  since the interruption (**diverged**), neither `resume` nor `continue` will touch it —
-  `panel-review:discard` it and `panel-review:start` fresh.
+  since the interruption (**diverged**), neither `resume` nor `continue` will dispatch seats. For
+  `--uncommitted`, new runs report new and removed untracked paths plus whether tracked content
+  changed. Older runs can infer newly added paths from their saved diff, but may lack the tracked
+  baseline needed to classify tracked changes. Remove a stray file or add it to `.git/info/exclude`,
+  then retry. Resume and continue proceed only if the resolved diff hash matches the saved diff hash.
+  Editing a tracked `.gitignore` changes the reviewed diff too. For a deliberate scope change,
+  `panel-review:discard` the run and `panel-review:start` fresh.
 - **Agent-budget exhaustion fails closed.** If Claude Code reports `Subagent spawn limit reached`,
   panel-review keeps the current checkpoint and stops; this is an orchestration failure, not a
   down-seat pass. Start a fresh conversation (normally `/clear`) and invoke `panel-review:resume`.
@@ -531,8 +536,9 @@ These hooks provide bounded runtime enforcement, not a security boundary.
 | `birth_index` | Turn the referee's clustered Round-0 finding-to-issue map into the full `index.json` — assigns each issue's birth state, vetting flags, and `evaluated_by` coverage by the birth-unanimity rule (the deterministic half of clustering; the referee still owns the merge itself) |
 | `decide_round` / `decide_degraded_round` | Build normal (≥2 seats) and degraded (0–1 seat) debate payloads. Both update private `evaluated_by` coverage in the same atomic commit; the degraded path only emits terminal unresolved/contested states and eligible `fully_vetted` flags |
 | `merge_payload` | Validate the base and referee addendum, reject unknown keys and explicitly malformed consumed structures (including `null` and `false`), then fold additions into the `decide_round` payload with `commit-sweep`'s per-key semantics (`set_state` replace, `revise` field-merge); a rejected addendum leaves the canonical payload and index untouched, while the referee still decides whether folded evidence conflicts with the current outcome |
-| `init_run` / `resume_check` / `cleanup` | Mint a run (marker-last); decide resume/continuable/diverged/stale/ambiguous; tear down after the verdict |
+| `init_run` / `resume_check` / `cleanup` | Mint a run (marker-last), record an uncommitted-scope path snapshot, decide resume/continuable/diverged/stale/ambiguous, and tear down after the verdict |
 | `inspect_run` | Pure, read-only per-run inspector for `panel-review:status` — never repairs, never writes |
+| `scope_diagnostics` | Capture the tracked diff hash and untracked paths for an uncommitted run; compare them on divergence, falling back to the saved diff's path list for older runs |
 | `discard` | The fault-tolerant traversal behind `panel-review:discard` — removes every session for the workdir |
 | `set_limits` | Writes a `--issue-rounds`/`--max-rounds` override back into a run's manifest, for `resume`/`continue` |
 | `reopen` | The engine behind `panel-review:continue` — revives a **finished** run's `unresolved`/`contested` leftovers for another debate cycle: `index reopen` bumps `run_epoch` and clears `committed_rounds`, then `/tmp/<ID>/sweeps/` is cleared so `resume` starts a clean debate at round 1. Before that, it snapshots the finished cycle into `/tmp/<ID>/epochs/epoch-<n>/` (best-effort) so the next cycle's round-1 filenames don't destroy the previous cycle's transcripts/verdict. Counterpart to `init_run` |
@@ -647,8 +653,11 @@ the Round-0 low-severity gate). Push those issues further with:
 `continue` takes **no scope, review profile, or instructions** — it adopts the stored values and
 saved profile, along with the round limits, from the finished run (passing any of them is a hard error; `panel-review:status` shows
 what's stored, and `--issue-rounds`/`--max-rounds` may still be overridden). It re-resolves the diff:
-if the code under review changed since the snapshot (**diverged**), it refuses — `panel-review:discard`
-before `panel-review:start` is the only way forward. The selected issues return to **open** with their
+if the code under review changed since the snapshot (**diverged**), it refuses to continue. For an
+uncommitted scope, use the reported paths to identify stray untracked files. Remove a stray file or
+add it to `.git/info/exclude`, then retry. The saved run proceeds only if its resolved diff hash
+matches the saved diff hash. A tracked `.gitignore` edit changes the reviewed diff too. For an
+intentional scope change, discard the run and start fresh. The selected issues return to **open** with their
 per-issue and the global round counters reset to zero, so they get a full budget again; their
 accumulated evidence is kept, and already-settled issues are carried into the new verdict unchanged.
 If the run turns out not to be finished-with-leftovers (still mid-debate), `continue` redirects you to

@@ -11,13 +11,15 @@
 # Usage:
 #   resume_check --workdir DIR --scope STR --diff-hash HEX
 #
-# Output (stdout), exactly one of:
+# Output (stdout), the first line is exactly one of:
 #   fresh                  no marker dir -> nothing to resume/continue
 #   resume <ID>            run still has open issues -> can resume
 #   continuable <ID>       finished run (no open issues) with unresolved/contested left -> continue
 #   stale <ID>             marker but /tmp/<ID> missing/empty -> drop & start fresh
 #   diverged <ID>          the diff hash no longer matches — the code under review
 #                          changed since the snapshot; can't resume or continue
+# On divergence only, a second line is emitted as `divergence <JSON>` with details
+# from scope_diagnostics; the first-line verdict remains stable for command skills.
 #   ambiguous              more than one marker dir -> needs manual cleanup
 #
 # Unlike `inspect_run` (status's pure/read-only inspector), this script MAY
@@ -85,4 +87,9 @@ if [ "$m_scope" = "$scope" ] && [ "$m_dh" = "$dh" ]; then
   fi
 else
   echo "diverged $id"
+  if ! details="$("$here/scope_diagnostics" compare --workdir "$workdir" --manifest "$man" \
+    --baseline-diff "/tmp/$id/diff.txt" 2>/dev/null)"; then
+    details='{"available":false,"reason":"diagnostics could not be computed"}'
+  fi
+  printf 'divergence %s\n' "$details"
 fi

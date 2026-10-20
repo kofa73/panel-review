@@ -1094,6 +1094,82 @@ duplicate_repo="$TMP/duplicate-profile"; mkdir -p "$duplicate_repo"; git -C "$du
 assert_exit "duplicate review profile flag fails as usage" 2 "$?"
 assert_file_contains "duplicate review profile error is clear" 'duplicate --review-profile' "$TMP/duplicate-profile.err"
 
+section "uncommitted divergence diagnostics and hash-based resume"
+divergence_repo="$TMP/divergence-repo"; mkdir -p "$divergence_repo"; git -C "$divergence_repo" init -q
+git -C "$divergence_repo" config user.name test
+git -C "$divergence_repo" config user.email test@example.invalid
+printf 'base\n' > "$divergence_repo/tracked.txt"
+git -C "$divergence_repo" add tracked.txt
+git -C "$divergence_repo" commit -qm initial
+printf 'reviewed change\n' >> "$divergence_repo/tracked.txt"
+resolve_uncommitted_hash() {
+  (cd "$divergence_repo" && "$SC/resolve_diff" uncommitted) > "$TMP/divergence.diff" || return 1
+  "$SC/diff_hash" < "$TMP/divergence.diff"
+}
+snapshot_hash="$(resolve_uncommitted_hash)"
+cp "$TMP/divergence.diff" "$TMP/snapshot.diff"
+id="$("$SC/init_run" --workdir "$divergence_repo" --scope uncommitted --issue-rounds 2 --max-rounds 4 \
+  --diff-hash "$snapshot_hash" --instructions '')"
+printf 'seat scratch\n' > "$divergence_repo/seat_scratch.py"
+current_hash="$(resolve_uncommitted_hash)"
+inspection="$("$SC/inspect_run" --id "$id" --workdir "$divergence_repo")"
+assert_eq "status marks an added untracked file as diverged" 'diverged' "$(jq -r '.state' <<<"$inspection")"
+assert_eq "status names the new untracked file" 'seat_scratch.py' "$(jq -r '.divergence.new_untracked_paths[0]' <<<"$inspection")"
+assert_eq "status distinguishes unchanged tracked content" 'false' "$(jq -r '.divergence.tracked_content_changed' <<<"$inspection")"
+resume_output="$("$SC/resume_check" --workdir "$divergence_repo" --scope uncommitted --diff-hash "$current_hash")"
+assert_eq "resume check keeps its verdict first" "diverged $id" "$(sed -n '1p' <<<"$resume_output")"
+resume_details="$(sed -n '2s/^divergence //p' <<<"$resume_output")"
+assert_eq "resume check names the new untracked file" 'seat_scratch.py' "$(jq -r '.new_untracked_paths[0]' <<<"$resume_details")"
+cp "$TMP/snapshot.diff" "/tmp/$id/diff.txt"
+jq 'del(.divergence_snapshot)' "/tmp/$id/manifest.json" > "$TMP/legacy-manifest.json"
+assert_exit "legacy manifest rewrite succeeds" 0 "$?"
+cp "$TMP/legacy-manifest.json" "/tmp/$id/manifest.json"
+legacy_inspection="$("$SC/inspect_run" --id "$id" --workdir "$divergence_repo")"
+assert_eq "older run infers paths from its saved diff" 'saved-diff-paths' "$(jq -r '.divergence.source' <<<"$legacy_inspection")"
+assert_eq "older run still names a new untracked file" 'seat_scratch.py' "$(jq -r '.divergence.new_untracked_paths[0]' <<<"$legacy_inspection")"
+assert_eq "older run reports the tracked-change status as unknown" 'null' "$(jq -r '.divergence.tracked_content_changed' <<<"$legacy_inspection")"
+rm -f "$divergence_repo/seat_scratch.py"
+restored_hash="$(resolve_uncommitted_hash)"
+assert_eq "removing the stray file restores the original diff hash" "$snapshot_hash" "$restored_hash"
+resume_output="$("$SC/resume_check" --workdir "$divergence_repo" --scope uncommitted --diff-hash "$restored_hash")"
+assert_eq "the unchanged run can resume after hash restoration" "resume $id" "$resume_output"
+PANEL_REVIEW_KEEP_TMP=false "$SC/cleanup" --id "$id" --workdir "$divergence_repo"
+
+section "large uncommitted divergence snapshots and reports"
+large_divergence_repo="$TMP/large-divergence-repo"; mkdir -p "$large_divergence_repo"; git -C "$large_divergence_repo" init -q
+git -C "$large_divergence_repo" config user.name test
+git -C "$large_divergence_repo" config user.email test@example.invalid
+printf 'base\n' > "$large_divergence_repo/tracked.txt"
+git -C "$large_divergence_repo" add tracked.txt
+git -C "$large_divergence_repo" commit -qm initial
+# Long but valid Linux paths make the JSON exceed the per-argument limit with fewer git subprocesses.
+segment="$(printf '%230s' '' | tr ' ' x)"
+deep_path=""
+for ((i=0; i<15; i++)); do
+  deep_path="${deep_path:+$deep_path/}$segment"
+done
+deep_dir="$large_divergence_repo/$deep_path"
+mkdir -p "$deep_dir"
+for ((i=0; i<45; i++)); do
+  printf -v name 'baseline-%04d-%0100d.txt' "$i" "$i"
+  printf 'baseline\n' > "$deep_dir/$name"
+done
+large_id="$("$SC/init_run" --workdir "$large_divergence_repo" --scope uncommitted --issue-rounds 2 --max-rounds 4 \
+  --diff-hash "$(printf '0%.0s' {1..64})" --instructions '')"
+assert_exit "large uncommitted snapshot initializes" 0 "$?"
+assert_eq "large snapshot retains all initial paths" '45' "$(jq -r '.divergence_snapshot.untracked_paths_b64|length' "/tmp/$large_id/manifest.json")"
+if [ "$(wc -c < "/tmp/$large_id/manifest.json")" -gt 131072 ]; then ok "large snapshot exceeds Linux's per-argument limit"; else bad "large snapshot exceeds Linux's per-argument limit"; fi
+for ((i=0; i<45; i++)); do
+  printf -v name 'new-path-%04d-%0100d.txt' "$i" "$i"
+  printf 'new path\n' > "$deep_dir/$name"
+done
+"$SC/inspect_run" --id "$large_id" --workdir "$large_divergence_repo" > "$TMP/large-divergence-inspection.json"
+assert_exit "large divergence inspection succeeds" 0 "$?"
+assert_eq "large report names every new path" '45' "$(jq -r '.divergence.new_untracked_paths|length' "$TMP/large-divergence-inspection.json")"
+if [ "$(wc -c < "$TMP/large-divergence-inspection.json")" -gt 131072 ]; then ok "large report exceeds Linux's per-argument limit"; else bad "large report exceeds Linux's per-argument limit"; fi
+assert_eq "large report keeps the diverged state" 'diverged' "$(jq -r '.state' "$TMP/large-divergence-inspection.json")"
+PANEL_REVIEW_KEEP_TMP=false "$SC/cleanup" --id "$large_id" --workdir "$large_divergence_repo"
+
 # ---------------------------------------------------------------------------
 section "cleanup / discard — PANEL_REVIEW_KEEP_TMP preserves /tmp diagnostics"
 keeprepo="$TMP/keep-repo"; mkdir -p "$keeprepo"; ( cd "$keeprepo" && git init -q )

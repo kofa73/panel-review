@@ -733,7 +733,11 @@ index diverge from its own just-rotated `.bak`, and that divergence *is* the tra
 
 1. Read `/tmp/$id/manifest.json` (scope, limits, `instructions`, and review-profile metadata — the launching command adopted
    these from the manifest and confirmed via `resume_check` that the diff hash is unchanged; a
-   diverged or stale run would not have dispatched you). The source profile path is provenance only;
+   diverged or stale run would not have dispatched you). For an uncommitted-scope mismatch, the
+   command reports new/removed untracked paths and whether tracked content changed. Removing a stray
+   file or adding it to `.git/info/exclude` may restore the saved diff hash. A tracked `.gitignore`
+   edit changes that hash too. Never bypass the hash gate or dispatch on a mismatch. The source
+   profile path is provenance only;
    every resumed prompt uses `/tmp/$id/review-profile.md`. If `/tmp/$id/instructions.txt` is absent (resume before Round 0
    finished resolving it), regenerate it via Round 0 step 2 before any seat prompt is assembled.
 2. **Re-run `"$SC/preflight"`** — the environment may have changed since the interrupted run (e.g.

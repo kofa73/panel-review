@@ -31,8 +31,9 @@ code).
 
 There is no build or lint framework. Scripts are a mix of **bash and Python**. The Python scripts are
 `check_contracts`, `check_draft`, `decide_degraded_round`, `decide_round`, `index`, `merge_payload`,
-`parse_block`, `read_protocol_phase`, `read_verdict_artifact`, `round`, `seat_contract.py`, `sweep`,
-and `write_seat_raw`; `panel_common.py` is their shared library. The remaining scripts are bash;
+`parse_block`, `read_protocol_phase`, `read_verdict_artifact`, `round`, `scope_diagnostics`,
+`seat_contract.py`, `sweep`, and `write_seat_raw`; `panel_common.py` is their shared library. The
+remaining scripts are bash;
 skills/agents are Markdown. `python3`, `jq`, `git` are required.
 
 - **Install (two paths):**

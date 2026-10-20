@@ -84,9 +84,13 @@ rm -f "$DIFF_FILE"
   > `panel-review:continue [unresolved|contested]`? `<details>`
   Build `<details>` the way `status` would (scope, instructions, leftover counts via
   `"$SC/inspect_run" --id "$id" --workdir "$PWD"`), no ID. Stop.
-- **`diverged $id`** →
-  > The working tree diverged from the reviewed snapshot (code modified since this review started);
-  > it can't be resumed or continued — `panel-review:discard` before `panel-review:start`.
+- **`diverged $id`** → report the second `resume_check` line's JSON details, or read them from
+  `"$SC/inspect_run" --id "$id" --workdir "$PWD"`. Name any new or removed untracked paths and
+  say whether tracked content changed, did not change, or is unknown. For a stray untracked file, suggest removing it or adding it
+  to `.git/info/exclude`, then rerunning `panel-review:resume`; it proceeds only if the resolved
+  diff hash matches the saved snapshot. Editing a tracked `.gitignore` changes that diff too. If
+  diagnostics are unavailable or the scope change was deliberate, it can't be resumed; use
+  `panel-review:discard` before `panel-review:start`.
   Stop.
 - **`stale $id`** → the marker's `/tmp/<ID>` state is gone. Clean it (you mutate anyway, unlike
   `status`), then report it was cleared:

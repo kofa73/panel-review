@@ -177,6 +177,7 @@ def check_tree(errors, root):
         "scripts/seat_contract.py",
         "scripts/round",
         "scripts/stage_review_profile",
+        "scripts/scope_diagnostics",
         "skills/panel-review-for-agent/references/protocol.md",
         "agents/panel-review-cli-barrier.md",
         "scripts/write_verdict_artifact",
@@ -374,6 +375,18 @@ def check_tree(errors, root):
                 )
 
     readme_lower = normalized(readme).lower()
+    if "scope_diagnostics" not in readme:
+        fail(errors, "divergence-diagnostics", "README.md", "does not name the diagnostics owner")
+    divergence_docs = {
+        "README.md": readme_lower,
+        "skills/panel-review-for-agent/references/protocol.md": normalized(protocol).lower(),
+    }
+    for location, text in divergence_docs.items():
+        for required in (".git/info/exclude", "saved diff hash", "tracked `.gitignore`"):
+            if required not in text:
+                fail(errors, "divergence-recovery", location, f"is missing `{required}` guidance")
+    if "only way forward" in readme_lower:
+        fail(errors, "divergence-recovery", "README.md", "still presents discard as the only recovery")
     for required in (
         "subagent spawn limit reached",
         "not a down-seat pass",

@@ -156,10 +156,13 @@ ids=(); [ -d "$base" ] && for d in "$base"/*/; do [ -f "$d/.panel-run" ] && ids+
     > A saved review exists (`<scope>`; instructions: «`<instructions>`»). `panel-review:resume` /
     > `panel-review:continue` to keep working it, or `panel-review:discard` to remove it.
     (`<scope>`/`<instructions>` from `$RESULT`.)
-  - **`diverged`** → the reviewed code changed since the snapshot. Stop:
-    > The working tree diverged from the reviewed snapshot — the code under review was modified since
-    > this review started (`<scope>`; created `<created>`). It can't be resumed or continued; run
-    > `panel-review:discard` before `panel-review:start`.
+  - **`diverged`** → the reviewed scope changed since the snapshot. Stop and report any
+    `.divergence.new_untracked_paths`, `.divergence.removed_untracked_paths`, and whether
+    `.divergence.tracked_content_changed` is true, false, or unknown. For a stray untracked file, suggest removing it
+    or adding it to `.git/info/exclude`, then retrying the requested action; the saved run is usable
+    only when the resolved diff hash matches again. Editing a tracked `.gitignore` also changes the
+    reviewed diff. If diagnostics are unavailable or the scope change was deliberate, the saved run
+    cannot resume or continue; `panel-review:discard` it before `panel-review:start`.
     Adapt "working tree" to "branch"/"commit" to match the scope's flavor (`--uncommitted` /
     `--base` / `--commit`); a `question=` scope never reaches this branch (no diff, never diverges).
 

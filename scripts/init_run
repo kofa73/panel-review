@@ -76,16 +76,21 @@ done
 
 mkdir -p "/tmp/$id/sweeps" "/tmp/$id/raw" "/tmp/$id/audit"
 profile_meta="$("$here/stage_review_profile" --source "$profile" --destination "/tmp/$id/review-profile.md")"
+divergence_snapshot_file="/tmp/$id/divergence_snapshot.json"
+"$here/scope_diagnostics" snapshot --workdir "$workdir" --scope "$scope" > "$divergence_snapshot_file"
 
-jq -n --arg id "$id" --arg wd "$workdir" --arg scope "$scope" \
+jq -n --slurpfile divergence_snapshot "$divergence_snapshot_file" \
+      --arg id "$id" --arg wd "$workdir" --arg scope "$scope" \
       --argjson iss "$iss" --argjson mx "$mx" --arg dh "$dh" \
       --arg instr "$instr" --argjson profile "$profile_meta" \
       --arg created "$(date '+%Y-%m-%d %H:%M:%S')" '{
   id:$id, workdir:$wd, scope:$scope,
   limits:{issue_rounds:$iss, max_rounds:$mx},
   diff_hash:$dh, instructions:$instr, review_profile:$profile,
+  divergence_snapshot:$divergence_snapshot[0],
   phase:"round0", state_version:1, created:$created
 }' | panel_atomic_write "/tmp/$id/manifest.json"
+rm -f -- "$divergence_snapshot_file"
 
 printf '{"issues":[],"round":0,"phase":"round0","committed_rounds":[],"evaluated_by":{}}\n' | panel_atomic_write "/tmp/$id/index.json"
 

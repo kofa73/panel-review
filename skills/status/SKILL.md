@@ -61,9 +61,13 @@ fi
     `panel-review:resume`."
   - `continuable` (`0` open, ≥1 `unresolved`/`contested`) → show leftover counts. Append: "Push it
     further with `panel-review:continue [unresolved|contested]`."
-  - `diverged` → "the working tree diverged from the reviewed snapshot (the code under review was
-    modified since this review started); it can't be resumed or continued —
-    `panel-review:discard` before `panel-review:start`."
+  - `diverged` → report `.divergence` when `available` is true: list `new_untracked_paths` and
+    `removed_untracked_paths`, and state whether `tracked_content_changed` is true, false, or unknown.
+    For a new stray untracked file, suggest removing it or adding it to `.git/info/exclude`, then
+    retrying the requested action; it proceeds only if the resolved diff hash matches the saved
+    snapshot. Editing a tracked `.gitignore` also changes the reviewed diff. If diagnostics are
+    unavailable or the mismatch is deliberate, the run can't be resumed or continued; offer
+    `panel-review:discard` before `panel-review:start`.
   - `stale` → the marker's `/tmp/<ID>/` state is gone. **Do not say you cleared it** — you are
     read-only. Report it as remaining stale and name `.panel-review/<ID>/`: "a stale marker remains at
     `.panel-review/<ID>/` (its `/tmp` state is gone); `panel-review:start`/`resume`/`continue` will
