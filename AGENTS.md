@@ -51,7 +51,7 @@ skills/agents are Markdown. `python3`, `jq`, `git` are required.
   from inside a running session. Fork mode (on by default interactively since 2.1.232) backgrounds
   every subagent and removes `run_in_background`, so the referee's blocking seat dispatch stops
   blocking. Rationale and measurements: README "Start the session with fork mode off" and
-  `issues/25-fork-mode-backgrounds-seat-agents.md`.
+  `issues/archive/25-fork-mode-backgrounds-seat-agents.md`.
 - **Run a review** (from inside the repo under review, after install):
   `panel-review:start --base main` | `--uncommitted` | `--commit <SHA>` | `"<question>"`. Other verbs:
   `:status` (read-only), `:resume`, `:continue [unresolved|contested]`, `:result <ID>` (read-only),
@@ -71,50 +71,10 @@ skills/agents are Markdown. `python3`, `jq`, `git` are required.
 
 ## Architecture
 
-Four participants — three review seats and one referee — with strict role separation and supporting
-command/orchestration layers (full per-script map in `.claude/rules/scripts.md`):
-
-- **Command skills** (`skills/{start,status,resume,continue,result,discard}/SKILL.md`) — run in the **main
-  conversation**; parse args, check preconditions, dispatch the referee. `start`/`resume`/`continue`/
-  `discard` are `disable-model-invocation: true` (human-triggered only, so the model never auto-wipes a
-  session); the read-only `status` and `result` stay model-invocable.
-- **Referee** (`agents/panel-review-referee.md`) — a **separate context** that orchestrates but
-  **never reviews code**. Its preloaded skill `skills/panel-review-for-agent/SKILL.md`
-  (`user-invocable: false`) loads only the active marked phase from the canonical protocol through
-  `read_protocol_phase`.
-- **Claude seat** (`agents/panel-review-claude-seat.md`) — a cold, no-memory reviewer subagent,
-  **spawned fresh each pass, never forked** (a fork would inherit the referee's context and destroy
-  blindness). It atomically writes its validated raw block through `write_seat_raw` and returns only
-  a fixed status stub. A plugin `SubagentStop` hook blocks non-exact returns and asks the same
-  subagent to correct them; Claude Code's eight-block cap makes this bounded conformance enforcement,
-  not an absolute security boundary. Codex and Gemini seats are external CLIs.
-- **CLI barrier** (`agents/panel-review-cli-barrier.md`) — a thin non-reviewing helper the referee
-  runs as a **foreground Agent** in parallel with the foreground Claude-seat Agent. It runs
-  `await_seats` and returns when both CLI seats settle; issuing both Agent calls in one response keeps
-  them concurrent and blocks the referee until both return.
-- **Wrapper scripts** (`scripts/`) — the referee never hand-rolls flags, writes, index math, or
-  parsing; it calls these so operations are byte-exact. The coarse `round` module owns normal-path
-  preparation, collection, commit, and verdict input. `seat_contract.py` owns seat fields, stance
-  values, phase block cardinality, validation, and the rendered instruction fragments. Prompt
-  templates in `prompts/` are filled by `assemble` (whole-line literal substitution).
-
-**Issue lifecycle** (README "How an issue moves"): each seat takes a `support` / `reject` **stance**;
-support may independently propose revised issue fields. An issue is `open` → `accepted`/`rejected` when all
-engaged seats agree, else `contested` (got a ≥2-seat review pass) or `unresolved` (never did) at the
-round limit. Unanimity-or-human: no majority vote, no referee fact-checking inside the loop.
-
-**Persistence model:** `/tmp/<ID>/` is the **single source of truth** (manifest, index, sweeps, raw
-seat output, origins, audit). Cards under `<workdir>/.panel-review/<ID>/` are a regenerable,
-git-excluded cache (kept so a seat in a constrained/read-only workspace can still read them); seats
-write throwaway scratch under `/tmp/<ID>/work/<seat-token>/`, **outside** the repository under review
-— inside it, one seat's repo-wide search returned another seat's raw output as an unrequested hit and
-broke blindness without any seat disobeying anything (`issues/24-seat-scratch-outside-workdir.md`).
-That move removes the accidental hit only; it is not confinement, since `/tmp/<ID>/` stays readable by
-every seat. The per-workdir **marker** is the
-`.panel-review/<ID>/` dir itself; `init_run` writes `/tmp` state first and the marker **last**, so a
-marker always implies valid state. The verdict is also saved to `/tmp/<ID>.md` — a **sibling** of
-`/tmp/<ID>/`, outside it so cleanup/discard never delete it. **Single-user, single-session:** one
-workdir holds exactly one review; concurrent runs against the same workdir are unsupported by design.
+Panel Review separates command skills, the non-reviewing referee, three independent review seats, and
+script-owned state transitions. [`docs/architecture.md`](docs/architecture.md) is the reference for
+component boundaries, saved-state ownership, and schemas. The canonical referee procedure is
+`skills/panel-review-for-agent/references/protocol.md`.
 
 ## Hard constraints (from README — don't break)
 
@@ -129,7 +89,7 @@ workdir holds exactly one review; concurrent runs against the same workdir are u
   tree and `verify --restore` detects and reverts honest tracked-file drift after every seat pass;
   reverted drift is flagged in the verdict's Process notes. This is restoration, not confinement: it
   does not protect untracked files or anything outside the repository
-  (`issues/57-seats-rebuild-the-repository-under-review.md`).
+  (`issues/archive/57-seats-rebuild-the-repository-under-review.md`).
 - Claude seat is spawned fresh (`panel-review:panel-review-claude-seat`), never forked.
 - The referee persists the synthesized verdict artifact and returns **only** a fixed ready/failure
   stub — never the verdict body, raw seat output, card text, or per-round transcripts. The main
@@ -148,72 +108,13 @@ workdir holds exactly one review; concurrent runs against the same workdir are u
   disorientation, misformatted output, a truncated read, the harness clobbering its own files — never
   malice. If a guard only works when the seat cooperates, label it a convenience, not a control.
 
-## Non-obvious facts (hard-won)
+## Runtime reference
 
-- **Claude seat thinking follows the session.** Since Claude Code 2.1.198, a subagent inherits the
-  main conversation's extended-thinking setting. There is no per-subagent switch for thinking on or
-  off; the Claude seat's pinned `effort: xhigh` does not control that toggle. The same review can
-  therefore use different Claude-seat thinking settings across sessions.
-- **Seat working directory.** The Claude seat (a referee subagent) and the Codex seat (`run_codex` →
-  `codex exec`) both inherit the referee's cwd = workdir (repo root). **agy is the exception**: its
-  tools run in its own managed sandbox (`~/.gemini/antigravity-cli/scratch`), and it infers the repo
-  root. A short, unanchored print-mode probe on agy 1.4.3, launched from `/workspace/panel-review`,
-  reported that path for both `pwd` and `git rev-parse --show-toplevel` (2026-10-20). An earlier
-  large-prompt probe resolved to `/home/developer`; that case has not been repeated on 1.4.3. Keep
-  the absolute workdir path and explicit tool `cwd` directive until the realistic-size comparison is
-  done.
-- **The Codex model pin is not authoritative.** `run_codex` pins the seat with
-  `--profile panel-review`, but Codex layers **cwd** (`$PWD/config.toml`), **tree**
-  (`.codex/config.toml` in `$PWD` and its ancestors) and **repo**
-  (`$(git rev-parse --show-toplevel)/.codex/config.toml`) config *above* the profile
-  (`codex-rs/config/src/loader/mod.rs:105-121`). `codex exec` runs with cwd = the repository under
-  review, so a reviewed repository that configures Codex itself picks the model that reviews it —
-  measured on codex-cli 0.153.4, `gpt-5.6-luna`/`max` from a repo-local file beat the profile's
-  `gpt-5.6-sol`/`high`, and the control repo without one bound the profile. The panel does **not**
-  override this (that file is the user's deliberate choice; the defect was the silence): `preflight`
-  reports the condition and emits `CODEX_MODEL_LAYER: yes|no`, `start` asks, and `run_codex` records
-  the binding Codex reports for itself to `/tmp/<ID>/codex-model.txt` so the verdict states what
-  really reviewed the code. Rationale and measurements:
-  `issues/47-codex-model-pin-is-not-authoritative.md`.
-- **`codex exec` needs no `--json` to yield the final message, and human mode says more.** `-o` writes
-  the last assistant message in both output modes. Human mode additionally prints the resolved config
-  summary — `model:`, `reasoning effort:`, `session id:` — to **stderr**, where `--json` replaces it
-  with a `thread.started` event carrying only a thread id. That is why `run_codex` runs without
-  `--json`: it is the only place the effective model is observable.
-- **agy model pins are exact display labels, never slugs.** `run_agy` pins the Gemini seat by
-  display label — the form is `Gemini 3.1 Pro (High)`, never the slug `gemini-3.1-pro-high` — and
-  the effort rides in the label (so no `--effort`). The pins in force are `PRIMARY_MODEL` /
-  `FALLBACK_MODEL` in `scripts/run_agy`; read them there rather than from any copy, as the tests and
-  `check_contracts` do. This is a property of agy, not of one script: a slug is not a stable identifier
-  across agy versions — on 1.1.10 the *listed* slug `gemini-3.1-pro-high` bound Gemini 3.6 Flash
-  (High) — and how a bad value fails changes too (1.1.10 silently ran the user's `settings.json`
-  model; 1.1.13 hard-errors). `check_contracts` rejects a slug-shaped pin;
-  `tests/live/agy_model_binding.sh` proves on demand that a pin really binds. Pins go stale when agy
-  retires a model (1.4.2 hard-errors on an unlisted label), so `preflight` reports a pin that
-  `agy models` no longer lists (`issues/63`). Measurements and rationale: `run_agy`'s header and
-  `issues/20-agy-model-pin-contract.md`.
-- **Seat engagement is per-round, not sticky.** Round 0 freezes its configured panel and exact blind
-  prompt on first preparation, retries actual down responses once, and may retry a still-down seat
-  again when a later `resume` reports it available; complete seat passes are never rerun. In debate,
-  `--configured` = the current `preflight` panel;
-  `--engaged` = whoever returned a parseable block *this pass* (`parse_block` exit 0). Every configured
-  seat is dispatched in every debate round; a seat that fails or times out one round is retried the
-  next. The only persistent effect of a down-round is the informational `fully_vetted=false` label,
-  and even that is not permanent: it flips to `true` in the round where the **last** configured seat
-  finally evaluates the issue, including a seat that was down at Round 0 and re-engages later — it
-  only never *reverts* (`protocol.md:653`). "Down" means down *for that pass*, not excluded from the
-  run.
-- **CLI salvage is referee-owned.** `run_seat` dispatches and parses but never repairs or re-dispatches
-  a seat. On parse status 4 (missing block) or 5 (malformed block), the referee may salvage a genuine
-  completed CLI review without changing its conclusions. Debate salvage re-emits both required blocks
-  to the canonical `.salvaged` side file and installs it through `round salvage-debate`, so the
-  original raw is never overwritten. A failed Claude delivery is retried or dropped instead because
-  `write_seat_raw` validates the complete response before installation.
-- **Prompt size and Gemini block shape.** Historical measurements found that `round0.prompt` >~99 KB
-  yielded prose without a fence, while prompts ≤~87 KB yielded valid blocks. The agy 1.1.13
-  trajectory-truncation fix is a plausible explanation, but the >99 KB prompt has not been replayed
-  on agy 1.4.3. Keep prompts lean and the output contract salient until that check is done; see
-  `issues/27-recheck-agy-workarounds-on-1-1-13.md`.
+[`docs/agent-runtimes.md`](docs/agent-runtimes.md) is the single reference for dated Claude Code,
+Codex, and agy requirements, measurements, known limits, and upgrade probes. Read it before changing
+runtime-facing behavior. [`docs/agents/external-cli-baselines.md`](docs/agents/external-cli-baselines.md)
+records the changelog review cutoffs; a version probe alone does not advance them. Follow the README
+for the required session launch settings.
 
 ## Conventions
 
@@ -236,6 +137,6 @@ first when asked what changed in the external CLIs, and update it when you finis
 Claude Code documentation: ~/github-repos-for-agents/claude-code-docs/
 Codex: ~/github-repos-for-agents/codex/
 Gemini, Antigravity (agy) - `CHANGELOG.md` at the repo root is the release record: ~/github-repos-for-agents/antigravity/
-  The agy model-pin bug this repository works around is recorded in `issues/20-agy-model-pin-contract.md`
+  The agy model-pin bug this repository works around is recorded in `issues/archive/20-agy-model-pin-contract.md`
   (measurements for agy 1.1.10 and 1.1.13); `tests/live/agy_model_binding.sh` re-checks it on demand.
 Agent Skills standard: ~/github-repos-for-agents/agentskills/

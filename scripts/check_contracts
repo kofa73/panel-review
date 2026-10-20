@@ -187,6 +187,13 @@ def check_card_cache_contract(errors, root):
         fail(errors, "card-cache-projection", "scripts/project_card", "projected cards contain a metadata header")
 
     regeneration = read(root, "scripts/regen_cards")
+    if ".panel-run" in regeneration:
+        fail(
+            errors,
+            "card-cache-projection",
+            "scripts/regen_cards",
+            "card regeneration must not create or remove the saved-run marker",
+        )
     cleanup = regeneration.find('rm -f -- "$card"')
     render = regeneration.find('"$here/project_card"')
     if cleanup < 0 or render < 0 or cleanup > render:
@@ -195,6 +202,15 @@ def check_card_cache_contract(errors, root):
             "card-cache-projection",
             "scripts/regen_cards",
             "stale cards must be removed before current cards are rendered",
+        )
+
+    resume_check = read(root, "scripts/resume_check")
+    if not re.search(r'\[ -f "\$d/\.panel-run" \] \|\| continue', resume_check):
+        fail(
+            errors,
+            "run-marker-discovery",
+            "scripts/resume_check",
+            "saved-run discovery must require the marker file",
         )
 
 

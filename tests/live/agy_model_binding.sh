@@ -15,7 +15,7 @@
 #
 # Exit: 0 all checks passed · 1 a check failed · 3 skipped (agy not installed)
 #
-# WHY this exists (see issues/20-agy-model-pin-contract.md and issues/63):
+# WHY this exists (see issues/archive/20-agy-model-pin-contract.md and issues/63):
 #   How agy treats an unrecognized --model depends on the version. agy 1.1.10 silently
 #   ran whatever ~/.gemini/antigravity-cli/settings.json has as `model` — a per-user
 #   value the plugin cannot see — so a retired pin downgraded the seat with NO visible

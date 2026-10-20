@@ -102,7 +102,7 @@ role; requiring one named peer unnecessarily prevented a valid two-seat panel. A
 profile avoided silently coupling Panel Review tuning to the upstream tool, and point-of-use profile
 creation kept preflight read-only. Sources:
 [`docs/superpowers/specs/2026-06-20-optional-peer-seats-design.md`](superpowers/specs/2026-06-20-optional-peer-seats-design.md),
-[`docs/superpowers/plans/2026-06-20-optional-peer-seats.md`](superpowers/plans/2026-06-20-optional-peer-seats.md),
+[`historical optional-peer plan`](history/plans/2026-06-20-optional-peer-seats.md),
 and the changes to the then-current `preflight`, `run_codex`, referee protocol, and README in the
 commit range.
 
@@ -134,7 +134,7 @@ continuing old arguments over changed code is unsound. The follow-up simplificat
 rejected staging and lock machinery as redundant under the epoch invariant and the single sequential
 referee assumption. Sources:
 [`docs/superpowers/specs/2026-06-20-continue-leftovers-design.md`](superpowers/specs/2026-06-20-continue-leftovers-design.md),
-[`docs/superpowers/plans/2026-06-20-continue-leftovers.md`](superpowers/plans/2026-06-20-continue-leftovers.md),
+[`historical continue plan`](history/plans/2026-06-20-continue-leftovers.md),
 commit messages for `da2c352` and `6be3f56`, and current
 [`scripts/reopen`](../scripts/reopen).
 
@@ -205,7 +205,7 @@ but exhaust or misformat its final Agent response; delivery therefore had to be 
 validated independently of that model return. The worktree copy was then removed because it was not
 a delivery surface yet could prevent the durable write. Sources:
 [`docs/superpowers/specs/2026-06-21-verdict-artifact.md`](superpowers/specs/2026-06-21-verdict-artifact.md),
-[`issues/02-artifact-only-verdict-persistence.md`](../issues/02-artifact-only-verdict-persistence.md),
+[`issues/archive/02-artifact-only-verdict-persistence.md`](../issues/archive/02-artifact-only-verdict-persistence.md),
 [`scripts/write_verdict_artifact`](../scripts/write_verdict_artifact),
 [`scripts/read_verdict_artifact`](../scripts/read_verdict_artifact), and
 [`tests/python/test_verdict_artifact.py`](../tests/python/test_verdict_artifact.py).
@@ -215,7 +215,7 @@ the required status with prose, causing completed raw review or verdict summarie
 context even though the final command still delivered only the validated filename. The hook keeps the
 same subagent running and asks it to correct the response, avoiding repeated review or persistence
 work. Source:
-[`issues/13-enforce-agent-status-stub-boundaries.md`](../issues/13-enforce-agent-status-stub-boundaries.md).
+[`issues/archive/13-enforce-agent-status-stub-boundaries.md`](../issues/archive/13-enforce-agent-status-stub-boundaries.md).
 
 **Inference.** Artifact-only delivery is also a context-budget decision because it keeps verdict and
 raw-seat bodies out of parent model contexts. The repository records both correctness/recovery and
@@ -244,8 +244,8 @@ and parsing. The plan-scaffold history records a concrete failure where an opaqu
 made the referee inspect `sweep` and reconstruct JSON, enlarging context and risking another invalid
 plan. The addendum issue records a later live run in which duplicate high- and low-level instructions
 caused the referee to merge the same addendum manually and then ask `round` to do it again. Sources:
-[`issues/referee-context-cost-history.md`](../issues/referee-context-cost-history.md),
-[`issues/14-remove-duplicate-addendum-commit-instructions.md`](../issues/14-remove-duplicate-addendum-commit-instructions.md),
+[`issues/archive/referee-context-cost-history.md`](../issues/archive/referee-context-cost-history.md),
+[`issues/archive/14-remove-duplicate-addendum-commit-instructions.md`](../issues/archive/14-remove-duplicate-addendum-commit-instructions.md),
 [`scripts/round`](../scripts/round), and [`scripts/sweep`](../scripts/sweep).
 
 **Inference.** The architecture is a deliberate judgment/mechanics split, not an attempt to remove
@@ -322,7 +322,7 @@ interpretation.
 
 **Status:** implemented and retained. Later measurements found the barriers to be a small cost center
 with a material reliability role, so the project explicitly chose not to optimize them first. See
-[`issues/referee-context-cost-history.md`](../issues/referee-context-cost-history.md).
+[`issues/archive/referee-context-cost-history.md`](../issues/archive/referee-context-cost-history.md).
 
 ## 9. Referee context-cost reduction without changing review semantics
 
@@ -346,7 +346,7 @@ completion notification and a referee write. A later working-tree report, `analy
 measured 10,108,204 input-context tokens in another run, 54.2% in the referee, while the CLI barriers
 used 4.3%; it recommended coarse operations, phase-specific protocol loading, validated artifact
 recovery, and seat-owned raw writes before model substitution. The checked-in synthesis is
-[`issues/referee-context-cost-history.md`](../issues/referee-context-cost-history.md).
+[`issues/archive/referee-context-cost-history.md`](../issues/archive/referee-context-cost-history.md).
 
 The untracked working analyses `analysis-2026-07-14-04-15-56.md` and
 `analysis-2026-07-15-16-21-30.md` corroborate the same conclusions and explicitly caution that the
@@ -386,16 +386,16 @@ rendered instructions; the phase protocol plus transition scripts own orchestrat
 the barrier owns waiting; verdict scripts own report persistence and delivery; agent definitions own
 identity and role limits; README owns public explanation. `check_contracts` tests assembled variants
 and runtime payloads instead of relying only on phrase scans. Sources:
-[`issues/05-instruction-contract-single-source.md`](../issues/05-instruction-contract-single-source.md),
+[`issues/archive/05-instruction-contract-single-source.md`](../issues/archive/05-instruction-contract-single-source.md),
 [`CONTRACTS.md`](../CONTRACTS.md), [`scripts/seat_contract.py`](../scripts/seat_contract.py), and
 [`scripts/check_contracts`](../scripts/check_contracts).
 
 The stance rationale and implementation evidence are in
-[`issues/01-stance-contract-semantics.md`](../issues/01-stance-contract-semantics.md).
+[`issues/archive/01-stance-contract-semantics.md`](../issues/archive/01-stance-contract-semantics.md).
 The narrower referee mutation and Claude two-block corrections are documented in
-[`issues/03-referee-mutation-contract.md`](../issues/03-referee-mutation-contract.md)
+[`issues/archive/03-referee-mutation-contract.md`](../issues/archive/03-referee-mutation-contract.md)
 and
-[`issues/04-claude-debate-output-contract.md`](../issues/04-claude-debate-output-contract.md).
+[`issues/archive/04-claude-debate-output-contract.md`](../issues/archive/04-claude-debate-output-contract.md).
 
 **Inference.** This milestone makes the repository easier for both models and deterministic tests to
 navigate because a reader can follow ownership rather than reconcile copies. That maintainability

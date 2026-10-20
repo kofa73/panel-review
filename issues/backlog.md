@@ -1,0 +1,20 @@
+# Deferred and optional issues
+
+These records are not required work in the current queue. Their lifecycle status remains in each
+issue file; required `Pending` work is indexed in [README.md](README.md).
+
+| Priority | Status | Issue | Why it is ordered here |
+|---:|---|---|---|
+| 51 | Deferred | [Put the lifecycle state mechanics behind one controller](51-lifecycle-controller-for-command-skills.md) | 492 lines of Markdown procedure across start/resume/continue duplicate marker, manifest, diff, limit and delivery handling, with correctness resting on a prose cross-file jump. |
+| 52 | Deferred | [Make `round` the complete round interface](52-round-should-own-all-round-mechanics.md) | `round` refuses an existing exceptional batch plan outright while the protocol hands the referee ~140 lines to do the same job by hand, untested. |
+| 53 | Deferred | [Shrink the active documentation and backlog surface](53-shrink-the-active-documentation-surface.md) | Blocked by open owner decisions in issues 46 and 48; keep the current documentation restructuring as a draft until those decisions are resolved. |
+| 35 | Optional | [Close the blindness gate's unscanned free-text channels](35-blindness-gate-channel-coverage.md) | Its own 2026-08-22 comment retires the premise: after 34 landed, the referee rule at the commit step is the guard for these channels and the scripted pattern is a narrow tally backstop. Applying that backstop to `revision.claim`, `revision.location` and `new_findings` is cheap but is not the guard they lack, so it is a judgement call rather than required work. |
+| 9 | Optional | [Evaluate offloading referee judgment](09-referee-judgment-offload-experiment.md) | Re-profile after correctness work; helper cold-start cost may exceed the retained-context saving. |
+| 10 | Optional | [Evaluate a referee model change](10-model-selection-ab-test.md) | Cost/performance polish; retain the known-quality model without comparative evidence. |
+| 11 | Optional | [Evaluate a compact catalogue of previously catalogued claims](11-prevent-re-emerging-findings.md) | Possible token optimization, but the observed rediscovery materially corrected an accepted issue; measure a blindness-preserving catalogue before changing prompts. |
+| 23 | Optional | [Evaluate new agy CLI capabilities](23-evaluate-new-agy-flags.md) | Records the decision per new agy flag so the analysis is not redone at the next CLI update; two candidates need a measurement before adoption. |
+| 28 | Optional | [Evaluate new codex exec capabilities](28-evaluate-new-codex-exec-flags.md) | Codex counterpart of issue 23: every flag `run_codex` uses still works on 0.147.0, so this only records a decision per new flag (hooks/trust, `--ignore-rules`, `--ephemeral`, `--output-schema`). |
+| 66 | Optional | [Evaluate the new Claude Code subagent controls](66-evaluate-new-claude-code-subagent-controls.md) | Claude Code counterpart of 23 and 28: `omitClaudeMd`, `autoCompactWindow`, the Agent `effort` parameter, and recording which Claude model reviewed now that `opus` silently became Opus 5.5. None is needed to keep the panel working. |
+| 29 | Optional | [Evaluate agy's API-key auth and print-mode probes](29-evaluate-agy-api-key-and-print-probes.md) | `GEMINI_API_KEY` auth and quota-free `-p "/model"` probes could harden the seat's weakest link, but both touch user config or preflight and need a decision first. |
+| 40 | Optional | [Decide whether the symlink hardening in `panel_atomic_write` stays](40-symlink-hardening-in-atomic-write.md) | A panel could not settle whether the duplicated symlink checks are theatre under the single-user model. Independent of that call, the bash and Python copies have already drifted in strength, so one of them is wrong today. |
+| 32 | Optional | [Evaluate a natural-language front-end for starting a review](32-natural-language-review-request.md) | A sentence would beat the long order-sensitive flag line, but it collides with the bare free-text scope and a mis-parse costs a full run; re-measure after issue 18 shortens the command. |

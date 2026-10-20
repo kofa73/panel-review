@@ -2,7 +2,7 @@
 
 Priority: 53
 
-Status: Pending
+Status: Deferred
 
 Source: Simplification panel (Sol, "Documentation and backlog simplification"), 2026-08-16
 
@@ -15,7 +15,7 @@ Three separate bodies of text read as current instruction while only part of eac
 - **README (631 lines)** mixes operator instructions, behavior specification, the wrapper catalogue,
   state schemas, and implementation rationale. A first-time user and a maintainer changing
   `merge_payload` need almost disjoint subsets.
-- **`docs/superpowers/plans/` (919 lines across two files)** holds superseded implementation plans
+- The former superpowers plans directory (919 lines across two files) holds superseded implementation plans
   that look like current instructions. Issue 44 updated the obsolete index-command example at
   `2026-06-20-continue-leftovers.md:72`; both plans still need to be archived or marked historical.
 - **`issues/`** keeps completed incident narratives in the active directory. Of 41 files, 13 are
@@ -35,7 +35,7 @@ A smaller active surface:
 - **`issues/README.md`** — active required work only, with completed records moved to an
   archive/history subdirectory and linked.
 
-Move `docs/superpowers/plans/*` under `docs/history/` or mark each file explicitly historical in its
+Move the superseded plans under `docs/history/` or mark each file explicitly historical in its
 first line.
 
 ## Verification
@@ -64,3 +64,12 @@ Related backlog triage from the same panel, recorded here rather than as separat
 - **Issues 23, 28, 29** — better as one short runtime-upgrade checklist in `docs/agent-runtimes.md`
   than as three open-ended feature decisions.
 - **Issue 22 and the documentation half of issue 27** — belong in `docs/agent-runtimes.md`.
+
+## Sequencing status
+
+Issues 46 and 48 remain `Pending`. Issue 46 still needs owner decisions about semantic guidance and
+the barrier timeout contract. Issue 48 still needs owner decisions about concurrent starts and `/tmp`
+file modes. This work remains deferred until those decisions close the sequencing prerequisite.
+
+The documentation restructuring currently in the worktree is a draft. Do not mark this issue
+`Completed` or archive it while issues 46 and 48 remain open.

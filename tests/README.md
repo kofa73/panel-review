@@ -51,7 +51,7 @@ Each exits `3` when its CLI is not installed, which the suite reports as a skip.
 
   A missing log line fails the check as **stale** rather than passing it, so agy changing
   its logging can never be mistaken for a healthy pin. See
-  `issues/20-agy-model-pin-contract.md` for why the check lives here instead of inside
+  `issues/archive/20-agy-model-pin-contract.md` for why the check lives here instead of inside
   `run_agy`.
 
 ## What the python suite covers (`tests/python/`)

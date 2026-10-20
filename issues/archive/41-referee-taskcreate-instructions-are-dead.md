@@ -21,7 +21,7 @@ Sonnet 5, Fable 5, Mythos 5 and newer (`claude-code-docs/docs/changelog.md`,
 tool in its first turn — before any run state exists — costing a wasted turn or a tool-not-found
 error at the worst point in the run.
 
-`issues/22-claude-code-2-1-219-runtime.md:106-108` already records the removal but states
+`issues/archive/22-claude-code-2-1-219-runtime.md:106-108` already records the removal but states
 "Panel-review never uses them". That statement is false; `agents/panel-review-referee.md:60` is the
 counter-example.
 
@@ -30,7 +30,7 @@ counter-example.
 1. Delete the "Progress reporting" section from `agents/panel-review-referee.md`. The user already
    sees the subagent row while the foreground Agent call blocks; the six `activeForm` strings are
    ceremony, not review correctness.
-2. Correct the claim in `issues/22-claude-code-2-1-219-runtime.md` so the record does not assert
+2. Correct the claim in `issues/archive/22-claude-code-2-1-219-runtime.md` so the record does not assert
    something the tree contradicts.
 3. If `check_contracts` or `tests/run_tests.sh` pins any of the removed strings, drop those
    assertions with the section.
@@ -53,7 +53,7 @@ counter-example.
 
 1. The "Progress reporting" section is deleted from `agents/panel-review-referee.md` (13 lines,
    former 58-70); the file now goes from "Mandatory contract" straight to "Output".
-2. `issues/22-claude-code-2-1-219-runtime.md`'s "Panel-review never uses them" is replaced by a true
+2. `issues/archive/22-claude-code-2-1-219-runtime.md`'s "Panel-review never uses them" is replaced by a true
    statement: the referee's section did call `TaskCreate`, it was deleted here, and the tree uses
    none of the five tools now.
 3. Nothing had to be dropped from `check_contracts` or the test suite — the search for

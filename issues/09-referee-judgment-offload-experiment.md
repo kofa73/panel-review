@@ -71,4 +71,4 @@ deterministic transaction path.
 7. Consider B2 only after B1 meets that threshold.
 
 The original baseline and the decisions that led to this experiment are retained in
-[`referee-context-cost-history.md`](referee-context-cost-history.md).
+[`referee context-cost history`](archive/referee-context-cost-history.md).

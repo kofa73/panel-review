@@ -161,6 +161,35 @@ class ContractConsistencyTest(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("card-cache-projection", result.stderr)
 
+    def test_card_cache_contract_rejects_run_marker_management(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_contract_tree(root)
+            regen_cards = root / "scripts/regen_cards"
+            regen_cards.write_text(
+                regen_cards.read_text(encoding="utf-8") + '\ntouch "$dir/.panel-run"\n',
+                encoding="utf-8",
+            )
+
+            result = self.run_check(root)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("card-cache-projection", result.stderr)
+
+    def test_run_marker_discovery_contract_requires_marker_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_contract_tree(root)
+            resume_check = root / "scripts/resume_check"
+            text = resume_check.read_text(encoding="utf-8")
+            text = text.replace('[ -f "$d/.panel-run" ] || continue', "continue", 1)
+            resume_check.write_text(text, encoding="utf-8")
+
+            result = self.run_check(root)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("run-marker-discovery", result.stderr)
+
     def test_merge_payload_validation_drift_is_reported(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -280,6 +309,7 @@ class ContractConsistencyTest(unittest.TestCase):
             shutil.copytree(ROOT / name, root / name)
         (root / "scripts").mkdir()
         shutil.copy2(ROOT / "scripts/read_protocol_phase", root / "scripts/read_protocol_phase")
+        shutil.copy2(ROOT / "scripts/resume_check", root / "scripts/resume_check")
         shutil.copy2(ROOT / "scripts/round", root / "scripts/round")
         shutil.copy2(ROOT / "scripts/user_config.py", root / "scripts/user_config.py")
         for name in ("init_run", "cleanup", "discard", "await_seats"):

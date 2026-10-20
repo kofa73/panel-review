@@ -13,7 +13,7 @@ context-cost changes. It is input for later architectural-evolution research and
 is not remaining implementation work.
 
 The only still-open proposal from the retired plan is tracked separately in
-[`09-referee-judgment-offload-experiment.md`](09-referee-judgment-offload-experiment.md).
+[`issue 09`](../09-referee-judgment-offload-experiment.md).
 
 ## Original problem and evidence
 

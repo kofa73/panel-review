@@ -67,10 +67,10 @@ absent per-subagent control, and the resulting variance. No code change — ther
 2.1.219 made `claude-opus-5` the default `opus`, so `agents/panel-review-referee.md` and
 `agents/panel-review-claude-seat.md` silently changed model. Nothing is tuned to a specific Opus
 version, so nothing breaks; the effect is that the measurements in
-`issues/referee-context-cost-history.md` and issue 10's baseline were taken on a different model
+`issues/archive/referee-context-cost-history.md` and issue 10's baseline were taken on a different model
 than the one now running.
 
-Expected: a dated line in `issues/referee-context-cost-history.md` and in issue 10 recording which
+Expected: a dated line in `issues/archive/referee-context-cost-history.md` and in issue 10 recording which
 model the existing numbers describe, so a future comparison is not made against them by accident.
 
 Explicitly **not** a reason to re-measure now, and **not** a context-window change: Opus has
@@ -113,7 +113,7 @@ from working; the stale spawn-budget guidance is **issue 26**.
 - **Task/todo tools are gone on current models.** 2.1.233 removed `TaskCreate`/`TaskGet`/
   `TaskUpdate`/`TaskList`/`TodoWrite` from Opus 4.8, Sonnet 5, Fable 5, Mythos 5 and newer.
   The referee's "Progress reporting" section did call `TaskCreate`; that section was deleted
-  by `issues/41-referee-taskcreate-instructions-are-dead.md`, so the tree no longer uses any of
+  by `issues/archive/41-referee-taskcreate-instructions-are-dead.md`, so the tree no longer uses any of
   them. Recorded so the absence is not investigated again.
 - **Skill argument substitution no longer re-expands argument values as template markers**
   (2.1.233). Relevant to `panel-review:start "<question>"`, where a question containing something

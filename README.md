@@ -7,23 +7,14 @@ authority.**
 
 Built on the original version: https://github.com/jcputney/agent-peer-review.
 
-> **Requirements & status.** Use the **latest version of Claude Code** — panel-review spawns nested
-> subagents (the referee spawns each seat) and relies on recent plugin/subagent behavior, so older
-> versions may misbehave. Use Claude Code 2.1.219 or later for the default nested-subagent depth of
-> three; 2.1.217 and 2.1.218 default to one and cannot run panel-review without an override. In every
-> version, `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH` must allow at least two layers; a value of `1`
-> prevents the referee from spawning its seats and CLI barrier. The project is **work-in-progress**:
-> as both this code and Claude Code
-> evolve, you may hit rough edges. Update Claude Code (`claude update`) before reporting an issue.
-> The Claude agents pin `model: opus`, but `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` overrides those pins
-> and applies `CLAUDE_CODE_SUBAGENT_MODEL`; when that variable is unset or `inherit`, it applies the
-> main session's model. Organization restrictions can prevent the pin from binding, in which case
-> Claude Code warns and uses an allowed model or falls back to the parent model.
-> Since Claude Code 2.1.284, sessions without an explicit permission mode start in `auto` mode
-> outside HIPAA organizations. Panel-review supports `auto`: a `PreToolUse` hook checks each gated
-> agent's `SubagentHandback` status, and `SubagentStop` accepts empty or free-form closing text.
-> Other permission modes keep the exact `SubagentStop` check. These hooks provide bounded runtime
-> enforcement, not a security boundary.
+> **Requirements & status.** Use a current version of Claude Code. The referee spawns two nested
+> Agent layers, so `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH` must allow at least two. The default is
+> sufficient from Claude Code 2.1.219 onward; 2.1.217 and 2.1.218 default to one. Start every review
+> session with `CLAUDE_CODE_FORK_SUBAGENT=0`; [the runtime reference](docs/agent-runtimes.md) records
+> the current host and CLI requirements, measurements, and upgrade probes. The Claude agents pin
+> `model: opus`, but organization restrictions and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` can change
+> the model that runs. The project is work in progress; update Claude Code before reporting a host
+> runtime issue.
 
 ### Allow panel state under `/tmp`
 
@@ -72,7 +63,7 @@ and reads their output only after both return; backgrounded, it is instead woken
 has to decide, by instruction-following alone, not to collect on a partial wake. Turning fork mode
 off restores the blocking dispatch — and, as a bonus, removes the `fork` subagent type from the
 referee's tool schema, so the never-fork rule that protects seat blindness becomes structural rather
-than a written instruction. Measurements: `issues/25-fork-mode-backgrounds-seat-agents.md`.
+than a written instruction. Measurements: `issues/archive/25-fork-mode-backgrounds-seat-agents.md`.
 
 **Don't export it globally.** Putting `CLAUDE_CODE_FORK_SUBAGENT=0` in `~/.bashrc` turns forks off
 for *all* your Claude Code work, including sessions that have nothing to do with panel-review and
@@ -173,7 +164,7 @@ explicitly encouraged instead (replaying a compile line with `-fsyntax-only`, `t
 on), because they settle real questions without touching the tree. Two reasons: a build tree that
 nobody writes to is a safe shared input for all three seats, and a seat that starts a build blocks on
 it — one measured Gemini pass spent 1m48s of its 2m54s waiting for a build it then never used
-(`issues/57-seats-rebuild-the-repository-under-review.md`).
+(`issues/archive/57-seats-rebuild-the-repository-under-review.md`).
 
 That instruction is a convenience, not a control, and only the tracked half of it is enforced: the
 checkout is not preventively read-only, so the referee snapshots tracked worktree content and index
@@ -418,54 +409,11 @@ subagent.
 
 ## How it works
 
-### The pieces
-
-`panel-review` is a **skills-directory plugin** — a single tree with its own
-`.claude-plugin/plugin.json`, loaded as `panel-review@skills-dir`. Its components are namespaced
-`panel-review:<name>`, so they can't clash with anything else in `~/.claude/skills/`.
-
-| File | Kind | What it is | Invoked by |
-|------|------|------------|------------|
-| `skills/start/SKILL.md` | skill | Parses scope + review profile + instructions + setting overrides, refuses if a session already exists, mints the run, and spawns the referee; a stale run is retained for manual recovery or explicit discard. | you, via `panel-review:start` |
-| `skills/status/SKILL.md` | skill | **Read-only.** Lists the saved session(s) + prereqs and reports missing or invalid run state as stale. | you, via `panel-review:status` (also model-invocable) |
-| `skills/resume/SKILL.md` | skill | Picks up an interrupted run (execution-setting overrides only; scope/instructions adopted from the manifest); stale state is retained for manual recovery or explicit discard. | you, via `panel-review:resume` |
-| `skills/continue/SKILL.md` | skill | Re-debates a finished run's `unresolved`/`contested` leftovers and accepts saved-setting overrides; stale state is retained for manual recovery or explicit discard. | you, via `panel-review:continue` |
-| `skills/result/SKILL.md` | skill | **Read-only.** Validates and retrieves a finished durable verdict by exact artifact ID; never resumes or re-runs seats. | you, via `panel-review:result <ID>` (also model-invocable) |
-| `skills/discard/SKILL.md` | skill | Deletes all saved sessions for this workdir (the reset). | you, via `panel-review:discard` |
-| `skills/panel-review-for-agent/SKILL.md` | skill | **The referee bootstrap and return contract.** Preloaded into the referee agent (`user-invocable: false`); validates its task, exposes narrow phase loading, and owns fixed referee returns. Hidden from the `/` menu. | the referee agent (preloaded) |
-| `skills/panel-review-for-agent/references/protocol.md` | reference | **The canonical phased procedure.** `read_protocol_phase` loads only the marked sections needed for the current state. | the referee bootstrap |
-| `agents/panel-review-referee.md` | agent | **The referee.** A separate context that runs the seats and never reviews code itself; it follows the referee-protocol skill. | `start`/`resume`/`continue` |
-| `agents/panel-review-claude-seat.md` | agent | **The Claude seat.** A cold, no-memory agent spawned fresh each pass. | the referee agent (never forked) |
-| `agents/panel-review-cli-barrier.md` | agent | **The CLI-seat wait barrier.** A thin non-reviewing foreground Agent run in parallel with the Claude seat; it runs `await_seats` and returns after the CLI seats settle. | the referee agent |
-
-`start`/`resume`/`continue`/`discard` are `disable-model-invocation: true` — only you trigger them
-(critical for `discard`, so the model never autonomously wipes a session). `status` and `result` are
-read-only and left model-invocable.
-
-### End-to-end flow
-
-```
-You: panel-review:start --commit abc123
-           │  (main conversation)
-start      ── parse scope (commit=abc123) + profile + setting overrides; hash the diff
-   (skill)  ── refuse-if-session-exists precondition (state-aware message if one does)
-           ── init_run (fresh) → resolves config, mints a run id, and saves effective settings; spawn the referee with mode/id/scope
-           │  (separate context)
-referee    ── Round 0: assemble one blind prompt, dispatch seats, retry actual down responses once
-  (agent)  ── merge findings into issues (judgment); project blind cards
-           ── debate sweeps: cards → seats → stances → transitions → commit (checkpointed); retry
-               each non-complete batch once
-           ── synthesize + persist the verdict; return the fixed success/write-failure/review-failure status; clean up when eligible
-           │  (back in main conversation)
-start      ── validates the artifact; reports only `/tmp/<ID>.md` + minimal control status
-   (skill)
-```
-
-An interrupted or finished-with-leftovers session is picked up the same way via
-`panel-review:resume`/`panel-review:continue` instead of `start`'s precondition+`init_run` step —
-they adopt scope/settings/instructions from the manifest, reuse the saved profile, and run `resume_check`
-(`fresh | resume | continuable | stale | diverged | ambiguous`) to decide whether to act or redirect
-you to the right command.
+Command skills parse requests and dispatch the referee. The referee follows the canonical protocol,
+while scripts own exact state changes, parsing, and persistence. See the
+[architecture and saved-state reference](docs/architecture.md) for the component map and schemas.
+`start`, `resume`, `continue`, and `discard` require a direct user invocation. `status` and `result`
+are read-only and may be invoked by the model.
 
 ### What makes the review blind
 
@@ -533,164 +481,39 @@ settle an issue), the state advances:
 
 The verdict's "Flagged by" list uses each issue's birth-pass origins. Debate-born issues have zero
 independent Round-0 support.
-
-Beyond its state, each issue record also carries three boolean **flags**, two **counters**, and its
-**evidence**:
-
-- **flags** — `peer_reviewed` (≥2 engaged seats have evaluated it, the settle threshold),
-  `fully_vetted` (every configured seat has evaluated it at least once), and `detail_contested`
-  (existence accepted, but a detail — severity / claim / location — never converged).
-- **counter** — `rounds_debated` (committed debate rounds the issue has been through). It is not the
-  stance tally: the 2:1 vote is never stored on the issue, only in `origins/`.
-- **evidence** — the `pro` and `contra` points the seats raised, merged and deduplicated (only points
-  at the same location and mechanism are merged). Materially distinct evidence accumulates every
-  round and is carried to the verdict. A copied Round-0 finding is represented once, while its issue
-  remains open for debate when only one independent raiser remains.
-
-### The wrapper scripts
-
-The referee never hand-rolls flags, writes, index math, or parsing. It calls wrappers in
-`${CLAUDE_PLUGIN_ROOT}/scripts/`, so those operations are byte-exact and can't be fat-fingered.
-Static reviewer prompt templates live in `${CLAUDE_PLUGIN_ROOT}/prompts/` (`blind_pass.tmpl` and
-`debate.tmpl`); `claude_delivery.tmpl` adds only the Claude Agent's validated file-delivery
-instructions. The built-in generic investigation priorities live in `profiles/default.md`; `init_run`
-snapshots either it or the explicitly supplied external profile before publishing the run marker.
-A slipped block is not re-asked of the seat via a template — the seat has exited, so
-recovering it is the referee's job (see "Salvage" in the referee protocol), not a script's.
-`scripts/seat_contract.py` is the authoritative owner of seat blocks, fields, stance values,
-normalization, phase cardinality, and their rendered instructions. `round` renders that contract into
-both templates, while `parse_block`, `write_seat_raw`, `sweep`, and `decide_round` consume the same
-data and validation rules. Each template says that code under review resolves under its **absolute
-review root** and directs a seat to set its tool `cwd` to that path. Round 0's diff file and the saved
-review profile are outside the root and are supplied by full absolute path; debate's cards are under
-the root, while its saved profile is outside it. Both phases put seat scratch outside the root and
-supply its full absolute path. agy expands a leading slash command on the Gemini seat's stdin
-print-mode path, so slash-command expansion stays enabled and `check_contracts` requires the prose
-seat contract at the start of each prompt. The panel does not currently prepend `/boost`; issue 60
-gates that change on live checks of boost's worktree writes, output shape, runtime, and entitlement
-behavior. agy runs tools in its own sandbox and infers the repo root. A short,
-unanchored print-mode probe on agy 1.4.3 from `/workspace/panel-review` resolved both `pwd` and Git's
-root correctly, but realistic-size behavior remains unmeasured. Keep the absolute path until that
-comparison is done. The blind prompt references the diff **file** instead of inlining its body. A
-240 KB inline diff correlated with the Gemini seat returning prose instead of a fenced block, and
-the historical >99 KB prompt-size result has not been replayed on agy 1.4.3. Keep prompts lean and
-the contract salient (issue 27).
-
-The plugin gates two model-return boundaries: Claude seat → referee and referee → main command. In
-`auto` mode, Claude Code delivers each report through `SubagentHandback`, so a `PreToolUse` hook
-checks the hand-back message for an exact Claude-seat status or an exact referee status with the run
-ID from its original Agent task. After a hand-back passes, the later `SubagentStop` hook accepts the
-auto-mode closing text, which may be empty or free-form. If no accepted auto-mode hand-back is
-recorded, `SubagentStop` checks the final message itself. In other permission modes,
-`SubagentStop` validates the final message directly. The hook denies at most one invalid hand-back per subagent; if retry state is
-unavailable or a later hand-back is still invalid, it replaces the message with a fixed failure stub
-and allows it. That stub is `CLAUDE_SEAT_RAW_FAILED` or
-`PANEL_REVIEW_FAILED id=<ID>`. If the referee task ID and an exact stub ID are both unavailable, the
-hook uses `id=unavailable`; the main command still validates the saved artifact before delivery. An
-invalid referee retry while its stop hook is already active may stop rather than loop indefinitely.
-These hooks provide bounded runtime enforcement, not a security boundary.
-`read_verdict_artifact --delivery` remains the independent authority for user-visible report delivery.
-
-Command skills parse user requests and dispatch the referee. The referee coordinates
-independent seat reviews and synthesizes the verdict. `round` owns round orchestration,
-and `seat_contract.py` owns the seat-output contract. The wrappers handle exact state,
-parsing, and persistence operations. See [CONTRACTS.md](CONTRACTS.md) for machine-checked
-ownership and [.claude/rules/scripts.md](.claude/rules/scripts.md) for per-script editing
-details.
+The index also stores review coverage, whether issue details remain contested, debate-round counts,
+and `pro`/`contra` evidence. The exact fields and their owner are listed in the
+[architecture reference](docs/architecture.md#schemas). [`CONTRACTS.md`](CONTRACTS.md) names the
+machine-checked owners.
 
 ---
 
 ## Persistence & resume
 
-`/tmp/<ID>/` is the **single source of truth** (a persistent docker volume here). Cards are a
-derived, regenerable cache; state is never inferred from them.
+`/tmp/<ID>/` is the canonical run state. The cards under `.panel-review/<ID>/` are a regenerable
+workdir cache. The `.panel-run` marker identifies saved runs for normal resume discovery.
+`regen_cards` does not recreate it. The [architecture reference](docs/architecture.md#state-ownership)
+documents the state directory, schemas, and writer ownership.
 
-> **Single-user, single-session mode.** Panel-review assumes **one user running one Claude Code
-> session** against a given workdir at a time. A workdir holds **exactly one** review at a time, and
-> running it from **two sessions against the same workdir simultaneously is not supported** — the
-> marker/lock model is built for a single session, not for concurrent runs. (This isn't a race to
-> work around; it's an explicit scope boundary.)
+Panel-review supports one user and one Claude Code session per workdir. A workdir holds one review;
+concurrent runs against the same workdir are unsupported. A clean finish removes the run state. An
+interrupted run keeps it for `panel-review:resume`. If a command finds missing or invalid state, it
+leaves the files in place for recovery or explicit `panel-review:discard`.
 
-| Path | Holds |
-|------|-------|
-| `.panel-review/<ID>/issue-<id>.md` | the blind cards (kept in the repo so any seat running in a constrained/sandboxed workspace — e.g. a seat under an externally-imposed read-only mount — can still read them; git-excluded and kept out of every scope so they never contaminate an `--uncommitted` review) |
-| `.panel-review/<ID>/.panel-run` | the run-marker file, published last after canonical `/tmp/<ID>/` state is in place |
-| `.panel-review/<ID>/` (the dir) | the per-worktree marker / lock — its name carries `<ID>`; only directories containing `.panel-run` count as published runs |
-| `/tmp/<ID>/work/<seat-token>/` | seat scratch — each seat's own throwaway scripts and temp files, in a subdir it names itself. Deliberately outside the repository under review, so no seat's repository-wide search can return another seat's work as a hit |
-| `/tmp/<ID>/manifest.json` | scope, effective limits and timeout, diff hash, and review-profile selector plus source path/size/SHA-256 |
-| `/tmp/<ID>/review-profile.md` | exact saved profile bytes used by every seat and every phase; the original source path is provenance only |
-| `/tmp/<ID>/round0.panel.json` | the configured panel frozen for the blind pass; current preflight filters which of these seats may be retried but never changes this set **Read back on resume and verdict synthesis** (referee only) |
-| `/tmp/<ID>/index.json` | the **issue index** — the authoritative record of every issue: its state (e.g. `accepted`), flags, counters, and evidence (all defined under [How an issue moves](#how-an-issue-moves-transitions)); cards are rendered from it and the verdict is read off it (referee only) |
-| `/tmp/<ID>/sweeps/` | one subdir per **sweep** — a sweep is one full pass over the open issues across all engaged seats (i.e. one debate round). A complete seat/batch checkpoint binds the retained raw, exact-ID stances, parsed `new_findings`, zero parse status, expected IDs, and source provenance; interrupted rounds resume without re-running complete batches. **Read back on resume** (referee only) |
-| `/tmp/<ID>/raw/` | each seat's verbatim response text, before parsing; **read back** — `parse_block` turns these into findings/stances. In Round 0, `round` retains non-empty raw + zero parse status + parsed output as one complete seat checkpoint, so retry/resume dispatches only down or incomplete seats (referee only) |
-| `/tmp/<ID>/round0.attempts.json` | deterministic history of prepared Round-0 attempts (`initial`, the single same-invocation `retry`, and later `resume` attempts), including the available and dispatched seats; `round verdict-input` combines it with final Round-0 statuses for Process notes **Read back on resume and verdict synthesis** (referee only) |
-| `/tmp/<ID>/codex-model.txt` | the model and reasoning effort the Codex seat **actually bound**, as Codex reported them on its own config summary — written by `run_codex` (the barrier supplies the path), surfaced by `round verdict-input` as `seat_models.codex`, and stated in the verdict's Process notes. The profile pin is only what was asked for; a reviewed repository's own `.codex/config.toml` outranks it (referee only) |
-| `/tmp/<ID>/agy-model.txt` | the label agy logged as **bound** (`model=`) on the last successful Gemini pass, next to the pin that pass requested (`requested=`) — written by `run_agy` (the barrier supplies the path), surfaced by `round verdict-input` as `seat_models.gemini`, and stated in the verdict's Process notes. Best effort: it reads an internal agy log line, so nothing depends on it (referee only) |
-| `/tmp/<ID>/agy-logs/` | agy's own CLI log for each Gemini attempt (`run_agy` passes `--log-file` here when agy offers it). agy then writes nothing to its default log directory, so this is where a failed Gemini pass is diagnosed. `run_agy` reads the current attempt's log once, right after it succeeds, to write `agy-model.txt`; after that the logs are **for inspection only — never read back by the process**, and are removed with the run directory unless `cleanup.keep_tmp` is true |
-| `/tmp/<ID>/origins/` | who raised each point, its original wording, and the per-round stances — the data the blind cards omit; `round0.origins.txt` records post-drop Round-0 raisers, `epoch-<epoch>.round-<N>.origins.txt` records debate-born issues' same-pass raisers and original finding text, and `independence.round0.txt` records dropped co-raisers and their text evidence; the birth-pass record supplies "Flagged by", while only Round-0 origins supply independent Round-0 support; **read back** by the referee (referee only) |
-| `/tmp/<ID>/audit/` | `round-<N>.md` — a human-readable trail of the issue-field changes applied in each debate round (state, flag, severity/claim/location revisions, evidence, new issues), written mechanically by `index commit-sweep`; **for inspection only — never read back by the process** |
-| `/tmp/<ID>/epochs/epoch-<n>/` | a snapshot of a finished debate cycle, taken by `reopen` when `panel-review:continue` starts the next cycle. Because per-round artifacts are named `round<N>`/`round-<N>` with **no epoch component**, the new cycle's round 1 overwrites the previous cycle's round 1 in place; this archive preserves the prior cycle's raws/prompts/sweeps/audit/index/verdict. **For inspection only — never read back by the process** |
-
-Writes are atomic (temp + `sync` + `rename`, prior version rotated to `.bak`). Init writes `/tmp`
-state first and `.panel-review/<ID>/.panel-run` **last**, so a marker directory counts as a published
-run only after initialization completes; later corruption or missing files can still make the run
-stale. A clean finish removes both the cards and `/tmp/<ID>/`; an interruption leaves them for
-`panel-review:resume`. If status, start,
-resume, or continue finds missing or invalid run state, it leaves the marker and any existing
-`/tmp/<ID>/` files intact for manual recovery. Use `panel-review:discard` only to abandon and remove
-the stale run.
-
-Setting **`cleanup.keep_tmp=true`** makes `cleanup` and `discard` keep `/tmp/<ID>/` (the manifest,
-index, sweeps, raw seat output, audit trail, and seat scratch) for post-mortem inspection while they
-remove the workspace state (the cards, the marker, and the `.git/info/exclude` line). An invalid
-config stops either action before it deletes state. The durable verdict at `/tmp/<ID>.md` survives
-regardless.
+Set `cleanup.keep_tmp=true` to keep `/tmp/<ID>/` for inspection when cleanup or discard removes the
+cards, marker, and `.git/info/exclude` entry. The saved verdict survives either way.
 
 ### The durable verdict file (`/tmp/<ID>.md`)
 
-The session state above is torn down on a clean finish, so the referee writes every verdict to the
-standalone **`/tmp/<ID>.md`** report — a **sibling** of `/tmp/<ID>/`, deliberately *not* inside it, so the
-`rm -rf /tmp/<ID>` in `cleanup`/`discard` never touches it. It is written **whenever a verdict is
-produced** (the low-severity gate, a finished-with-leftovers run, or a final finish), and it is the
-only surface that carries the report body; a `continue` or a debated gate **overwrites** the same path
-(the prior copy rotates to `/tmp/<ID>.md.bak`, and `continue` additionally snapshots it into that
-cycle's `/tmp/<ID>/epochs/epoch-<n>/`). The file is self-contained: a YAML frontmatter header
-(`id`, `run_epoch`, `status`, `scope`, `instructions`, review-profile selector/path/hash/size, `limits`, `seat_timeout_seconds`, `seats`, `rounds`,
-`created`/`finished`, `diff_hash`, `index_hash`)
-followed by the verdict markdown verbatim — the full diff is not embedded (it is large and
-reproducible from the scope; `diff_hash` is the reference). Writing it is required for delivery: if
-it fails (e.g. `/tmp` full), the run is kept for resume, cleanup is skipped, and the command does not
-claim completion. The referee's fixed return distinguishes `PANEL_VERDICT_WRITE_FAILED id=<ID>` for
-that persistence failure from `PANEL_REVIEW_FAILED id=<ID>` for an earlier review/orchestration
-failure; successful persistence returns `PANEL_VERDICT_READY id=<ID>`. **`/tmp` is cleared on reboot
-— move the file somewhere permanent to keep it.**
+Each verdict is written to `/tmp/<ID>.md`, beside `/tmp/<ID>/`. It is the only file that carries the
+report body. The command validates the artifact before returning its filename; the report body and
+seat transcripts do not enter the main conversation. If the write fails, the run stays available for
+resume and the command does not claim completion. `/tmp` is cleared on reboot, so copy the report to
+permanent storage if you need to keep it.
 
-Before an auto-mode Agent result enters its caller, the plugin's `PreToolUse` hook checks the
-`SubagentHandback` message for the exact fixed response and blocks prose-prefixed or wrong-ID
-variants with at most one correction for the same subagent. If retry state is unavailable or a later
-hand-back is still invalid, the hook replaces its message with `CLAUDE_SEAT_RAW_FAILED` or
-`PANEL_REVIEW_FAILED id=<ID>` and allows it, so rejected review text does not reach the caller and
-retries cannot continue indefinitely. If neither the task transcript nor an exact referee stub
-supplies an ID, the hook uses `PANEL_REVIEW_FAILED id=unavailable`; the caller still validates the
-saved artifact before delivery. After a hand-back passes, the `SubagentStop` hook accepts the closing
-text because it is not the delivered report. If no accepted auto-mode hand-back is recorded,
-`SubagentStop` checks the final message itself. In other permission modes,
-`SubagentStop` checks the final message directly. A malformed referee retry made while the stop hook
-is already active may stop.
-Neither hook carries or reconstructs the verdict; the artifact reader below remains the delivery
-authority. These checks are bounded runtime conformance enforcement, not an absolute isolation or
-security guarantee.
-
-After every referee Agent call, including a refused dispatch, a failed tool call, a failed final
-response, or a `PANEL_REVIEW_FAILED` return, `start`, `resume`, and `continue` call
-`read_verdict_artifact --delivery` with the run's expected ID, scope, diff hash, and continuation
-epoch. Only a validated finished artifact or canonical low-only snapshot produces a filename;
-existence alone is not treated as completion. The report body never passes through the main
-conversation. If a hard session/quota limit leaves no main-conversation turn for that check,
-reset the quota and run `panel-review:result <ID>`. This read-only command validates `/tmp/<ID>.md`
-and prints the profile selector, source path/hash/size, round limits, seat timeout, and verdict body, without depending on
-the normally removed workspace marker or re-running any seat. Legacy artifacts without profile
-metadata remain readable and print only their body.
+Use `panel-review:result <ID>` to validate and print a finished report by ID. It does not resume the
+run or call any seats. The artifact's frontmatter and validation rules are in the
+[architecture reference](docs/architecture.md#schemas).
 
 ### Continuing a finished review
 
@@ -717,30 +540,11 @@ If the run turns out not to be finished-with-leftovers (still mid-debate), `cont
 
 ---
 
-## Key design decisions
+## Design record
 
-- **Referee, not reviewer.** The orchestrating agent never reviews the code. That separation is what
-  made the design blind: the old design's orchestrator was also the Claude reviewer and remembered
-  its own findings. Splitting the roles and using a fresh subagent for the Claude seat is what makes
-  Claude actually blind.
-- **No per-seat evidence cap; hide the tally instead.** You can't hide the *count of distinct
-  technical points* without crippling review — the reviewer needs the concrete located facts. But
-  that count is **not** a seat headcount: all of a side's points can come from one seat, so showing
-  them doesn't reveal the 2:1 stance, which is what's actually hidden. Merge only points at the same
-  location with the same mechanism; when unsure, don't merge.
-- **Unanimity or the human.** No majority rule, no referee fact-checking inside the loop. The loop
-  only filters clear false positives; everything else is presented for you to decide.
-- **Explicit verbs, no intent-guessing.** `start`/`resume`/`continue`/`discard`/`status`/`result` each have one
-  job and one precondition; the tool never infers fresh-vs-resume from on-disk state. The only
-  remaining `AskUserQuestion` is the low-severity gate (keep debating the all-low open set, or finish).
-  `diverged`/`ambiguous` are deterministic exits, not prompts.
-- **Skills only — no command file.** The referee-protocol skill is `user-invocable: false`
-  (preloadable into the referee agent, hidden from the `/` menu). The four side-effecting command
-  skills (`start`/`resume`/`continue`/`discard`) are `disable-model-invocation: true`, so only you
-  trigger them; `status` and `result` are read-only and stay model-invocable.
-- **Degrade gracefully.** Any seat whose call fails (CLI missing, error exit, or no parseable block)
-  is treated as down; with ≥2 seats still engaged the review continues and says so. Codex and Gemini
-  are both optional peers — Claude plus at least one peer is the minimum to start.
+The [ADRs](docs/adr/) hold accepted architecture decisions. [Evolution](docs/evolution.md) records
+how the design changed and links to supporting records. This README and the
+[architecture reference](docs/architecture.md) describe current behavior.
 
 ---
 

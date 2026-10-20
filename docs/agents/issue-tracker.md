@@ -1,16 +1,21 @@
 # Issue tracker: Local Markdown
 
-Issues for this repository live as Markdown files under `issues/`.
-`issues/README.md` is the authoritative ordered index.
+Issues for this repository live as Markdown files under `issues/`. `issues/README.md` is the
+authoritative ordered index for required `Pending` work. `issues/backlog.md` indexes `Deferred` and
+`Optional` work. Completed and closed issue records stay under `issues/archive/` and are indexed by
+`issues/archive/README.md`.
 
 ## Conventions
 
-- One issue per `issues/<NN>-<slug>.md`.
+- One issue per `issues/<NN>-<slug>.md`. Keep the numbered filename when moving a completed or
+  closed record into `issues/archive/`.
 - Numeric identifiers are stable. Use the next unused number for a new issue.
 - Execution order is the row order in `issues/README.md`; it may differ from numeric order
   when a later issue has higher priority.
 - Every issue has `Priority:`, `Status:`, and `Source:` fields near the top.
-- Keep the issue file, its README row, and any corresponding `pending.md` handoff entry synchronized.
+- Keep each issue file and its index row synchronized. Required `Pending` issues belong in
+  `issues/README.md`; `Deferred` and `Optional` issues belong in `issues/backlog.md`. Completed and
+  closed issues move to the archive index.
 - `Status:` records the repository lifecycle: `Pending`, `Deferred`, `Optional`, `Closed`, or
   `Completed`.
 - When triage assigns a canonical role, record it separately as `Triage:` using
@@ -21,14 +26,17 @@ Issues for this repository live as Markdown files under `issues/`.
 
 ## When a skill says "publish to the issue tracker"
 
-Create the next numbered issue file and add it to `issues/README.md` in the appropriate
-execution-order position. Correctness and executable-contract work precede documentation and
-optional work.
+Create the next numbered issue file, then add its row to the index for its status. Add `Pending`
+issues to `issues/README.md` in execution order. Add `Deferred` and `Optional` issues to
+`issues/backlog.md`. Move `Completed` and `Closed` records to `issues/archive/` and add them to
+`issues/archive/README.md`. Order required correctness and executable-contract work before
+documentation work in `issues/README.md`.
 
 ## When a skill says "fetch the relevant ticket"
 
-Read the referenced numbered file. If only an issue number is provided, resolve it against
-`issues/<NN>-*.md`.
+Read the referenced numbered file. If only an issue number is provided, search issue records
+recursively under `issues/`, including `issues/archive/`. If the request names a wayfinding effort,
+resolve the number within that effort's `issues/` directory.
 
 ## Wayfinding operations
 

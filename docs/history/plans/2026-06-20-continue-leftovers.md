@@ -1,4 +1,6 @@
-# Continue a finished review (`--continue`) — Implementation Plan
+# Historical implementation plan: continue a finished review (`--continue`)
+
+This plan is retained as history under `docs/history/`. Do not execute its steps.
 
 > **Superseded by issue 44.** This plan is retained as implementation history; do not execute its
 > steps. The current command interface is documented in `README.md` and the agent protocol.

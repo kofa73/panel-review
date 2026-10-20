@@ -28,7 +28,7 @@ command -v git   >/dev/null 2>&1 || { echo "ERROR: install git"; hard_fail=1; }
 # schedules EVERY subagent in the background, so the referee's two seat-dispatch Agent
 # calls stop blocking: the referee is woken once PER SEAT and must decide, by
 # instruction-following alone, not to collect on a partial wake. Measured on 2.1.233
-# (4 trials, issues/25-fork-mode-backgrounds-seat-agents.md): none collected early, but
+# (4 trials, issues/archive/25-fork-mode-backgrounds-seat-agents.md): none collected early, but
 # 1 of 4 abandoned yielding and improvised a polling wait — the ~130-turn blow-up
 # issue 15 removed. Blocking dispatch has no such variance, which is why this is a hard
 # failure rather than a warning.

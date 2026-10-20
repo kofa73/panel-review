@@ -775,9 +775,10 @@ index diverge from its own just-rotated `.bak`, and that divergence *is* the tra
 `sweep resume-plan` (it validates `run_epoch`) for what to recover; never reconstruct state from
 `.bak`. A syntactically invalid live index is reported as stale by `resume_check` and is not restored
 from `.bak`. The main-context `start`, `resume`, and `continue` skills retain the `.panel-run` marker
-file and any existing `/tmp/$id/` files in that case; manual recovery or `panel-review:discard` is an
-explicit user decision. The referee is not dispatched for stale state. When `run_epoch > 0`, label
-the verdict a **continuation** (see the Rounds line in synthesis).
+file and any existing `/tmp/$id/` files in that case. `resume_check` uses the marker to discover the
+saved run, and `regen_cards` rebuilds cards without recreating it. Manual recovery or
+`panel-review:discard` is an explicit user decision. The referee is not dispatched for stale state.
+When `run_epoch > 0`, label the verdict a **continuation** (see the Rounds line in synthesis).
 
 1. Read `/tmp/$id/manifest.json` (scope, limits, `instructions`, and review-profile metadata — the launching command adopted
    these from the manifest and confirmed via `resume_check` that the diff hash is unchanged; a

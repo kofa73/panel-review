@@ -120,7 +120,7 @@ recorded in this repository. What the pin order costs and buys mechanically is s
 
 ## Non-goals
 
-- Do not rewrite the historical model values in `docs/superpowers/plans/*` or
+- Do not rewrite the historical model values in `docs/history/plans/*` or
   `design-notes/blind-pass-robustness.md`; those are dated records of what was run at the time.
 - Do not add automatic model discovery or "latest model" resolution to either wrapper. Pins are
   deliberate: a silently changing seat model makes review results incomparable between runs.

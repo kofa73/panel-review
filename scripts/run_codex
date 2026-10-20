@@ -20,7 +20,7 @@
 #                             model. That is the user's file and the panel does not
 #                             fight it — `preflight` reports the condition, `start`
 #                             asks, and the binding below is recorded. See
-#                             issues/47-codex-model-pin-is-not-authoritative.md.)
+#                             issues/archive/47-codex-model-pin-is-not-authoritative.md.)
 #  - --dangerously-bypass-approvals-and-sandbox
 #                            (Codex runs with NO sandbox and NO approval prompts.
 #                             This is required, not a convenience: under ANY Codex
