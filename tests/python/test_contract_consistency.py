@@ -164,6 +164,12 @@ class ContractConsistencyTest(unittest.TestCase):
                 "down-seat pass",
                 "ordinary seat pass",
             ),
+            (
+                "agy-slash-command-policy",
+                "README.md",
+                "agy expands leading slash commands in print mode",
+                "agy disables leading slash commands in print mode",
+            ),
         )
 
         for invariant, relative_path, old, new in cases:
@@ -179,6 +185,22 @@ class ContractConsistencyTest(unittest.TestCase):
 
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(invariant, result.stderr)
+
+    def test_agy_prompt_templates_keep_the_prose_contract_first(self):
+        for template_name in ("blind_pass.tmpl", "debate.tmpl"):
+            with self.subTest(template=template_name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.copy_contract_tree(root)
+                target = root / "prompts" / template_name
+                target.write_text(
+                    "/boost\n" + target.read_text(encoding="utf-8"),
+                    encoding="utf-8",
+                )
+
+                result = self.run_check(root)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("agy-prompt-prefix", result.stderr)
 
     def test_agy_model_pin_drift_is_reported(self):
         """A slug-shaped or duplicated agy pin must fail the checker, not a review.

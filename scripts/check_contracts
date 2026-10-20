@@ -102,6 +102,15 @@ def check_rendered_contracts(errors):
                 panel_size,
                 f"/plugin/scripts/check_draft {'findings' if phase == 'round0' else 'stances'}",
             )
+            # agy expands a leading slash command in print mode, so each generated prompt must
+            # begin with the rendered prose contract.
+            if rendered.lstrip().startswith("/"):
+                fail(
+                    errors,
+                    "agy-prompt-prefix",
+                    label,
+                    "rendered seat contract starts with a slash command",
+                )
             if f"configured panel has {panel_size} reviewer seats, including you" not in rendered:
                 fail(errors, "configured-panel-wording", label, "panel size is absent or incorrect")
             problem = response_problem(rendered, phase)
@@ -143,6 +152,14 @@ def check_tree(errors, root):
     for phase, template in templates.items():
         if template.count("{{SEAT_CONTRACT}}") != 1:
             fail(errors, "seat-contract-owner", f"prompts/{phase}", "must contain one SEAT_CONTRACT sentinel")
+        # agy expands a leading slash command, so render this prose sentinel before other prompt text.
+        if not template.startswith("{{SEAT_CONTRACT}}\n"):
+            fail(
+                errors,
+                "agy-prompt-prefix",
+                f"prompts/{phase}",
+                "first line must be the SEAT_CONTRACT sentinel",
+            )
         if re.search(r"(?m)^```(findings|stances|new_findings)[ \t\r]*$", template):
             fail(errors, "seat-contract-owner", f"prompts/{phase}", "template restates a seat block")
         if template.count("{{PROFILEINFO}}") != 1:
@@ -176,6 +193,13 @@ def check_tree(errors, root):
         for name in ("start", "resume", "continue")
     }
     readme = read(root, "README.md")
+    if "agy expands leading slash commands in print mode" not in readme.lower():
+        fail(
+            errors,
+            "agy-slash-command-policy",
+            "README.md",
+            "does not state that print-mode slash-command expansion stays enabled",
+        )
     executable_text = "\n".join([*templates.values(), protocol, referee, bootstrap])
     round0 = normalized(read_protocol_phase(root, "round0"))
     recovery = normalized(read_protocol_phase(root, "recovery"))

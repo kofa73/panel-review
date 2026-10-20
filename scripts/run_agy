@@ -26,6 +26,10 @@
 #  - --print-timeout=15m, =FORM. agy's default is 5m0s, which guillotines a heavy
 #    review mid-investigation. 15m is enough for a thorough Flash/Pro pass; the
 #    outer `timeout WALL_TIMEOUT` is the hard backstop if agy ever truly hangs.
+#  - LEAVE SLASH-COMMAND EXPANSION ENABLED. The panel wants `/boost` available
+#    (issue 60), and agy expands a leading slash command even when it reads the
+#    print-mode prompt from stdin (measured on 1.4.3). Both templates therefore
+#    start with the prose seat contract; `check_contracts` enforces that prefix.
 #  - --dangerously-skip-permissions: REQUIRED so the seat can actually RUN its tools
 #    non-interactively — tilth (native MCP), grep/read, and the scratch-script writes
 #    the review prompt asks for. It auto-approves those tool calls; agy is already a

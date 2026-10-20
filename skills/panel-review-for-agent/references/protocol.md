@@ -66,7 +66,10 @@ reference; grepping a script for its flags wastes a full source-read into your c
 
 
 Seat wrappers take the prompt on stdin and print the **final response only**; nonzero exit (incl.
-CLI missing → 127) means that seat is down → **degrade, never abort.** `parse_block` exit **4**
+CLI missing → 127) means that seat is down → **degrade, never abort.** agy also expands a leading
+slash command on this stdin print-mode path. Keep the rendered prose `SEAT_CONTRACT` first in every
+Gemini prompt. Expansion stays enabled for `/boost` as documented in README, and `check_contracts`
+enforces the prefix. `parse_block` exit **4**
 means the seat returned no block at all (down / malfunctioned), distinct from an empty-but-present
 block (ran, found nothing). **Run everything from cwd = `workdir` (repo root)** so seat
 working-tree reads and `repo_guard` resolve against the same tree. (Seat scratch is the exception:

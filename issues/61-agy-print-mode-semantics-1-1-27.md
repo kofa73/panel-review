@@ -1,4 +1,4 @@
-# Re-verify the Gemini seat against agy's changed print-mode semantics (1.1.19 → 1.1.27)
+# Re-verify the Gemini seat against agy's changed print-mode semantics
 
 Priority: 61
 
@@ -93,6 +93,15 @@ expansion **on** so `/boost` works, which rules out adopting `--disable-slash-co
 - Do not adopt any new agy flag here. `issues/23` is the register that records a decision per flag.
 - Do not change model pins (`issues/21`) or add `/boost` (`issues/60`) as part of this issue.
 
+## Open questions for the owner
+
+1. Once the denied-actions notice is measured, should any denied action make `run_agy` fail the
+   attempt and try the fallback, even when agy exits 0 and returns a valid block?
+   - **Recommended:** yes. A response may contain a valid block even when the seat could not check
+     all relevant evidence. Retrying with the other model preserves the existing failure path.
+   - Accept the block when it parses. This keeps the current behavior but accepts the risk that the
+     seat missed evidence after a denied action.
+
 ## Comments
 
 ### 2026-10-19 — exit codes moved again between 1.1.28 and 1.4.2
@@ -116,3 +125,29 @@ Installed agy is now **1.4.2**. Measure there, not on 1.1.27. Changes since this
 - **Item 4:** `--disable-slash-commands` is unchanged on 1.4.2.
 
 The timeout half moved to `issues/59` (agy 1.1.28 made a timed-out pass exit 0 with partial output).
+
+### 2026-10-20 — stdin slash expansion confirmed on agy 1.4.3
+
+`agy --version` reports **1.4.3**. `agy models` lists `Gemini 3.8 Flash (High)`, which was used for
+the one permitted short print-mode probe. The probe fed `/help` on stdin using the wrapper's
+non-interactive invocation form:
+
+```
+printf '/help' | timeout 30 agy --print-timeout=25s --model 'Gemini 3.8 Flash (High)' --dangerously-skip-permissions
+```
+
+It exited 0, printed agy's command list, and wrote nothing to stderr. This confirms that agy expands
+a leading slash command on the stdin prompt path. The probe used `/help`, not `/boost`. The policy
+remains to leave expansion enabled for `/boost` (issue 60). Both prompt templates require the prose
+`SEAT_CONTRACT` sentinel on the first line. `scripts/check_contracts` checks the template prefix and
+the rendered contract.
+
+This probe did not attempt a denied tool action, so it does not measure whether all-denied runs exit
+0 or where the denied-actions notice appears. It also does not measure a prose-first prompt's output
+stream. The current `run_agy` pins are absent from the 1.4.3 model list, as issue 63 tracks. No
+denied-action detector was added. Resolve the failure policy above after the notice and exit behavior
+are measured. The external CLI baseline remains at 1.4.2 because this probe did not review the full
+1.4.2-to-1.4.3 change set.
+
+`scripts/check_contracts --root .` passed. `./tests/run_tests.sh` passed with 366 checks and no
+failures. No panel review was run because this change does not alter the seat invocation.
