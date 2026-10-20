@@ -27,6 +27,33 @@ class ContractConsistencyTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("instruction contracts: OK", result.stdout)
 
+    def test_prompt_path_anchors_distinguish_rooted_and_external_paths(self):
+        cases = [
+            (
+                "prompts/blind_pass.tmpl",
+                "saved review profile are outside this root, each identified below by its full absolute path.",
+                "saved review profile are under this root.",
+            ),
+            (
+                "prompts/debate.tmpl",
+                "The saved review profile and your scratch directory are outside this root,",
+                "The saved review profile and your scratch directory are under this root,",
+            ),
+        ]
+        for relative_path, correct, incorrect in cases:
+            with self.subTest(path=relative_path), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.copy_contract_tree(root)
+                target = root / relative_path
+                text = target.read_text(encoding="utf-8")
+                self.assertIn(correct, text)
+                target.write_text(text.replace(correct, incorrect, 1), encoding="utf-8")
+
+                result = self.run_check(root)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("absolute-review-root", result.stderr)
+
     def test_merge_payload_validation_drift_is_reported(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

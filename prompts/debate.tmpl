@@ -10,9 +10,10 @@ This review is anchored at this absolute repository root:
 
 {{WORKDIR}}
 
-Every file of the code under review resolves under it, and so does every card file listed
-below. Your scratch dir is given below as an absolute path of its own, outside this root —
-use it exactly as written and do not re-root it here.
+Every file of the code under review resolves under this root, and so does every card file
+listed below. The saved review profile and your scratch directory are outside this root,
+each identified below by its full absolute path. Use those paths exactly as written; do
+not re-root them.
 When you invoke ANY repository tool or command (search, read, diff, shell), set its
 working-directory / `cwd` parameter to that path, so the tool operates on the code under
 review and not on some sandbox default. An absolute path in this prompt is not enough on

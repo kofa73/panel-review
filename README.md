@@ -507,8 +507,11 @@ recovering it is the referee's job (see "Salvage" in the referee protocol), not 
 `scripts/seat_contract.py` is the authoritative owner of seat blocks, fields, stance values,
 normalization, phase cardinality, and their rendered instructions. `round` renders that contract into
 both templates, while `parse_block`, `write_seat_raw`, `sweep`, and `decide_round` consume the same
-data and validation rules. Each template also carries the **absolute review root** and directs a seat
-to set its tool `cwd` to it. agy runs tools in its own sandbox and infers the repo root. A short,
+data and validation rules. Each template says that code under review resolves under its **absolute
+review root** and directs a seat to set its tool `cwd` to that path. Round 0's diff file and the saved
+review profile are outside the root and are supplied by full absolute path; debate's cards are under
+the root, while its saved profile is outside it. Both phases put seat scratch outside the root and
+supply its full absolute path. agy runs tools in its own sandbox and infers the repo root. A short,
 unanchored print-mode probe on agy 1.4.3 from `/workspace/panel-review` resolved both `pwd` and Git's
 root correctly, but realistic-size behavior remains unmeasured. Keep the absolute path until that
 comparison is done. The blind prompt references the diff **file** instead of inlining its body. A

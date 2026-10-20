@@ -45,8 +45,10 @@ byte-exact.
   files or hand-write the common plan.
 - `round` — the referee's coarse normal-path module over the owners in this list. It resolves and
   assembles Round 0 with the rendered seat contract and validated saved review-profile reference,
-  freezes that phase's configured panel and exact blind prompt, reconstructs and retains complete
-  Round-0 raw/status/parsed checkpoints, records the initial/single-retry/later-resume attempts, and
+  marks the workdir as the code root, identifies Round 0's external diff plus the saved profile
+  and scratch inputs by full absolute path, and keeps the explicit tool-`cwd` directive in both
+  prompts. It freezes that phase's configured panel and exact blind prompt, reconstructs and retains
+  complete Round-0 raw/status/parsed checkpoints, records the initial/single-retry/later-resume attempts, and
   selectively prepares only originally configured, currently available down or incomplete seats.
   Round-0 clustering remains referee judgment: only independent discoveries enter `raised_by`; the
   referee records post-drop raisers in `origins/round0.origins.txt`, records copied co-raisers and

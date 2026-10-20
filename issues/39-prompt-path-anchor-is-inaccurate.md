@@ -53,3 +53,23 @@ about where it is.
   issue 24 exists to fix.
 - Do not drop the anchor. It is the workaround for agy's root guessing; issue 27 covers re-measuring
   whether that workaround is still needed on agy 1.1.13.
+
+## Open questions for the owner
+
+1. Can a compliant smoke harness run the required end-to-end prompt check?
+   - (a) **Recommended:** provide a variant that reviews a pre-created fixture and does not run
+     `git commit` or `git checkout`; the supplied `/tmp/panel-issue-run/smoke.sh` runs both commands,
+     which this worker brief prohibits.
+   - (b) Accept the contract and unit checks as sufficient for this wording change and close without
+     a real review; this leaves whether the seats receive the corrected rendered prompt unobserved.
+
+## Comments
+
+### 2026-10-20 — prompt wording and contract checks updated
+
+Both templates now distinguish code and card paths under the workdir from the full absolute paths
+for external inputs: Round 0's diff, the saved profile, and scratch. `check_contracts` checks the
+phase-specific wording, and README, the script ownership rule, and the canonical protocol describe
+the same path contract. `scripts/check_contracts --root .` passes, and `./tests/run_tests.sh` reports
+`PASS: 419 FAIL: 0`. The real-review smoke was not run because the supplied script invokes
+`git commit` and `git checkout`, prohibited by the worker brief.

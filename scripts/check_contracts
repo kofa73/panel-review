@@ -208,6 +208,30 @@ def check_tree(errors, root):
         if template.count("{{PROFILEINFO}}") != 1:
             fail(errors, "review-profile-owner", f"prompts/{phase}", "must contain one PROFILEINFO sentinel")
 
+    anchor_contracts = {
+        "round0": (
+            "Every file of the code under review resolves under this root.",
+            "The canonical diff file and saved review profile are outside this root, each identified below by its full absolute path.",
+            "Your scratch directory is also outside this root, identified below by its full absolute path.",
+            "Use those paths exactly as written; do not re-root them.",
+        ),
+        "debate": (
+            "Every file of the code under review resolves under this root, and so does every card file",
+            "The saved review profile and your scratch directory are outside this root,",
+            "each identified below by its full absolute path.",
+            "Use those paths exactly as written; do not re-root them.",
+        ),
+    }
+    for phase, required_fragments in anchor_contracts.items():
+        template = normalized(templates[phase])
+        if any(fragment not in template for fragment in required_fragments):
+            fail(
+                errors,
+                "absolute-review-root",
+                f"prompts/{phase}",
+                "must distinguish paths under the review root from external absolute input paths",
+            )
+
     owner_map = read(root, "CONTRACTS.md")
     for owner in (
         "scripts/seat_contract.py",

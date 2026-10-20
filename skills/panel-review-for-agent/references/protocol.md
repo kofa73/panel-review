@@ -267,7 +267,10 @@ Its compact JSON gives `prompt`, an optional `claude_prompt`, and optional CLI-b
 `command`/`done`/`sentinel` paths. It owns diff resolution, the guard snapshot,
 saved-review-profile validation/reference, absolute path anchors, seat-contract rendering, prompt
 assembly, completed-seat checkpoint retention, and selective retry preparation; do not repeat those
-mechanics. Exit 3 with `status=needs_auto_instructions` is the sole normal-path pause: write a few
+mechanics. In seat prompts, code under review (and debate card files) resolve under the workdir;
+Round 0's diff file, the saved profile, and scratch are identified by full absolute paths outside it.
+Every prompt tells seats to pass the workdir explicitly as the tool `cwd`. Exit 3 with
+`status=needs_auto_instructions` is the sole normal-path pause: write a few
 neutral sentences based on branch name, commit subjects, and status—not an interpretation of the
 diff—to the returned path, then call `prepare-round0` again. A diff-hash mismatch is a hard stop.
 
