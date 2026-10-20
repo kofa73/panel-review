@@ -14,9 +14,9 @@ or helper internals.
 | Review-profile validation, snapshot, metadata, and seat-facing reference | `scripts/stage_review_profile`, `scripts/init_run`, and `scripts/round` | command skills select only the source path; prompts consume the validated saved-profile reference |
 | CLI-seat execution and completion signal | `scripts/await_seats` and `agents/panel-review-cli-barrier.md` | `round` prepares the invocation and clears the previous signal, so the barrier's sentinel is absent when it starts; the protocol passes its paths and consumes `await_seats_rc` |
 | Verdict persistence and delivery classification | `scripts/write_verdict_artifact`, `scripts/read_verdict_artifact`, and `scripts/index delivery-status` | the protocol invokes persistence; command skills consume validated delivery text |
-| Claude-seat return statuses | `prompts/claude_delivery.tmpl` | the Claude-seat agent references the delivery contract; `hooks/enforce_agent_status_stub` gates the final response |
-| Referee-to-command return statuses | `skills/panel-review-for-agent/SKILL.md` | the referee agent references this return contract; `hooks/enforce_agent_status_stub` gates the final response; command skills validate the artifact independently |
-| Agent status-stub runtime gate | `hooks/hooks.json` and `hooks/enforce_agent_status_stub` | Claude Code invokes the hook for the Claude-seat and referee Agent types |
+| Claude-seat return statuses | `prompts/claude_delivery.tmpl` | the Claude-seat agent references the delivery contract; the hook validates `SubagentHandback` in auto mode and the final response in other modes |
+| Referee-to-command return statuses | `skills/panel-review-for-agent/SKILL.md` | the referee agent references this return contract; the hook validates `SubagentHandback` in auto mode and the final response in other modes; command skills validate the artifact independently |
+| Agent status-stub runtime gate | `hooks/hooks.json` and `hooks/enforce_agent_status_stub` | Claude Code invokes the hook on `SubagentHandback` and `SubagentStop`; the script scopes checks to the Claude-seat and referee Agent types, allows at most one invalid hand-back denial per subagent, and substitutes a fixed failure stub when further denial is unsafe |
 | Agent identity, context isolation, and role limits | the corresponding file under `agents/` | prompts and protocol instructions do not redefine agent identity |
 | Public behavior and operator guidance | `README.md` | explanatory only; never used as machine validation |
 

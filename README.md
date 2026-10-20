@@ -11,6 +11,11 @@ Built on the original version: https://github.com/jcputney/agent-peer-review.
 > subagents (the referee spawns each seat) and relies on recent plugin/subagent behavior, so older
 > versions may misbehave. The project is **work-in-progress**: as both this code and Claude Code
 > evolve, you may hit rough edges. Update Claude Code (`claude update`) before reporting an issue.
+> Since Claude Code 2.1.284, sessions without an explicit permission mode start in `auto` mode
+> outside HIPAA organizations. Panel-review supports `auto`: a `PreToolUse` hook checks each gated
+> agent's `SubagentHandback` status, and `SubagentStop` accepts empty or free-form closing text.
+> Other permission modes keep the exact `SubagentStop` check. These hooks provide bounded runtime
+> enforcement, not a security boundary.
 
 ### Allow panel state under `/tmp`
 
@@ -486,14 +491,20 @@ can drift; and the blind prompt references the diff **file** rather than inlinin
 inlined diff diluted attention and correlated with the Gemini seat emitting prose instead of a
 fenced block).
 
-The plugin's `SubagentStop` hook gates the two model-return boundaries that carry fixed statuses:
-Claude seat → referee and referee → main command. It accepts only an exact Claude-seat status, or an
-exact terminal referee status whose run ID matches the original Agent task prompt. Prose-prefixed,
-malformed, or wrong-ID responses stay in the subagent transcript and receive one short correction.
-If that referee correction is itself invalid, the active stop-hook continuation is allowed to stop
-instead of being blocked into an unbounded loop; the Claude-seat gate remains strict. This is
-**bounded enforcement, not a security boundary**. `read_verdict_artifact --delivery` remains the
-independent, deterministic authority for user-visible report delivery.
+The plugin gates two model-return boundaries: Claude seat → referee and referee → main command. In
+`auto` mode, Claude Code delivers each report through `SubagentHandback`, so a `PreToolUse` hook
+checks the hand-back message for an exact Claude-seat status or an exact referee status with the run
+ID from its original Agent task. After a hand-back passes, the later `SubagentStop` hook accepts the
+auto-mode closing text, which may be empty or free-form. If no accepted auto-mode hand-back is
+recorded, `SubagentStop` checks the final message itself. In other permission modes,
+`SubagentStop` validates the final message directly. The hook denies at most one invalid hand-back per subagent; if retry state is
+unavailable or a later hand-back is still invalid, it replaces the message with a fixed failure stub
+and allows it. That stub is `CLAUDE_SEAT_RAW_FAILED` or
+`PANEL_REVIEW_FAILED id=<ID>`. If the referee task ID and an exact stub ID are both unavailable, the
+hook uses `id=unavailable`; the main command still validates the saved artifact before delivery. An
+invalid referee retry while its stop hook is already active may stop rather than loop indefinitely.
+These hooks provide bounded runtime enforcement, not a security boundary.
+`read_verdict_artifact --delivery` remains the independent authority for user-visible report delivery.
 
 | Component | Job |
 |-----------|-----|
@@ -525,7 +536,7 @@ independent, deterministic authority for user-visible report delivery.
 | `project_card` / `regen_cards` | Render issue records → blind cards (no origins, no tally); rebuild all cards from the index on resume |
 | `write_card` | Atomic single-card write (temp + fsync + rename, `.bak` rotation) over `panel_atomic_write`, for the card writes `project_card`/`regen_cards` don't own |
 | `write_seat_raw` | Validate the Claude seat's complete phase-required block set and atomically install it at the derived `/tmp/<ID>/raw/` path; the seat then returns only a fixed status stub to the referee |
-| `hooks/enforce_agent_status_stub` | `SubagentStop` gate for Claude-seat and referee Agent results: allow only their exact fixed terminal statuses, recover the referee's expected run ID from its original Agent task, request one correction for a malformed referee response, and allow an already-active referee stop-hook continuation to stop rather than loop indefinitely |
+| `hooks/enforce_agent_status_stub` | `PreToolUse` gate for `SubagentHandback` plus a `SubagentStop` gate for Claude-seat and referee Agent results: validate exact status stubs and the referee's expected run ID in auto-mode hand-backs; deny at most one invalid hand-back per subagent, then replace further invalid attempts with a fixed failure stub; allow auto-mode closing text only after a validated hand-back; validate final messages directly in other modes; allow an already-active referee stop-hook continuation to stop rather than loop indefinitely |
 | `round` | Coarse normal-path module: freeze the initial Round-0 panel and blind prompt; reconstruct and preserve complete raw/status/parsed checkpoints; record initial/retry/resume attempts and selectively prepare only originally configured, currently available down/incomplete seats; prepare debate prompts and barriers from the current preflight panel; collect compact seat/guard status; install an explicitly supplied canonical CLI debate salvage through `salvage-debate`; select only complete active-plan batches for decision/atomic commit with an optional judgment addendum; and render stable compact verdict input |
 | `sweep` | Checkpointed debate sweeps — owns batch plans (including `plan-scaffold`, which emits one correctly shaped batch per supplied current-panel seat, and `extend-plan`, which adds unplanned seats or reactivates already-planned dropped seats when they return to the current panel), targeted plan-schema diagnostics, two-block (`stances` + `new_findings`) parse/ID validation, complete-bundle checkpoint retention/source provenance, dropped-seat cleanup, and resume plans. A published completion marker with any missing companion is corrupt state and fails closed; counters advance **only** on a committed sweep |
 | `write_verdict_artifact` | Write the canonical verdict to the `/tmp/<ID>.md` sibling of `/tmp/<ID>/` (outside it, so `cleanup`/`discard` never delete it), stamped with the continuation epoch, exact index hash, and `finished` only when the canonical index has no open issue or the user explicitly finishes at the low-only gate. This artifact is the only final-report delivery surface; write failure keeps the run resumable and blocks cleanup |
@@ -594,12 +605,21 @@ that persistence failure from `PANEL_REVIEW_FAILED id=<ID>` for an earlier revie
 failure; successful persistence returns `PANEL_VERDICT_READY id=<ID>`. **`/tmp` is cleared on reboot
 — move the file somewhere permanent to keep it.**
 
-Before those Agent results enter their callers, the plugin's `SubagentStop` hook requires the exact
-fixed response and blocks prose-prefixed or wrong-ID variants for correction by the same subagent.
-A malformed referee retry made while the stop hook is already active is allowed to stop so correction
-cannot become an unbounded loop. The hook does not carry or reconstruct the verdict; the artifact
-reader below remains the delivery authority. This mechanism is a bounded runtime conformance gate
-rather than an absolute isolation or security guarantee.
+Before an auto-mode Agent result enters its caller, the plugin's `PreToolUse` hook checks the
+`SubagentHandback` message for the exact fixed response and blocks prose-prefixed or wrong-ID
+variants with at most one correction for the same subagent. If retry state is unavailable or a later
+hand-back is still invalid, the hook replaces its message with `CLAUDE_SEAT_RAW_FAILED` or
+`PANEL_REVIEW_FAILED id=<ID>` and allows it, so rejected review text does not reach the caller and
+retries cannot continue indefinitely. If neither the task transcript nor an exact referee stub
+supplies an ID, the hook uses `PANEL_REVIEW_FAILED id=unavailable`; the caller still validates the
+saved artifact before delivery. After a hand-back passes, the `SubagentStop` hook accepts the closing
+text because it is not the delivered report. If no accepted auto-mode hand-back is recorded,
+`SubagentStop` checks the final message itself. In other permission modes,
+`SubagentStop` checks the final message directly. A malformed referee retry made while the stop hook
+is already active may stop.
+Neither hook carries or reconstructs the verdict; the artifact reader below remains the delivery
+authority. These checks are bounded runtime conformance enforcement, not an absolute isolation or
+security guarantee.
 
 After every referee Agent completion, including a failed final response, `start`, `resume`, and
 `continue` call `read_verdict_artifact --delivery` with the run's expected ID, scope, diff hash, and

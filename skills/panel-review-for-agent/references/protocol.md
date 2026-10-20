@@ -375,6 +375,17 @@ checkpoint instead of the malformed original. Retry each still-non-complete batc
 missing, empty, or incomplete, retry the fresh Claude seat once and then drop it—never read the
 status stub as review content.
 
+In Claude Code `auto` mode, the status stub travels through `SubagentHandback` and the plugin's
+`PreToolUse` hook validates that message. The later `SubagentStop` hook sees only the closing text,
+which may be empty or free-form. After a hand-back passes, `SubagentStop` accepts that closing text.
+If no accepted auto-mode hand-back is recorded, `SubagentStop` checks the final message itself.
+Other permission modes keep the exact final-message check. The hook denies at most
+one invalid hand-back per subagent; if retry state is unavailable or a later hand-back is still
+invalid, it replaces the message with a fixed failure stub and allows it. If the referee
+task ID and an exact stub ID are both unavailable, the hook uses its fixed unavailable-ID failure
+form; the main command still validates the saved artifact before delivery. These hooks provide bounded
+runtime enforcement, not a security boundary.
+
 Steps 1–7 below document the invariants and the exceptional multi-batch path. Do not repeat their
 normal preparation/ingest/guard commands after the coarse calls. If the open card set genuinely
 needs pagination, use steps 4–7 to register the explicit multi-batch plan; `prepare-debate` owns only

@@ -2,10 +2,10 @@
 
 Priority: 64
 
-Status: Pending
+Status: Completed
 
-Source: Claude Code changelog and docs review (2.1.262 → 2.1.303), 2026-10-19. Installed Claude
-Code: 2.1.303.
+Source: Claude Code changelog and docs review (2.1.262 → 2.1.303), 2026-10-19. Verified with Claude
+Code 2.1.304 on 2026-10-20.
 
 Triage: ready-for-agent
 
@@ -71,6 +71,44 @@ coming and can see its `tool_input.message`.
   stub and with a non-exact one. Each must give the intended allow or block.
 - One real review completes in auto mode with all three seats engaged.
 - `scripts/check_contracts --root .` and `./tests/run_tests.sh` pass.
+
+## Resolution
+
+Completed 2026-10-20 in plugin version 1.0.26. A `PreToolUse` hook now validates the
+`tool_input.message` on `SubagentHandback` for the Claude seat and referee. For the referee, the hook
+uses the original task transcript to check the expected run ID. `SubagentStop` accepts empty or
+free-form closing text only when `permission_mode` is `auto`; Manual and `bypassPermissions` keep the
+exact final-message check. The hook denies at most one invalid hand-back per subagent. If retry state
+is unavailable or a later hand-back is still invalid, its message is replaced with
+`CLAUDE_SEAT_RAW_FAILED` or `PANEL_REVIEW_FAILED id=<ID>` and allowed, so review text cannot escape
+through the terminal path and repeated denials cannot keep the subagent running. If neither the
+referee task transcript nor an exact status stub supplies an ID, the hook uses
+`PANEL_REVIEW_FAILED id=unavailable`; the caller still validates the saved artifact before delivery.
+If no accepted auto-mode hand-back is recorded, `SubagentStop` checks the final text itself.
+These paths provide bounded runtime enforcement, not a security boundary.
+
+The installed Claude Code was 2.1.304. A pre-change auto-mode smoke review used all three seats and
+paused at the expected low-severity gate. The nested transcripts showed a Claude-seat hand-back with
+no closing text and a referee hand-back followed by 102 characters of closing text. The old hook did
+not log its input, so its exact input and block count were not recoverable. This matched the documented
+`last_assistant_message` behavior. Session records showed 29 classifier accept decisions and one mode
+accept, no permission prompts or denials, and 14 tool calls that referenced the run's `/tmp` directory,
+including one direct `Read` call.
+
+The post-change smoke review completed with a final report and all three Round-0 seat statuses at
+exit 0. A temporary content-free trace recorded exact 23-character Claude-seat and 53-character
+referee hand-backs allowed by `PreToolUse`; both `SubagentStop` events received empty closing text and
+were allowed, with zero hook blocks. Session records again showed 29 classifier accept decisions and
+one mode accept, no permission prompts or denials, and 12 tool calls referencing the run's `/tmp`
+directory, including one direct `Read` call. The smoke's temporary seat models verify runtime flow,
+not shipped-model quality.
+
+Hermetic tests cover exact and malformed hand-backs, referee run-ID validation, one correction then a
+sanitized failure hand-back, closing text after a denied hand-back, auto-mode closing text, unchanged
+non-auto checks, hook registration, and installer packaging. The bounded-fallback change was not
+smoke-tested in a live Claude Code session. The
+`scripts/check_contracts --root .` check passes. `./tests/run_tests.sh` reports
+`PASS: 366  FAIL: 0`.
 
 ## Non-goals
 

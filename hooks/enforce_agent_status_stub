@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Gate panel-review subagent completion on an exact status response."""
+"""Gate panel-review subagent hand-backs and completion responses on fixed status stubs."""
 
+import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import sys
+import tempfile
 
 
 CLAUDE_SEAT = "panel-review:panel-review-claude-seat"
@@ -15,6 +18,7 @@ REFEREE_STATUSES = (
     "PANEL_VERDICT_WRITE_FAILED",
     "PANEL_REVIEW_FAILED",
 )
+UNKNOWN_RUN_ID = "unavailable"
 
 
 def prompt_text(content):
@@ -48,50 +52,247 @@ def expected_referee_id(transcript_path):
     return None
 
 
+def handback_transcript_path(payload):
+    """Resolve the referee's task transcript from a PreToolUse payload."""
+    direct = payload.get("agent_transcript_path")
+    if isinstance(direct, str) and direct:
+        return direct
+
+    transcript = payload.get("transcript_path", "")
+    agent_id = payload.get("agent_id", "")
+    if not isinstance(transcript, str) or not transcript:
+        return ""
+    if not isinstance(agent_id, str) or re.fullmatch(r"[A-Za-z0-9._-]+", agent_id) is None:
+        return ""
+
+    path = Path(transcript)
+    # PreToolUse supplies the session transcript and agent ID, while SubagentStop supplies the
+    # agent transcript directly. Follow Claude Code's documented session/subagents layout here.
+    if path.parent.name == "subagents" and path.name == f"agent-{agent_id}.jsonl":
+        return str(path)
+    return str(path.parent / path.stem / "subagents" / f"agent-{agent_id}.jsonl")
+
+
+def handback_state_path(payload):
+    """Return per-session, per-agent state used to bound hand-back corrections."""
+    session_id = payload.get("session_id") or payload.get("transcript_path")
+    agent_id = payload.get("agent_id")
+    if not isinstance(session_id, str) or not session_id:
+        return None
+    if not isinstance(agent_id, str) or not agent_id:
+        return None
+
+    identity = hashlib.sha256(f"{session_id}\0{agent_id}".encode()).hexdigest()
+    owner = str(os.getuid()) if hasattr(os, "getuid") else str(Path.home())
+    owner = hashlib.sha256(owner.encode()).hexdigest()[:12]
+    return Path(tempfile.gettempdir()) / f"panel-review-handbacks-{owner}" / identity
+
+
+def deny_first_invalid_handback(payload):
+    """Deny once per subagent; subsequent failures take the sanitized terminal path."""
+    path = handback_state_path(payload)
+    if path is None:
+        return False
+    try:
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        return False
+    except OSError:
+        return False
+    try:
+        os.write(descriptor, b"denied")
+    except OSError:
+        return False
+    finally:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+    return True
+
+
+def clear_handback_state(payload):
+    path = handback_state_path(payload)
+    if path is None:
+        return
+    try:
+        path.unlink()
+    except OSError:
+        pass
+
+
+def set_handback_state(payload, state):
+    path = handback_state_path(payload)
+    if path is None:
+        return False
+    try:
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path.write_text(state, encoding="utf-8")
+    except OSError:
+        return False
+    return True
+
+
+def read_handback_state(payload):
+    path = handback_state_path(payload)
+    if path is None:
+        return None
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return "unavailable"
+
+
+def is_exact_referee_failure_stub(message):
+    for status in REFEREE_STATUSES:
+        if status == "PANEL_VERDICT_READY":
+            continue
+        match = re.fullmatch(rf"{re.escape(status)} id=([A-Za-z0-9._-]+)", message)
+        if match and match.group(1) not in {".", ".."}:
+            return True
+    return False
+
+
+def terminal_failure_status(agent_type, message, transcript_path):
+    if agent_type == CLAUDE_SEAT:
+        return "CLAUDE_SEAT_RAW_FAILED"
+
+    expected_id = expected_referee_id(transcript_path)
+    if expected_id is None:
+        for status in REFEREE_STATUSES:
+            match = re.fullmatch(rf"{re.escape(status)} id=([A-Za-z0-9._-]+)", message)
+            if match and match.group(1) not in {".", ".."}:
+                expected_id = match.group(1)
+                break
+    if expected_id is None:
+        expected_id = UNKNOWN_RUN_ID
+    return f"PANEL_REVIEW_FAILED id={expected_id}"
+
+
+def validate_status(agent_type, message, transcript_path=""):
+    if agent_type == CLAUDE_SEAT:
+        return (
+            message in CLAUDE_SEAT_STATUSES,
+            "Return exactly CLAUDE_SEAT_RAW_WRITTEN or CLAUDE_SEAT_RAW_FAILED, "
+            "with no surrounding text. Do not repeat the completed review or write operation.",
+        )
+
+    expected_id = expected_referee_id(transcript_path)
+    if expected_id is None:
+        return (
+            False,
+            "Return exactly one fixed panel-review status stub with the run ID from the original "
+            "task prompt and no surrounding text. Do not repeat review or verdict content.",
+        )
+
+    reason = (
+        "Return exactly PANEL_VERDICT_READY, PANEL_VERDICT_WRITE_FAILED, or "
+        f"PANEL_REVIEW_FAILED followed by id={expected_id}, with no surrounding text. "
+        "Do not repeat review or verdict content."
+    )
+    allowed = message in {f"{status} id={expected_id}" for status in REFEREE_STATUSES}
+    return allowed, reason
+
+
 try:
     payload = json.load(sys.stdin)
 except (json.JSONDecodeError, OSError, TypeError, ValueError):
     print(
-        "panel-review status hook could not validate the Agent response; return only its fixed "
-        "status stub",
+        "panel-review status hook could not validate the Agent response or hand-back; return only "
+        "its fixed status stub",
         file=sys.stderr,
     )
     raise SystemExit(2)
+event_name = payload.get("hook_event_name")
 agent_type = payload.get("agent_type")
 if agent_type not in {CLAUDE_SEAT, REFEREE}:
+    raise SystemExit(0)
+
+# In auto mode the report is delivered in this tool call, so validate it before execution.
+if event_name == "PreToolUse":
+    if payload.get("tool_name") != "SubagentHandback":
+        raise SystemExit(0)
+    tool_input = payload.get("tool_input", {})
+    message = tool_input.get("message", "") if isinstance(tool_input, dict) else ""
+    transcript_path = ""
+    if agent_type == REFEREE:
+        transcript_path = payload.get("agent_transcript_path") or handback_transcript_path(payload)
+    allowed, reason = validate_status(agent_type, message, transcript_path)
+    if allowed:
+        set_handback_state(payload, "accepted")
+        raise SystemExit(0)
+    if not deny_first_invalid_handback(payload):
+        terminal_message = terminal_failure_status(agent_type, message, transcript_path)
+        set_handback_state(payload, "accepted")
+        json.dump(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "allow",
+                    "permissionDecisionReason": "Repeated invalid hand-back replaced with a fixed failure status.",
+                    "updatedInput": {"message": terminal_message},
+                }
+            },
+            sys.stdout,
+        )
+        raise SystemExit(0)
+    json.dump(
+        {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": reason,
+            }
+        },
+        sys.stdout,
+    )
+    raise SystemExit(0)
+
+if event_name != "SubagentStop":
+    raise SystemExit(0)
+
+handback_state = read_handback_state(payload)
+auto_handback_unaccepted = (
+    payload.get("permission_mode") == "auto" and handback_state != "accepted"
+)
+
+# Auto mode has already delivered the report through the validated hand-back. Its closing text
+# may be empty or free-form, so applying the manual-mode check here would inspect the wrong result.
+# If no accepted hand-back is recorded, keep validating until a status passes through a gate.
+if payload.get("permission_mode") == "auto" and not auto_handback_unaccepted:
+    clear_handback_state(payload)
     raise SystemExit(0)
 
 # A blocked referee stop is re-invoked in the same long-lived context. Let that continuation stop
 # so a malformed retry cannot become an unbounded hook loop; Claude seats have no waiting state and
 # retain their strict response gate.
-if agent_type == REFEREE and payload.get("stop_hook_active") is True:
+if (
+    agent_type == REFEREE
+    and payload.get("stop_hook_active") is True
+    and not auto_handback_unaccepted
+):
+    clear_handback_state(payload)
     raise SystemExit(0)
 
 message = payload.get("last_assistant_message", "")
-if agent_type == CLAUDE_SEAT:
-    allowed = message in CLAUDE_SEAT_STATUSES
-    reason = (
-        "Return exactly CLAUDE_SEAT_RAW_WRITTEN or CLAUDE_SEAT_RAW_FAILED, "
-        "with no surrounding text. Do not repeat the completed review or write operation."
-    )
-else:
-    expected_id = expected_referee_id(payload.get("agent_transcript_path", ""))
-    allowed = expected_id is not None and message in {
-        f"{status} id={expected_id}" for status in REFEREE_STATUSES
-    }
-    if expected_id is None:
-        reason = (
-            "Return exactly one fixed panel-review status stub with the run ID from the original "
-            "task prompt and no surrounding text. Do not repeat review or verdict content."
-        )
-    else:
-        reason = (
-            "Return exactly PANEL_VERDICT_READY, PANEL_VERDICT_WRITE_FAILED, or "
-            f"PANEL_REVIEW_FAILED followed by id={expected_id}, with no surrounding text. "
-            "Do not repeat review or verdict content."
-        )
+transcript_path = payload.get("agent_transcript_path", "") if agent_type == REFEREE else ""
+allowed, reason = validate_status(agent_type, message, transcript_path)
 
 if allowed:
+    clear_handback_state(payload)
+    raise SystemExit(0)
+
+# A fixed referee failure status is safe even when the task transcript cannot provide its ID; the
+# caller independently validates any saved artifact before delivery.
+if (
+    agent_type == REFEREE
+    and auto_handback_unaccepted
+    and is_exact_referee_failure_stub(message)
+):
+    clear_handback_state(payload)
     raise SystemExit(0)
 
 # The rejected response stays inside the subagent transcript. Keep it out of the feedback so the

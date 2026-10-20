@@ -119,6 +119,7 @@ def check_tree(errors, root):
     claude_delivery = read(root, "prompts/claude_delivery.tmpl")
     bootstrap = read(root, "skills/panel-review-for-agent/SKILL.md")
     agent_status_hook = read(root, "hooks/enforce_agent_status_stub")
+    hook_config = json.loads(read(root, "hooks/hooks.json"))
     status = read(root, "skills/status/SKILL.md")
     commands = {
         name: read(root, f"skills/{name}/SKILL.md")
@@ -358,6 +359,67 @@ def check_tree(errors, root):
             fail(errors, "claude-return-status", "Claude delivery prompt", f"missing {status_name}")
         if status_name not in agent_status_hook:
             fail(errors, "claude-return-status", "Agent status hook", f"does not enforce {status_name}")
+
+    pretool_groups = hook_config.get("hooks", {}).get("PreToolUse", [])
+    if not any(group.get("matcher") == "SubagentHandback" for group in pretool_groups):
+        fail(
+            errors,
+            "auto-handback-status-gate",
+            "hooks/hooks.json",
+            "missing SubagentHandback PreToolUse hook",
+        )
+    if 'event_name == "PreToolUse"' not in agent_status_hook:
+        fail(
+            errors,
+            "auto-handback-status-gate",
+            "Agent status hook",
+            "does not validate PreToolUse hand-backs",
+        )
+    if 'payload.get("permission_mode") == "auto"' not in agent_status_hook:
+        fail(
+            errors,
+            "auto-handback-status-gate",
+            "Agent status hook",
+            "does not distinguish auto-mode closing text",
+        )
+    for required in (
+        "def deny_first_invalid_handback(payload):",
+        "def set_handback_state(payload, state):",
+        "def read_handback_state(payload):",
+        "def terminal_failure_status(agent_type, message, transcript_path):",
+        'handback_state != "accepted"',
+        "is_exact_referee_failure_stub(message)",
+        'UNKNOWN_RUN_ID = "unavailable"',
+        '"updatedInput": {"message": terminal_message}',
+    ):
+        if required not in agent_status_hook:
+            fail(
+                errors,
+                "auto-handback-retry-bound",
+                "Agent status hook",
+                f"missing bounded failure behavior `{required}`",
+            )
+    bounded_handback = (
+        "The hook denies at most one invalid hand-back per subagent; if retry state is unavailable "
+        "or a later hand-back is still invalid, it replaces the message with a fixed failure stub "
+        "and allows it."
+    )
+    missing_run_id_fallback = (
+        "If the referee task ID and an exact stub ID are both unavailable, the hook uses"
+    )
+    pending_denial_stop_check = (
+        "If no accepted auto-mode hand-back is recorded, SubagentStop checks the final message itself."
+    )
+    for relative, text in (("README.md", readme), ("protocol.md", protocol)):
+        text = normalized(text.replace("`", ""))
+        for required in (bounded_handback, missing_run_id_fallback, pending_denial_stop_check):
+            if required not in text:
+                fail(
+                    errors,
+                    "auto-handback-retry-bound",
+                    relative,
+                    f"missing `{required}`",
+                )
 
     if re.search(r"(?i)two other AIs", executable_text):
         fail(errors, "configured-panel-wording", "seat-facing instructions", "hard-codes a three-seat panel")

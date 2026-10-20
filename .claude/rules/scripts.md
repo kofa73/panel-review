@@ -98,13 +98,18 @@ byte-exact.
   expected Round-0 or debate raw path from a validated run ID/round/batch, requires the phase's exact
   block set and every item to pass the shared seat-contract validation, and only then atomically
   installs the complete raw response. It never accepts an arbitrary destination path.
-- `hooks/enforce_agent_status_stub` — the plugin's `SubagentStop` return gate for the Claude seat and
-  referee. It admits only an exact fixed terminal stub and derives the referee's expected run ID from
-  the original Agent task in `agent_transcript_path`.
-  It asks the same subagent to correct an initial mismatch, then allows an already-active referee
-  stop-hook continuation to stop so correction cannot become an unbounded loop; the Claude-seat gate
-  remains strict. It does not transform or transport review content, so document it as bounded
-  runtime enforcement, never as a security boundary.
+- `hooks/enforce_agent_status_stub` — the plugin's `PreToolUse` gate for `SubagentHandback` and its
+  `SubagentStop` return gate for the Claude seat and referee. It validates exact fixed status stubs
+  before an auto-mode hand-back executes, deriving the referee's expected run ID from its original
+  Agent task transcript. `SubagentStop` accepts empty or free-form closing text after a hand-back
+  passes; if no accepted auto-mode hand-back is recorded, it checks the final message itself. Other
+  permission modes keep the exact final-message check. The hook denies at most one
+  invalid hand-back per subagent; if retry state is unavailable or
+  a later hand-back is still invalid, it replaces the message with a fixed failure stub and allows it.
+  If the referee task ID and an exact stub ID are unavailable, the hook uses
+  `PANEL_REVIEW_FAILED id=unavailable`; the command still validates the saved artifact before
+  delivery. An already-active referee stop-hook continuation may stop so correction cannot
+  become an unbounded loop. These hooks provide bounded runtime enforcement, not a security boundary.
 - `await_seats` — the barrier that owns CLI-seat waiting; runs every CLI seat concurrently (each via
   `run_seat`) in ONE job with a per-seat outer timeout, writes per-seat status + a combined `--done`
   summary. **Run it via the `panel-review-cli-barrier` Agent, never as a referee-backgrounded Bash
