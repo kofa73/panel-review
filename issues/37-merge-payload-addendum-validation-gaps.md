@@ -2,7 +2,7 @@
 
 Priority: 37
 
-Status: Pending
+Status: Completed
 
 Source: Panel review `panel-20260816-080558-5ab680af` (Claude + Codex + Gemini), 2026-08-16 — accepted unanimously
 
@@ -53,3 +53,9 @@ the outcome the docstring says the function prevents.
 - Do not validate the *semantics* of the addendum's contents here (whether a folded evidence point
   materially conflicts with an issue's outcome). That judgment stays with the referee, per
   `.claude/rules/scripts.md`.
+
+## Resolution
+
+`merge_payload` now rejects unknown keys and malformed merge structures in both inputs with exit 2
+and a key-specific message. Regression coverage confirms valid output serialization is unchanged
+and `round commit` preserves the canonical payload and index on each new failure path.

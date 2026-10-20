@@ -27,11 +27,26 @@ class ContractConsistencyTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("instruction contracts: OK", result.stdout)
 
+    def test_merge_payload_validation_drift_is_reported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_contract_tree(root)
+            (root / "scripts/merge_payload").write_text(
+                'print("{}")\n',
+                encoding="utf-8",
+            )
+
+            result = self.run_check(root)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("merge-payload-validation", result.stderr)
+
     def copy_contract_tree(self, root):
         for name in ("agents", "skills", "prompts", "hooks"):
             shutil.copytree(ROOT / name, root / name)
         (root / "scripts").mkdir()
         shutil.copy2(ROOT / "scripts/read_protocol_phase", root / "scripts/read_protocol_phase")
+        shutil.copy2(ROOT / "scripts/merge_payload", root / "scripts/merge_payload")
         # run_agy carries the agy model pins the checker shape-validates.
         shutil.copy2(ROOT / "scripts/run_agy", root / "scripts/run_agy")
         shutil.copy2(ROOT / "CONTRACTS.md", root / "CONTRACTS.md")

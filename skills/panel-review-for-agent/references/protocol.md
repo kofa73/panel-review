@@ -611,9 +611,15 @@ the common one-batch shape.
      same-pass raisers, sorted and unique — including the single raiser of a non-unanimous open issue.
      `index commit-sweep` permits that coverage entry to target its same-transaction `add_issues`
      record while all other mutation types remain existing-only.
-   - **Addendum shape.** The addendum is payload-shaped for `round commit --addendum`. A `revise`
-     entry wraps the changed enum/prose fields under **`fields`** (a flat `claim` is rejected before
-     any mutation); `set_state`/`set_flag` carry `id` (+ `flag`):
+   - **Addendum shape.** The addendum is payload-shaped for `round commit --addendum`, using only
+     these consumed top-level keys: `bump`, `set_state`, `set_flag`, `revise`, `add_evidence`,
+     `add_issues`, and `evaluated_by`. Unknown keys are rejected so a typo cannot silently drop an
+     intended mutation. Omitted keys use empty containers, while explicitly supplied values must
+     have the required type; `null` and `false` do not count as omitted. The merge boundary checks
+     these structures in both the generated base and addendum; in particular, `add_evidence` and
+     `add_issues` are lists of objects and `evaluated_by` is an object. A `revise` entry wraps the changed enum/prose fields under
+     **`fields`** (a flat `claim` is rejected before any mutation); `set_state`/`set_flag` carry `id`
+     (+ `flag`):
 
      ```json
      {"revise":[{"id":"i4","fields":{"claim":"<merged prose>"}}],
@@ -625,9 +631,10 @@ the common one-batch shape.
      reconciles those overlaps: the addendum's state wins, while revised fields are deep-merged.
      After writing the addendum, return to step 10's `round commit --addendum` call. It exclusively
      validates and merges the addendum, installs the complete payload atomically, commits the round
-     once, and regenerates the cards. If it rejects the addendum, fix the addendum and retry; the
-     canonical payload and index remain untouched. If the returned gate data has `low_only=true` and
-     `debate-low` is false, load `gate`; otherwise continue or finish without loading that phase.
+     once, and regenerates the cards. A structural error exits 2 with a message and leaves the
+     canonical payload and index untouched; fix the addendum and retry. If the returned gate data has
+     `low_only=true` and `debate-low` is false, load `gate`; otherwise continue or finish without
+     loading that phase.
 
 <!-- /phase:debate -->
 <!-- phase:gate -->

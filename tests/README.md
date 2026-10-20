@@ -89,8 +89,9 @@ Each exits `3` when its CLI is not installed, which the suite reports as a skip.
   terminal outcomes (`unresolved`/`contested`), `fully_vetted` only on full
   coverage, two-seat → exit 2, integrity → exit 3.
 - **merge_payload** (`test_merge_payload.py`): set_state-replace + revise
-  field-merge; bump/coverage combination; malformed addendum errors remain clean exit-2 failures;
-  merged payload commits; hand-appending is genuinely rejected.
+  field-merge; bump/coverage combination; unknown keys and malformed structures in either input
+  remain clean exit-2 failures; valid output serialization stays stable; merged payload commits;
+  hand-appending is genuinely rejected.
 - **sweep** (`test_sweep.py`): batch ingestion classification
   (missing/empty/malformed/partial/wrong_ids/complete); `has`/`resume-plan`;
   `drop-seat` exclusion; `done`/`commit` (incl. stale-epoch rejection); plan

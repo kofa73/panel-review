@@ -1037,16 +1037,36 @@ class RoundTest(unittest.TestCase):
     def test_failed_addendum_preserves_canonical_payload_and_index(self):
         self.prepare_prose_judgment()
         payload = self.run_dir / "payload.1.json"
-        payload_before = payload.read_bytes()
+        self.assertFalse(payload.exists())
         index = self.run_dir / "index.json"
         index_before = index.read_bytes()
         addendum = self.run_dir / "addendum.1.json"
-        self.write_json(addendum, {"revise": [{"id": "i1", "claim": "invalid shape"}]})
+        cases = [
+            ({"revise": [{"id": "i1", "claim": "invalid shape"}]}, 'addendum .revise entry missing "fields"'),
+            ({"add_issue": []}, 'addendum has unknown key "add_issue"'),
+            ({"add_evidence": {"id": "i1"}}, "addendum .add_evidence is not a list"),
+            ({"add_issues": "oops"}, "addendum .add_issues is not a list"),
+            ({"evaluated_by": "x"}, "addendum .evaluated_by is not an object"),
+        ]
 
+        for value, message in cases:
+            with self.subTest(addendum=value):
+                self.write_json(addendum, value)
+                rejected = self.run_round("commit", self.run_id, "--addendum", addendum)
+
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertIn(message, rejected.stderr)
+                self.assertNotIn("Traceback", rejected.stderr)
+                self.assertFalse(payload.exists())
+                self.assertEqual(index.read_bytes(), index_before)
+
+        payload_before = b'{"sentinel":"existing payload"}\n'
+        payload.write_bytes(payload_before)
+        self.write_json(addendum, {"add_issue": []})
         rejected = self.run_round("commit", self.run_id, "--addendum", addendum)
 
         self.assertNotEqual(rejected.returncode, 0)
-        self.assertIn('addendum .revise entry missing "fields"', rejected.stderr)
+        self.assertIn('addendum has unknown key "add_issue"', rejected.stderr)
         self.assertEqual(payload.read_bytes(), payload_before)
         self.assertEqual(index.read_bytes(), index_before)
 

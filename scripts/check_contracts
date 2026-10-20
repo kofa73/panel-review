@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 
 from seat_contract import PHASES, get_rules, render_contract, response_problem
 
@@ -42,6 +43,53 @@ def read_protocol_phase(root, phase):
         detail = result.stderr.strip() or f"exit {result.returncode}"
         raise RuntimeError(f"cannot render protocol phase {phase}: {detail}")
     return result.stdout
+
+
+def check_merge_payload_contract(errors, root):
+    """Probe the addendum boundary so misspellings and consumed-field shapes fail closed."""
+    script = root / "scripts" / "merge_payload"
+    if not script.is_file():
+        fail(errors, "merge-payload-validation", "scripts/merge_payload", "script is missing")
+        return
+
+    probes = [
+        ({}, {"add_issue": []}, 'addendum has unknown key "add_issue"'),
+        ({}, {"add_evidence": {}}, "addendum .add_evidence is not a list"),
+        ({}, {"add_issues": "oops"}, "addendum .add_issues is not a list"),
+        ({}, {"evaluated_by": "x"}, "addendum .evaluated_by is not an object"),
+        ({"evaluated_by": "x"}, {}, "base .evaluated_by is not an object"),
+    ]
+    for key, expected in (
+        ("add_evidence", "is not a list"),
+        ("add_issues", "is not a list"),
+        ("evaluated_by", "is not an object"),
+    ):
+        for invalid_value in (None, False):
+            detail = f".{key} {expected}"
+            probes.append(({}, {key: invalid_value}, f"addendum {detail}"))
+            probes.append(({key: invalid_value}, {}, f"base {detail}"))
+    with tempfile.TemporaryDirectory(prefix="panel-contract-merge-") as directory:
+        base_path = Path(directory) / "base.json"
+        for base, addendum, expected in probes:
+            base_path.write_text(json.dumps(base), encoding="utf-8")
+            try:
+                result = subprocess.run(
+                    [sys.executable, str(script), str(base_path)],
+                    input=json.dumps(addendum),
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+            except OSError as error:
+                fail(errors, "merge-payload-validation", "scripts/merge_payload", str(error))
+                return
+            if result.returncode != 2 or expected not in result.stderr or "Traceback" in result.stderr:
+                fail(
+                    errors,
+                    "merge-payload-validation",
+                    "scripts/merge_payload",
+                    f"expected exit 2 with `{expected}` and no traceback; got exit {result.returncode}: {result.stderr.strip()}",
+                )
 
 
 def check_rendered_contracts(errors):
@@ -86,6 +134,8 @@ def check_rendered_contracts(errors):
 
 
 def check_tree(errors, root):
+    check_merge_payload_contract(errors, root)
+
     templates = {
         "round0": read(root, "prompts/blind_pass.tmpl"),
         "debate": read(root, "prompts/debate.tmpl"),

@@ -9,6 +9,7 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
 
 from panel_common import panel_atomic_write, panel_require_id
 from seat_contract import render_contract
@@ -788,81 +789,90 @@ def cmd_commit(run_id, addendum):
     stances_path = directory / f"stances.{round_number}.json"
     panel_atomic_write(str(stances_path), stances)
     payload = directory / f"payload.{round_number}.json"
-    if len(engaged) >= 2:
-        advice = directory / f"advice.{round_number}.json"
-        run_command(
-            [
-                HERE / "decide_round",
-                "--id",
-                run_id,
-                "--round",
-                str(round_number),
-                "--configured",
-                " ".join(configured),
-                "--engaged",
-                " ".join(engaged),
-                "--stances",
-                stances_path,
-                "--advice",
-                advice,
-            ],
-            stdout_path=payload,
-        )
-        advice_value = load_json(advice)
-    else:
-        run_command(
-            [
-                HERE / "decide_degraded_round",
-                "--id",
-                run_id,
-                "--round",
-                str(round_number),
-                "--configured",
-                " ".join(configured),
-                "--engaged",
-                " ".join(engaged),
-                "--stances",
-                stances_path,
-            ],
-            stdout_path=payload,
-        )
-        advice_value = {"prose_revisions": []}
-    new_finding_paths = [
-        directory / f"nf.{round_number}.{batch['seat']}.{batch['batch']}.json"
-        for batch in plan["batches"]
-        if batch["seat"] in engaged
-    ]
-    new_findings_present = any(
-        path.is_file() and any(line for line in path.read_text(encoding="utf-8").splitlines() if line)
-        for path in new_finding_paths
-    )
-    # withheld_text is referee work too: decide_round kept the leaking string out of the
-    # payload, and only the referee can decide whether to restate its substance.
-    judgment_required = (
-        bool(advice_value.get("prose_revisions"))
-        or bool(advice_value.get("withheld_text"))
-        or new_findings_present
-    )
-    if judgment_required and addendum is None:
-        emit(
-            {
-                "status": "needs_judgment_addendum",
-                "advice": str(advice) if len(engaged) >= 2 else None,
-                "new_findings": [
-                    str(path)
-                    for path in sorted(new_finding_paths)
-                    if path.is_file()
-                    and any(line for line in path.read_text(encoding="utf-8").splitlines() if line)
+    with tempfile.TemporaryDirectory(prefix=f"round-{round_number}-", dir=directory) as candidate_dir:
+        candidate_payload = Path(candidate_dir) / "base.json"
+        if len(engaged) >= 2:
+            advice = directory / f"advice.{round_number}.json"
+            run_command(
+                [
+                    HERE / "decide_round",
+                    "--id",
+                    run_id,
+                    "--round",
+                    str(round_number),
+                    "--configured",
+                    " ".join(configured),
+                    "--engaged",
+                    " ".join(engaged),
+                    "--stances",
+                    stances_path,
+                    "--advice",
+                    advice,
                 ],
-            }
+                stdout_path=candidate_payload,
+            )
+            advice_value = load_json(advice)
+        else:
+            run_command(
+                [
+                    HERE / "decide_degraded_round",
+                    "--id",
+                    run_id,
+                    "--round",
+                    str(round_number),
+                    "--configured",
+                    " ".join(configured),
+                    "--engaged",
+                    " ".join(engaged),
+                    "--stances",
+                    stances_path,
+                ],
+                stdout_path=candidate_payload,
+            )
+            advice_value = {"prose_revisions": []}
+        new_finding_paths = [
+            directory / f"nf.{round_number}.{batch['seat']}.{batch['batch']}.json"
+            for batch in plan["batches"]
+            if batch["seat"] in engaged
+        ]
+        new_findings_present = any(
+            path.is_file() and any(line for line in path.read_text(encoding="utf-8").splitlines() if line)
+            for path in new_finding_paths
         )
-        raise RoundError("judgment addendum required", 3)
-    if addendum is not None:
-        if not addendum.is_file():
-            raise RoundError("addendum file not found", 2)
-        merged = directory / f"payload.{round_number}.merged.json"
-        run_command([HERE / "merge_payload", payload], input_data=addendum.read_bytes(), stdout_path=merged)
-        panel_atomic_write(str(payload), merged.read_bytes())
+        # withheld_text is referee work too: decide_round kept the leaking string out of the
+        # payload, and only the referee can decide whether to restate its substance.
+        judgment_required = (
+            bool(advice_value.get("prose_revisions"))
+            or bool(advice_value.get("withheld_text"))
+            or new_findings_present
+        )
+        if judgment_required and addendum is None:
+            emit(
+                {
+                    "status": "needs_judgment_addendum",
+                    "advice": str(advice) if len(engaged) >= 2 else None,
+                    "new_findings": [
+                        str(path)
+                        for path in sorted(new_finding_paths)
+                        if path.is_file()
+                        and any(line for line in path.read_text(encoding="utf-8").splitlines() if line)
+                    ],
+                }
+            )
+            raise RoundError("judgment addendum required", 3)
+        if addendum is not None:
+            if not addendum.is_file():
+                raise RoundError("addendum file not found", 2)
+            merged_payload = Path(candidate_dir) / "merged.json"
+            run_command(
+                [HERE / "merge_payload", candidate_payload],
+                input_data=addendum.read_bytes(),
+                stdout_path=merged_payload,
+            )
+            candidate_bytes = merged_payload.read_bytes()
+        else:
+            candidate_bytes = candidate_payload.read_bytes()
+        panel_atomic_write(str(payload), candidate_bytes)
     run_command(
         [HERE / "sweep", "commit", run_id, str(round_number), epoch],
         input_data=payload.read_bytes(),

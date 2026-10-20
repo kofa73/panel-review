@@ -128,6 +128,44 @@ class MergePayloadTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout), {"bump": ["i1", "i2", "i3"], "evaluated_by": {"i1": ["claude"], "i2": ["gemini"]}})
 
+    def test_well_formed_addendum_keeps_the_existing_serialized_output(self):
+        base = {
+            "bump": ["i2", "i1", "i2"],
+            "set_state": [{"id": "i1", "state": "accepted"}],
+            "set_flag": [{"id": "i1", "flag": "peer_reviewed", "value": True}],
+            "revise": [{"id": "i1", "fields": {"severity": "low", "claim": "base"}}],
+            "add_evidence": [{"id": "i1", "side": "pro", "point": {"assertion": "base", "location": "a.py:1"}}],
+            "add_issues": [{"id": "i2", "claim": "first new issue"}],
+            "evaluated_by": {"i1": ["codex"], "i2": ["gemini"]},
+        }
+        addendum = {
+            "bump": ["i3", "i1"],
+            "set_state": [{"id": "i1", "state": "open"}],
+            "set_flag": [
+                {"id": "i1", "flag": "peer_reviewed", "value": False},
+                {"id": "i1", "flag": "fully_vetted", "value": True},
+            ],
+            "revise": [{"id": "i1", "fields": {"claim": "merged"}}],
+            "add_evidence": [{"id": "i1", "side": "contra", "point": {"assertion": "more", "location": "a.py:2"}}],
+            "add_issues": [{"id": "i3", "claim": "second new issue"}],
+            "evaluated_by": {"i1": ["claude"]},
+        }
+        expected = (
+            '{"bump":["i1","i2","i3"],"set_state":[{"id":"i1","state":"open"}],'
+            '"set_flag":[{"id":"i1","flag":"fully_vetted","value":true},'
+            '{"id":"i1","flag":"peer_reviewed","value":false}],'
+            '"revise":[{"id":"i1","fields":{"severity":"low","claim":"merged"}}],'
+            '"add_evidence":[{"id":"i1","side":"pro","point":{"assertion":"base","location":"a.py:1"}},'
+            '{"id":"i1","side":"contra","point":{"assertion":"more","location":"a.py:2"}}],'
+            '"add_issues":[{"id":"i2","claim":"first new issue"},{"id":"i3","claim":"second new issue"}],'
+            '"evaluated_by":{"i1":["claude"],"i2":["gemini"]}}\n'
+        )
+
+        result = self.run_merge(self.write_base(base), json.dumps(addendum))
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, expected)
+
     def test_error_paths(self):
         cases = [
             (self.run_merge(), 2, "usage: merge_payload <base.json>   (addendum on stdin)\n"),
@@ -146,6 +184,7 @@ class MergePayloadTest(unittest.TestCase):
         # real slip that truncated a committed round; the others guard the sibling keys.
         base = self.write_base({"bump": ["i4"]})
         cases = [
+            ('{"add_issue":[]}', 'addendum has unknown key "add_issue"'),
             ('{"revise":[{"id":"i4","claim":"x"}]}', 'addendum .revise entry missing "fields"'),
             ('{"revise":[{"id":"i4","fields":[]}]}', 'addendum .revise entry "fields" is not an object'),
             ('{"revise":[{"fields":{"claim":"x"}}]}', 'addendum .revise entry missing "id"'),
@@ -153,10 +192,42 @@ class MergePayloadTest(unittest.TestCase):
             ('{"set_flag":[{"id":"i4","value":true}]}', 'addendum .set_flag entry missing "flag"'),
             ('{"revise":{"id":"i4"}}', "addendum .revise is not a list"),
             ('{"set_flag":["nope"]}', "addendum .set_flag entry is not an object"),
+            ('{"add_evidence":{"id":"i1"}}', "addendum .add_evidence is not a list"),
+            ('{"add_evidence":null}', "addendum .add_evidence is not a list"),
+            ('{"add_evidence":false}', "addendum .add_evidence is not a list"),
+            ('{"add_evidence":["nope"]}', "addendum .add_evidence entry is not an object"),
+            ('{"add_issues":"oops"}', "addendum .add_issues is not a list"),
+            ('{"add_issues":null}', "addendum .add_issues is not a list"),
+            ('{"add_issues":false}', "addendum .add_issues is not a list"),
+            ('{"add_issues":[null]}', "addendum .add_issues entry is not an object"),
+            ('{"evaluated_by":"x"}', "addendum .evaluated_by is not an object"),
+            ('{"evaluated_by":null}', "addendum .evaluated_by is not an object"),
+            ('{"evaluated_by":false}', "addendum .evaluated_by is not an object"),
         ]
         for addendum, fragment in cases:
             with self.subTest(addendum=addendum):
                 result = self.run_merge(base, addendum)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn(fragment, result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
+                self.assertEqual(result.stdout, "")
+
+    def test_unknown_keys_and_malformed_shapes_in_base_are_rejected(self):
+        cases = [
+            ({"typo": []}, 'base has unknown key "typo"'),
+            ({"add_evidence": {"id": "i1"}}, "base .add_evidence is not a list"),
+            ({"add_evidence": None}, "base .add_evidence is not a list"),
+            ({"add_evidence": False}, "base .add_evidence is not a list"),
+            ({"add_issues": "oops"}, "base .add_issues is not a list"),
+            ({"add_issues": None}, "base .add_issues is not a list"),
+            ({"add_issues": False}, "base .add_issues is not a list"),
+            ({"evaluated_by": "x"}, "base .evaluated_by is not an object"),
+            ({"evaluated_by": None}, "base .evaluated_by is not an object"),
+            ({"evaluated_by": False}, "base .evaluated_by is not an object"),
+        ]
+        for base, fragment in cases:
+            with self.subTest(base=base):
+                result = self.run_merge(self.write_base(base))
                 self.assertEqual(result.returncode, 2, result.stderr)
                 self.assertIn(fragment, result.stderr)
                 self.assertNotIn("Traceback", result.stderr)
