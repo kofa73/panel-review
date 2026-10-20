@@ -2,7 +2,7 @@
 
 Priority: 42
 
-Status: Pending
+Status: Completed
 
 Source: Simplification panel (Opus §5, Sol §"Correct smaller contradictions"), 2026-08-16 — each item
 re-verified in the working tree
@@ -38,3 +38,11 @@ the run`) rather than replacing one undated absolute with another.
 
 - Do not weaken the agy display-label pin while correcting item 3. The pin is cheap compatibility
   insurance across agy versions; only its rationale sentence is out of date.
+
+## Resolution
+
+Corrected all six statements. The protocol now says `fully_vetted` can become true when a previously
+down seat re-engages, the barrier comment describes paired foreground Agents, and the agy fallback
+history is versioned. The README now lists `profiles/` in the installer copy list and ends with prose;
+`AGENTS.md` lists `stage_review_profile`. Updated the `check_contracts` comment and bumped the plugin
+version to 1.0.34 because the canonical protocol is loaded at runtime.

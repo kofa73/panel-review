@@ -104,8 +104,8 @@
 
 set -euo pipefail
 
-# Exact agy display labels (see header: never slugs; an unrecognized value silently
-# falls back to the user's settings.json default). Verified to bind by
+# Exact display labels are stable across tested agy versions; the header records why
+# slug and unknown-label behavior must be treated as version-dependent. Verified to bind by
 # tests/live/agy_model_binding.sh on agy 1.1.13 (2026-08-15) and 1.1.18 (2026-08-22).
 PRIMARY_MODEL="Gemini 3.1 Pro (High)"
 FALLBACK_MODEL="Gemini 3.7 Flash (High)"

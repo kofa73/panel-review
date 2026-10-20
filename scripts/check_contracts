@@ -617,10 +617,9 @@ def check_tree(errors, root):
 
     # agy binds --model by DISPLAY LABEL ("Gemini 3.7 Flash (High)"), and a slug is not a stable
     # identifier across agy versions: on 1.1.10 the listed slug `gemini-3.1-pro-high` bound
-    # Gemini 3.6 Flash (High) instead. How a bad value fails is version-dependent too (1.1.10 ran
-    # the user's settings.json model with no error), so a slug substitution can downgrade a review
-    # seat invisibly. Shape-check both pins here; `tests/live/agy_model_binding.sh` is the on-demand
-    # proof that a pin actually binds, which only the installed CLI can answer.
+    # Gemini 3.6 Flash (High) instead. An unrecognized value used the user's settings.json model
+    # without error on 1.1.10, while 1.1.13 hard-errors. Shape-check both pins to reject slug forms;
+    # the live binding check proves that a pin actually binds on the installed CLI.
     run_agy = read(root, "scripts/run_agy")
     display_label = re.compile(r"^Gemini [0-9]+(?:\.[0-9]+)* [A-Z][A-Za-z-]* \((?:High|Medium|Low)\)$")
     pins = {}

@@ -155,8 +155,9 @@ A **point**: `{"location":"file:line"|["file:line",...]|"analysis","assertion":"
 
 - Issue ids must be safe tokens (`i1`, `i2`, … — letters/digits/dot/dash/underscore only).
 - `peer_reviewed` → true once ≥2 engaged seats have evaluated it (the settle threshold).
-- `fully_vetted` → true only once **every configured seat** has evaluated it at least once; if it
-  settles while any seat was down, it stays false **permanently** and is labelled "not fully vetted".
+- `fully_vetted` → true once **every configured seat** has evaluated the issue. If a seat was down,
+  the flag can become true in a later round when that seat re-engages and evaluates the issue. It
+  never reverts.
 - `detail_contested` → existence accepted but a detail (severity/claim/location) never converged.
 - `card_rev`/`rounds_debated` are bumped by the `index`/`sweep` scripts — never hand-edit them.
 

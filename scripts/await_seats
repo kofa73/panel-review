@@ -24,9 +24,10 @@
 #   a completion sentinel — the barrier's exit-code wrapper around this script, not
 #   the --done result file (which appears only on a clean exit) — so a setup error
 #   surfaces at once instead of hanging the barrier's whole budget; the barrier
-#   Agent's return is the event that wakes the referee. Two background Agents per
-#   pass — the CLI barrier and the Claude seat — so two reliable wakes, never a
-#   dropped one.
+#   Agent's return is the event that wakes the referee. The referee dispatches the
+#   CLI barrier and Claude seat as two foreground Agents in one response. Claude
+#   Code runs them concurrently and returns control only after both finish, so the
+#   referee does not poll while they are active.
 #
 # It is a thin orchestration layer over run_seat: each seat still goes through
 # run_seat (dispatch -> parse_block -> report status), so the seat contract, flag
