@@ -2,7 +2,7 @@
 
 Priority: 43
 
-Status: Pending
+Status: Completed
 
 Source: Simplification panel (Opus §4.3), 2026-08-16 — verified in the working tree
 
@@ -30,13 +30,13 @@ that has no steps 1-2, leftover from an earlier edit.
 
 ## Expected behavior
 
-1. Replace the `CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS` block with `CLAUDE_SUBAGENT_BG_SHELL_MAX_MS`,
-   stating the 60-minute default, the roughly 55-minute practical `PANEL_REVIEW_SEAT_TIMEOUT` ceiling
-   it implies, and that raising the seat timeout past that also requires raising this variable.
-2. Fix the orphaned list indentation so the block reads as part of the surrounding prose.
-3. Keep the existing, correct guidance: the barrier retry cap in
-   `agents/panel-review-cli-barrier.md` step 2 must still be raised alongside the seat timeout, and
-   `BASH_DEFAULT_TIMEOUT_MS`/`BASH_MAX_TIMEOUT_MS` still do nothing here.
+1. State the current defaults together: the 2400-second per-seat timeout, the barrier's 26 × 100-
+   second wait budget, and its explicit 45-minute background-command timeout.
+2. Explain the current Claude Code rules: terminal CLI sessions have no background-command limit;
+   unattended sessions have a 30-minute default (10 minutes for a text-prompt `-p` run), with an
+   explicit per-command timeout capped at two hours.
+3. Explain which panel budgets to raise together when allowing longer seat runs, and remove the stale
+   timeout-variable JSON block and its orphaned indentation.
 
 ## Verification
 
@@ -94,3 +94,13 @@ foreground Agent, but it starts `await_seats` as a **background** shell (`run_in
 fired because `await_seats` finishes within ~40 minutes. The new unattended-session limit (30 minutes,
 or 10 in a text-prompt `-p` run) is shorter than that, so it would fire. The code fix (pass an
 explicit `timeout`) is filed as `issues/65` item 2. This issue keeps the README guidance only.
+
+### 2026-10-20 — README guidance updated
+
+The README now states the 2400-second per-seat default, the 26 × 100-second barrier wait budget, and
+the explicit 45-minute timeout on the detached barrier command. It distinguishes terminal sessions,
+which have no background-command limit, from unattended sessions, where Claude Code's default is 30
+minutes (10 minutes for text-prompt `-p`) and explicit timeouts are capped at two hours. It explains
+which budgets must rise together and removes the obsolete `CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS` JSON
+block and the orphaned indentation. The current explicit timeout makes both Bash timeout environment
+variables unnecessary; the documented panel defaults need no owner decision or further measurement.

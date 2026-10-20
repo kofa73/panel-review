@@ -329,31 +329,24 @@ The loop is bounded by a per-issue counter (`--issue-rounds`, default 2) and a g
 
 ### Slow seats and timeouts (optional)
 
-**You normally set nothing.** Each CLI seat is allowed up to ~40 min (`await_seats`'
-`--seat-timeout`, default 2400 s). The barrier polls in short (< 2 min) foreground Bash calls and sets
-`timeout: 2700000` ms (45 min) on its detached Bash call. That exceeds the barrier's ~43-minute wait
-budget and stays below Claude Code's two-hour maximum for unattended background commands. You do not
-need `BASH_DEFAULT_TIMEOUT_MS` or `BASH_MAX_TIMEOUT_MS`; those variables affect foreground Bash
-timeouts, not the detached call's explicit background limit.
+**You normally set nothing.** `await_seats` allows each CLI seat up to 2400 s (40 min) by default
+(`PANEL_REVIEW_SEAT_TIMEOUT`). The barrier waits for up to 26 × 100 s (about 43 min), and its
+detached Bash call has an explicit `timeout` of 2700000 ms (45 min). In unattended Claude Code
+sessions (`claude -p`, Agent SDK, CI, or cloud), background commands default to 30 min, or 10 min
+for a text-prompt `-p` run; the explicit 45-minute timeout overrides that default and is below the
+two-hour maximum. Terminal CLI sessions have no Claude Code background-command time limit.
 
-You only tune this if you deliberately let seats run **longer than ~40 min** — e.g. you raise the
-per-seat cap with `PANEL_REVIEW_SEAT_TIMEOUT=<seconds>`. Then raise the background `timeout` in step
-1 and the barrier's retry cap in step 2 (currently 26) so both budgets exceed your new per-seat cap.
-Otherwise a slow seat is abandoned mid-run and the review degrades to the seats that did finish.
+At these settings, neither `BASH_DEFAULT_TIMEOUT_MS` nor `BASH_MAX_TIMEOUT_MS` changes the barrier
+budget: its per-command timeout is explicit and below the two-hour maximum. Neither changes the
+per-seat timeout or the barrier's retry count. In unattended sessions only, set
+`BASH_MAX_TIMEOUT_MS` if you need to allow a background timeout longer than two hours.
 
-   Add exactly (match the value to your longest seat, in ms — e.g. 60 min):
-
-   ```json
-   {
-     "env": {
-       "CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS": "3600000"
-     }
-   }
-   ```
-
-   Claude Code reads `env` from the file at startup, so it applies however `claude` was launched;
-   restart the session after editing. A real shell environment variable of the same name wins over
-   the settings entry if both are set.
+If you deliberately allow seats to run **longer than 40 min**, raise `PANEL_REVIEW_SEAT_TIMEOUT`,
+the explicit background `timeout` in [step 1 of the CLI barrier](agents/panel-review-cli-barrier.md),
+and its retry cap in step 2 together. Keep the retry budget longer than the per-seat cap and the
+background timeout longer than the retry budget. In unattended sessions, a background timeout
+cannot exceed two hours unless you raise Claude Code's maximum. Otherwise a slow seat is abandoned
+mid-run and the review degrades to the seats that did finish.
 
 ---
 
