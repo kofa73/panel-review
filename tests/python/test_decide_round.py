@@ -28,7 +28,6 @@ def issue(issue_id="i1", severity="medium", rounds=0):
         "detail_contested": False,
         "state": "open",
         "rounds_debated": rounds,
-        "card_rev": 0,
     }
 
 

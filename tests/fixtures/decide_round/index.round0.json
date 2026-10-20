@@ -33,8 +33,7 @@
       "fully_vetted": false,
       "detail_contested": false,
       "state": "open",
-      "rounds_debated": 0,
-      "card_rev": 0
+      "rounds_debated": 0
     },
     {
       "id": "i2",
@@ -70,8 +69,7 @@
       "fully_vetted": true,
       "detail_contested": true,
       "state": "accepted",
-      "rounds_debated": 0,
-      "card_rev": 0
+      "rounds_debated": 0
     },
     {
       "id": "i3",
@@ -95,8 +93,7 @@
       "fully_vetted": false,
       "detail_contested": false,
       "state": "open",
-      "rounds_debated": 0,
-      "card_rev": 0
+      "rounds_debated": 0
     },
     {
       "id": "i4",
@@ -117,8 +114,7 @@
       "fully_vetted": false,
       "detail_contested": false,
       "state": "open",
-      "rounds_debated": 0,
-      "card_rev": 0
+      "rounds_debated": 0
     },
     {
       "id": "i5",
@@ -138,8 +134,7 @@
       "fully_vetted": false,
       "detail_contested": false,
       "state": "open",
-      "rounds_debated": 0,
-      "card_rev": 0
+      "rounds_debated": 0
     },
     {
       "id": "i6",
@@ -159,8 +154,7 @@
       "fully_vetted": false,
       "detail_contested": false,
       "state": "open",
-      "rounds_debated": 0,
-      "card_rev": 0
+      "rounds_debated": 0
     }
   ],
   "round": 0,

@@ -2,7 +2,7 @@
 
 Priority: 45
 
-Status: Pending
+Status: Completed
 
 Source: Simplification panel (Sol "Small removals"), 2026-08-16 — each field's readers re-checked by
 grep
@@ -53,3 +53,9 @@ revision number is not protection.
 - Do **not** remove `run_epoch`, `committed_rounds`, `rounds_debated`, `evaluated_by`, or the
   artifact's `index_hash`. Those are consumed for continuation identity, idempotence, round limits,
   `fully_vetted` coverage, and delivery validation respectively.
+
+## Resolution
+
+Removed the unused manifest and issue revision metadata, removed the card header comment, and made
+card regeneration delete stale projected files before rendering the current index. Updated the schema
+fixtures, protocol, README, tests, and plugin version together.

@@ -5,20 +5,18 @@
 # The card is the seat-facing projection: claim, location, severity, and the
 # pro/contra evidence POINTS — with NO origins, NO seat names, NO stance tally.
 # An empty contra while not-yet-peer-reviewed renders the explicit "not reviewed
-# yet" note (never blank, so absence is never read as consensus). A header
-# comment carries run/card/index revs for staleness checks on resume.
+# yet" note (never blank, so absence is never read as consensus).
 #
 # Usage:
-#   echo '<issue-record-json>' | project_card --id ID --workdir DIR [--index-rev N]
+#   echo '<issue-record-json>' | project_card --id ID --workdir DIR
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"; . "$here/_panel_common.sh"
 
-id="" workdir="" irev="0"
+id="" workdir=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --id) id="$2"; shift 2;;
     --workdir) workdir="$2"; shift 2;;
-    --index-rev) irev="$2"; shift 2;;
     *) echo "project_card: unknown arg: $1" >&2; exit 2;;
   esac
 done
@@ -32,7 +30,6 @@ iid="$(printf '%s' "$rec" | jq -r '.id')"
 # .id is interpolated into the card path — never let a malformed record escape
 # the issue-<id>.md namespace (same charset discipline as run IDs).
 panel_valid_id "$iid" || { echo "project_card: invalid issue id: '$iid'" >&2; exit 1; }
-crev="$(printf '%s' "$rec" | jq -r '.card_rev // 0')"
 
 # Render points: "- location  assertion (when: precondition) [impact]".
 # location may be a string or an array; missing precondition/impact omitted.
@@ -59,7 +56,6 @@ fi
 
 card="$workdir/.panel-review/$id/issue-$iid.md"
 {
-  printf '<!-- panel run_id=%s issue_id=%s card_rev=%s index_rev=%s -->\n' "$id" "$iid" "$crev" "$irev"
   printf '# %s\n\n' "$iid"
   printf '**Claim:** %s\n' "$claim"
   printf '**Location:** %s\n' "$locn"

@@ -32,7 +32,6 @@ def issue(issue_id="i1", state="open", severity="medium", peer=False, vetted=Fal
         "detail_contested": contested,
         "state": state,
         "rounds_debated": 0,
-        "card_rev": 0,
     }
 
 
@@ -258,14 +257,14 @@ class IndexTest(unittest.TestCase):
         self.assertEqual(result.returncode, 3)
         data = self.read_index()
         data.update({"round": 4, "run_epoch": 2, "committed_rounds": [1, 2, 3, 4]})
-        data["issues"][0].update({"state": "unresolved", "rounds_debated": 4, "peer_reviewed": True, "fully_vetted": True, "detail_contested": True, "card_rev": 7})
+        data["issues"][0].update({"state": "unresolved", "rounds_debated": 4, "peer_reviewed": True, "fully_vetted": True, "detail_contested": True})
         self.write_index(data)
         result = self.run_index("reopen", self.run_id, "both")
         self.assertEqual(result.returncode, 0)
         updated = self.read_index()
         item = updated["issues"][0]
         self.assertEqual((updated["round"], updated["run_epoch"], updated["committed_rounds"]), (0, 3, []))
-        self.assertEqual((item["state"], item["rounds_debated"], item["peer_reviewed"], item["fully_vetted"], item["detail_contested"], item["card_rev"]), ("open", 0, False, False, False, 8))
+        self.assertEqual((item["state"], item["rounds_debated"], item["peer_reviewed"], item["fully_vetted"], item["detail_contested"]), ("open", 0, False, False, False))
 
     def test_usage_reachable_without_valid_id(self):
         # Regression for issues-2026-07-04 #1: USAGE must reach the caller WITHOUT a

@@ -487,8 +487,7 @@ Beyond its state, each issue record also carries three boolean **flags**, two **
 - **flags** — `peer_reviewed` (≥2 engaged seats have evaluated it, the settle threshold),
   `fully_vetted` (every configured seat has evaluated it at least once), and `detail_contested`
   (existence accepted, but a detail — severity / claim / location — never converged).
-- **counters** — `rounds_debated` (committed debate rounds the issue has been through) and `card_rev`
-  (a revision number bumped on every change, used to detect a stale projected card). Neither is the
+- **counter** — `rounds_debated` (committed debate rounds the issue has been through). It is not the
   stance tally: the 2:1 vote is never stored on the issue, only in `origins/`.
 - **evidence** — the `pro` and `contra` points the seats raised, merged and deduplicated (only points
   at the same location and mechanism are merged). Materially distinct evidence accumulates every
@@ -563,7 +562,7 @@ These hooks provide bounded runtime enforcement, not a security boundary.
 | `set_limits` | Writes a `--issue-rounds`/`--max-rounds` override back into a run's manifest, for `resume`/`continue` |
 | `reopen` | The engine behind `panel-review:continue` — revives a **finished** run's `unresolved`/`contested` leftovers for another debate cycle: `index reopen` bumps `run_epoch` and clears `committed_rounds`, then `/tmp/<ID>/sweeps/` is cleared so `resume` starts a clean debate at round 1. Before that, it snapshots the finished cycle into `/tmp/<ID>/epochs/epoch-<n>/` (best-effort) so the next cycle's round-1 filenames don't destroy the previous cycle's transcripts/verdict. Counterpart to `init_run` |
 | `index` | The **only** writer of the canonical issue index (`/tmp/<id>/index.json`): `put` installs the Round-0 index, `commit-sweep` applies each debate round atomically, and `reopen` starts another debate epoch. `gate-status` and `delivery-status` read index state |
-| `project_card` / `regen_cards` | Render issue records → blind cards (no origins, no tally); rebuild all cards from the index on resume |
+| `project_card` / `regen_cards` | Render issue records → blind cards (no origins, no tally); delete stale card files, then rebuild from the index on resume |
 | `write_card` | Atomically install referee-owned origin records from stdin through `panel_atomic_write`; card files go through `project_card` or `regen_cards` |
 | `write_seat_raw` | Validate the Claude seat's complete phase-required block set and atomically install it at the derived `/tmp/<ID>/raw/` path; the seat then returns only a fixed status stub to the referee |
 | `hooks/enforce_agent_status_stub` | `PreToolUse` gate for `SubagentHandback` plus a `SubagentStop` gate for Claude-seat and referee Agent results: validate exact status stubs and the referee's expected run ID in auto-mode hand-backs; deny at most one invalid hand-back per subagent, then replace further invalid attempts with a fixed failure stub; allow auto-mode closing text only after a validated hand-back; validate final messages directly in other modes; allow an already-active referee stop-hook continuation to stop rather than loop indefinitely |
@@ -592,7 +591,7 @@ derived, regenerable cache; state is never inferred from them.
 | `.panel-review/<ID>/issue-<id>.md` | the blind cards (kept in the repo so any seat running in a constrained/sandboxed workspace — e.g. a seat under an externally-imposed read-only mount — can still read them; git-excluded and kept out of every scope so they never contaminate an `--uncommitted` review) |
 | `.panel-review/<ID>/` (the dir) | the per-worktree marker / lock — its name carries `<ID>` |
 | `/tmp/<ID>/work/<seat-token>/` | seat scratch — each seat's own throwaway scripts and temp files, in a subdir it names itself. Deliberately outside the repository under review, so no seat's repository-wide search can return another seat's work as a hit |
-| `/tmp/<ID>/manifest.json` | scope, limits, diff hash, phase, and review-profile source path/size/SHA-256 |
+| `/tmp/<ID>/manifest.json` | scope, limits, diff hash, and review-profile source path/size/SHA-256 |
 | `/tmp/<ID>/review-profile.md` | exact saved profile bytes used by every seat and every phase; the original source path is provenance only |
 | `/tmp/<ID>/round0.panel.json` | the configured panel frozen for the blind pass; current preflight filters which of these seats may be retried but never changes this set **Read back on resume and verdict synthesis** (referee only) |
 | `/tmp/<ID>/index.json` | the **issue index** — the authoritative record of every issue: its state (e.g. `accepted`), flags, counters, and evidence (all defined under [How an issue moves](#how-an-issue-moves-transitions)); cards are rendered from it and the verdict is read off it (referee only) |

@@ -111,7 +111,7 @@ jq -n --argjson specs "$specs" --argjson available "$avail_json" --argjson confi
       | {id:$s.id, claim:$s.claim, location:$s.location, category:$s.category, severity:$s.severity,
          evidence_pro:$s.evidence_pro, evidence_contra:(($s.evidence_contra)//[]),
          peer_reviewed:$birth.peer_reviewed, fully_vetted:$birth.fully_vetted, detail_contested:$birth.detail_contested,
-         state:$birth.state, rounds_debated:0, card_rev:0, _rb:$rb}
+         state:$birth.state, rounds_debated:0, _rb:$rb}
     ] as $D
   | {issues: ($D | map(del(._rb))),
      round:0, phase:"debate", committed_rounds:[], run_epoch:0,

@@ -127,6 +127,23 @@ def check_repo_guard_contract(errors, root):
         fail(errors, "repo-guard-index-contract", "protocol.md", "legacy index recovery behavior is missing")
 
 
+def check_card_cache_contract(errors, root):
+    """Keep projected cards disposable and remove stale files before rendering."""
+    renderer = read(root, "scripts/project_card")
+    if "<!-- panel " in renderer:
+        fail(errors, "card-cache-projection", "scripts/project_card", "projected cards contain a metadata header")
+
+    regeneration = read(root, "scripts/regen_cards")
+    cleanup = regeneration.find('rm -f -- "$card"')
+    render = regeneration.find('"$here/project_card"')
+    if cleanup < 0 or render < 0 or cleanup > render:
+        fail(
+            errors,
+            "card-cache-projection",
+            "scripts/regen_cards",
+            "stale cards must be removed before current cards are rendered",
+        )
+
 def check_retired_script_surface(errors, root):
     """Keep removed command paths and the installer warning policy out of the active interface."""
     command_lists = {}
@@ -253,6 +270,7 @@ def check_rendered_contracts(errors):
 def check_tree(errors, root):
     check_merge_payload_contract(errors, root)
     check_repo_guard_contract(errors, root)
+    check_card_cache_contract(errors, root)
     check_retired_script_surface(errors, root)
 
     templates = {

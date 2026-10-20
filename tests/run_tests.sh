@@ -653,6 +653,7 @@ assert_eq "i1 unanimous -> accepted/peer/fully_vetted" 'accepted|true|true|false
 assert_eq "i2 partial (2/3) -> open, not peer"          'open|false|false'        "$(jq -r '.issues[]|select(.id=="i2")|"\(.state)|\(.peer_reviewed)|\(.fully_vetted)"' "/tmp/$id/index.json")"
 assert_eq "i3 single raiser -> open"                     'open'                    "$(jq -r '.issues[]|select(.id=="i3")|.state' "/tmp/$id/index.json")"
 assert_eq "i4 unanimous + divergence -> accepted+detail_contested" 'accepted|true' "$(jq -r '.issues[]|select(.id=="i4")|"\(.state)|\(.detail_contested)"' "/tmp/$id/index.json")"
+assert_eq "birth issue has only the current fields" 'category,claim,detail_contested,evidence_contra,evidence_pro,fully_vetted,id,location,peer_reviewed,rounds_debated,severity,state' "$(jq -r '.issues[0]|keys|sort|join(",")' "/tmp/$id/index.json")"
 assert_eq "evaluated_by = the raisers (sorted unique)" '["claude","codex","gemini"]' "$(jq -c '.evaluated_by.i1' "/tmp/$id/index.json")"
 assert_eq "i2 evaluated_by tracks 2 raisers"            '["claude","codex"]'         "$(jq -c '.evaluated_by.i2' "/tmp/$id/index.json")"
 assert_eq "index installs cleanly (gate-status reads it)" '{"open":2,"low_only":false}' "$("$SC/index" gate-status "$id")"
@@ -1167,6 +1168,7 @@ profile_hash="$("$SC/diff_hash" < "$TMP/domain-profile.md")"
 profile_size="$(wc -c < "$TMP/domain-profile.md" | tr -d ' ')"
 id="$("$SC/init_run" --workdir "$profile_repo" --scope 'question=test' --issue-rounds 2 --max-rounds 4 \
   --diff-hash "$(printf '' | "$SC/diff_hash")" --instructions '' --review-profile "$TMP/domain-profile.md")"
+assert_eq "manifest emits the documented run metadata" 'created,diff_hash,divergence_snapshot,id,instructions,limits,review_profile,scope,workdir' "$(jq -r 'keys|sort|join(",")' "/tmp/$id/manifest.json")"
 assert_eq "external profile bytes are snapshotted exactly" "$profile_hash" "$("$SC/diff_hash" < "/tmp/$id/review-profile.md")"
 assert_eq "external profile path is resolved" "$(realpath "$TMP/domain-profile.md")" "$(jq -r '.review_profile.source_path' "/tmp/$id/manifest.json")"
 assert_eq "external profile hash is recorded" "$profile_hash" "$(jq -r '.review_profile.sha256' "/tmp/$id/manifest.json")"
@@ -1329,7 +1331,7 @@ section "reopen — archives the finished epoch, then resets for the next cycle"
 rid="$PREFIX-reopen1"; rm -rf "/tmp/$rid" "/tmp/$rid.md" "/tmp/$rid.md.bak"
 mkdir -p "/tmp/$rid/raw" "/tmp/$rid/audit" "/tmp/$rid/sweeps/round-1"
 cat > "/tmp/$rid/index.json" <<'JSON'
-{"issues":[{"id":"i1","claim":"c","location":"f:1","category":"performance","severity":"medium","evidence_pro":[],"evidence_contra":[],"peer_reviewed":true,"fully_vetted":true,"detail_contested":false,"state":"accepted","rounds_debated":1,"card_rev":2},{"id":"i2","claim":"c","location":"f:2","category":"correctness","severity":"high","evidence_pro":[],"evidence_contra":[],"peer_reviewed":true,"fully_vetted":true,"detail_contested":false,"state":"contested","rounds_debated":2,"card_rev":5}],"round":2,"phase":"debate","committed_rounds":[1,2],"run_epoch":0,"evaluated_by":{"i1":["claude","codex","gemini"],"i2":["claude","codex","gemini"]}}
+{"issues":[{"id":"i1","claim":"c","location":"f:1","category":"performance","severity":"medium","evidence_pro":[],"evidence_contra":[],"peer_reviewed":true,"fully_vetted":true,"detail_contested":false,"state":"accepted","rounds_debated":1},{"id":"i2","claim":"c","location":"f:2","category":"correctness","severity":"high","evidence_pro":[],"evidence_contra":[],"peer_reviewed":true,"fully_vetted":true,"detail_contested":false,"state":"contested","rounds_debated":2}],"round":2,"phase":"debate","committed_rounds":[1,2],"run_epoch":0,"evaluated_by":{"i1":["claude","codex","gemini"],"i2":["claude","codex","gemini"]}}
 JSON
 echo "NIGHT round1 claude raw" > "/tmp/$rid/raw/round1.claude.1.txt"
 echo "# round-1 audit" > "/tmp/$rid/audit/round-1.md"
@@ -1354,7 +1356,7 @@ assert_eq "sweeps dir recreated"                   'yes'  "$([ -d "/tmp/$rid/swe
 # No leftover to reopen: exit 3, index untouched, NO spurious archive.
 rid2="$PREFIX-reopen2"; rm -rf "/tmp/$rid2"; mkdir -p "/tmp/$rid2"
 cat > "/tmp/$rid2/index.json" <<'JSON'
-{"issues":[{"id":"i1","claim":"c","location":"f:1","category":"performance","severity":"medium","evidence_pro":[],"evidence_contra":[],"peer_reviewed":true,"fully_vetted":true,"detail_contested":false,"state":"accepted","rounds_debated":1,"card_rev":2}],"round":1,"phase":"debate","committed_rounds":[1],"run_epoch":0,"evaluated_by":{"i1":["claude","codex"]}}
+{"issues":[{"id":"i1","claim":"c","location":"f:1","category":"performance","severity":"medium","evidence_pro":[],"evidence_contra":[],"peer_reviewed":true,"fully_vetted":true,"detail_contested":false,"state":"accepted","rounds_debated":1}],"round":1,"phase":"debate","committed_rounds":[1],"run_epoch":0,"evaluated_by":{"i1":["claude","codex"]}}
 JSON
 "$SC/reopen" --id "$rid2" --category both >/dev/null 2>&1; assert_exit "reopen with nothing to reopen exits 3" 3 "$?"
 assert_eq "no-match makes no archive"    'no' "$([ -d "/tmp/$rid2/epochs" ] && echo yes || echo no)"

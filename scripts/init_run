@@ -88,7 +88,7 @@ jq -n --slurpfile divergence_snapshot "$divergence_snapshot_file" \
   limits:{issue_rounds:$iss, max_rounds:$mx},
   diff_hash:$dh, instructions:$instr, review_profile:$profile,
   divergence_snapshot:$divergence_snapshot[0],
-  phase:"round0", state_version:1, created:$created
+  created:$created
 }' | panel_atomic_write "/tmp/$id/manifest.json"
 rm -f -- "$divergence_snapshot_file"
 

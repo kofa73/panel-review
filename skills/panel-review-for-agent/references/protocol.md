@@ -55,7 +55,7 @@ reference; grepping a script for its flags wastes a full source-read into your c
 "$SC/round" verdict-input <id>                                      # compact stable manifest/panel/index/origin/guard facts for synthesis
 "$SC/birth_index" --available "<seats>" --configured "<seats>" < issues.json   # clustered Round-0 issues -> full index.json (birth state/flags/coverage)
 "$SC/index"   {get|put|issue|gate-status|delivery-status|commit-sweep|reopen} <id> ...   # ONLY writer of index.json
-"$SC/project_card" --id <id> --workdir <dir> [--index-rev N] < issue.json   # one issue record -> its card
+"$SC/project_card" --id <id> --workdir <dir> < issue.json                # one issue record -> its card
 "$SC/regen_cards"  --id <id> --workdir <dir>                                # rebuild ALL cards from the index
 "$SC/index"   commit-sweep <id> <round> <epoch>  # apply a WHOLE debate round atomically (payload JSON on stdin)
 "$SC/sweep"   {begin|plan|plan-scaffold|extend-plan|ingest-batch|drop-seat|resume-plan|has|done|commit} <id> <round> ...  # checkpointed sweeps; scaffold/extend take panel seats
@@ -149,7 +149,7 @@ Each issue record in the index:
  "evidence_pro":[<point>...],"evidence_contra":[<point>...],
  "peer_reviewed":false,"fully_vetted":false,"detail_contested":false,
  "state":"open|accepted|rejected|contested|unresolved|merged",
- "rounds_debated":0,"card_rev":0}
+ "rounds_debated":0}
 ```
 
 A **point**: `{"location":"file:line"|["file:line",...]|"analysis","assertion":"<one fact>","precondition":"<opt>","impact":"<opt>"}`.
@@ -160,7 +160,7 @@ A **point**: `{"location":"file:line"|["file:line",...]|"analysis","assertion":"
   the flag can become true in a later round when that seat re-engages and evaluates the issue. It
   never reverts.
 - `detail_contested` → existence accepted but a detail (severity/claim/location) never converged.
-- `card_rev`/`rounds_debated` are bumped by the `index`/`sweep` scripts — never hand-edit them.
+- `rounds_debated` is bumped by the `index`/`sweep` scripts — never hand-edit it.
 
 **Internal file schemas** (for the rare direct inspection the bullets above allow):
 
@@ -778,8 +778,8 @@ index diverge from its own just-rotated `.bak`, and that divergence *is* the tra
    a peer seat is now down, or back). The CURRENT `CODEX: yes|no` / `GEMINI: yes|no` define the configured panel for the
    rest of this run; note any change in Process notes. (A seat absent now simply can't engage; a
    seat that returns means `fully_vetted` can still complete later.)
-3. `"$SC/regen_cards" --id "$id" --workdir "$workdir"` — rebuild every card from the index
-   (replaces stale cards, quarantines orphans). State is **never** read back from cards.
+3. `"$SC/regen_cards" --id "$id" --workdir "$workdir"` — delete cards for issues no longer in the index,
+   then rebuild every current card. State is **never** read back from cards.
 4. **Round 0 recovery:** if `index.phase` is still `round0`, Round 0 never committed its issue index.
    Load the `round0` phase now for its collection and salvage rules, but prepare this recovery attempt
    only after preserving any prior completed review: when the guard snapshot exists, call

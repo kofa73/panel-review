@@ -77,7 +77,8 @@ byte-exact.
   malformed structure (including a `revise` entry with a flat `claim` instead of the `fields`
   wrapper) is a hard error (**exit 2** + message), not a traceback; `round` leaves the canonical
   payload and index untouched.
-- `project_card` / `regen_cards` — the **only** way to render issue records → blind cards.
+- `project_card` / `regen_cards` — the **only** way to render issue records → blind cards; `regen_cards`
+  deletes stale issue cards before rebuilding the current set from the index.
 - `run_codex` / `run_agy` — the **only** way to call the Codex / Gemini seats; they pin the
   model/profile and the flags that let MCP/tilth run (`run_codex` bypasses the Codex sandbox, `run_agy`
   passes `--dangerously-skip-permissions`). Never call `codex`/`agy` raw. `run_codex`'s profile pin is

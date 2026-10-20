@@ -27,6 +27,27 @@ class ContractConsistencyTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("instruction contracts: OK", result.stdout)
 
+    def test_card_cache_contract_rejects_metadata_and_late_cleanup(self):
+        cases = [
+            ("scripts/project_card", "printf '<!-- panel stale -->\\n'\\n"),
+            ("scripts/regen_cards", "rm -f -- \"$card\""),
+        ]
+        for relative_path, drift in cases:
+            with self.subTest(path=relative_path), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.copy_contract_tree(root)
+                target = root / relative_path
+                text = target.read_text(encoding="utf-8")
+                if relative_path.endswith("project_card"):
+                    target.write_text(text + drift, encoding="utf-8")
+                else:
+                    target.write_text(text.replace(drift, ":", 1), encoding="utf-8")
+
+                result = self.run_check(root)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("card-cache-projection", result.stderr)
+
     def test_prompt_path_anchors_distinguish_rooted_and_external_paths(self):
         cases = [
             (
@@ -132,7 +153,7 @@ class ContractConsistencyTest(unittest.TestCase):
         shutil.copy2(ROOT / "scripts/read_protocol_phase", root / "scripts/read_protocol_phase")
         shutil.copy2(ROOT / "scripts/merge_payload", root / "scripts/merge_payload")
         shutil.copy2(ROOT / "scripts/repo_guard", root / "scripts/repo_guard")
-        for name in ("index", "sweep", "panel_common.py", "seat_contract.py"):
+        for name in ("index", "sweep", "panel_common.py", "seat_contract.py", "project_card", "regen_cards"):
             shutil.copy2(ROOT / "scripts" / name, root / "scripts" / name)
         # run_agy carries the agy model pins the checker shape-validates.
         shutil.copy2(ROOT / "scripts/run_agy", root / "scripts/run_agy")

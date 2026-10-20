@@ -22,11 +22,11 @@ flag handling and one referee skip-cleanup exception.
   The new `reopen` script delegates its `index.json` mutation to `index reopen`.
 - Validate every `<ID>` with `panel_require_id`/`panel_valid_id` before any `rm`/path use.
 - All `/tmp/<ID>/...` state writes are atomic (`panel_atomic_write`) where they touch `index.json`.
-- `card_rev` is **bumped, never zeroed** (stale-card detection depends on monotonicity).
+- Projected cards are rebuilt from the index when a run resumes.
 - `--continue` sources scope + limits from the finished run; never combine it with a scope/limit flag.
 - Category vocabulary is exactly `both` | `unresolved` | `contested`.
 - Counter reset on re-open: per selected issue `state→open`, `rounds_debated→0`,
-  `peer_reviewed→false`, `fully_vetted→false`, `detail_contested→false`, `card_rev` bumped; global
+  `peer_reviewed→false`, `fully_vetted→false`, `detail_contested→false`; global
   `round→0`, `committed_rounds→[]`. Evidence and origins are kept. Non-selected issues untouched.
 
 ---
@@ -56,7 +56,7 @@ flag handling and one referee skip-cleanup exception.
                 or ($cat=="unresolved" and .state=="unresolved")
                 or ($cat=="contested" and .state=="contested"))] | length' "$f")"
          if [ "$n" -eq 0 ]; then echo "index reopen: no $cat issue to re-open" >&2; exit 3; fi
-         # Re-open selected issues + reset global counters; keep evidence; bump card_rev.
+         # Re-open selected issues + reset global counters; keep evidence.
          mutate '
            .committed_rounds=[] | .round=0
            | (.issues[] | select(
@@ -64,8 +64,7 @@ flag handling and one referee skip-cleanup exception.
                or ($cat=="unresolved" and .state=="unresolved")
                or ($cat=="contested" and .state=="contested")
              )) |= (.state="open" | .rounds_debated=0
-                    | .peer_reviewed=false | .fully_vetted=false | .detail_contested=false
-                    | .card_rev=((.card_rev//0)+1))
+                    | .peer_reviewed=false | .fully_vetted=false | .detail_contested=false)
          ' --arg cat "$cat" ;;
 ```
 
@@ -88,13 +87,13 @@ SC="$PWD/skills/panel-review/scripts"; T=/tmp/reopentest; rm -rf "$T"; mkdir -p 
 ID=reopen-fixture-0001; rm -rf "/tmp/$ID"; mkdir -p "/tmp/$ID"
 cat > "/tmp/$ID/index.json" <<'JSON'
 {"round":3,"committed_rounds":[1,2,3],"issues":[
- {"id":"i1","state":"unresolved","rounds_debated":2,"peer_reviewed":false,"fully_vetted":false,"detail_contested":false,"card_rev":5,"evidence_pro":[{"p":"x"}]},
- {"id":"i2","state":"contested","rounds_debated":4,"peer_reviewed":true,"fully_vetted":true,"detail_contested":true,"card_rev":9,"evidence_pro":[{"p":"y"}]},
- {"id":"i3","state":"accepted","rounds_debated":1,"card_rev":2}]}
+ {"id":"i1","state":"unresolved","rounds_debated":2,"peer_reviewed":false,"fully_vetted":false,"detail_contested":false,"evidence_pro":[{"p":"x"}]},
+ {"id":"i2","state":"contested","rounds_debated":4,"peer_reviewed":true,"fully_vetted":true,"detail_contested":true,"evidence_pro":[{"p":"y"}]},
+ {"id":"i3","state":"accepted","rounds_debated":1}]}
 JSON
 "$SC/index" reopen "$ID" unresolved
-jq -c '.round, .committed_rounds, (.issues[]|{id,state,rounds_debated,card_rev,ev:(.evidence_pro|length)})' "/tmp/$ID/index.json"
-# Expected: round 0, committed_rounds [], i1 -> state open, rounds_debated 0, card_rev 6, ev 1
+jq -c '.round, .committed_rounds, (.issues[]|{id,state,rounds_debated,ev:(.evidence_pro|length)})' "/tmp/$ID/index.json"
+# Expected: round 0, committed_rounds [], i1 -> state open, rounds_debated 0, ev 1
 #           i2 unchanged (still contested, rounds_debated 4), i3 unchanged. Evidence kept on i1.
 "$SC/index" reopen "$ID" contested && jq -c '.issues[]|select(.id=="i2")|{state,rounds_debated,peer_reviewed,fully_vetted,detail_contested}' "/tmp/$ID/index.json"
 # Expected: i2 -> open, 0, false, false, false
@@ -164,7 +163,7 @@ printf '%s\n' "$id"
 ```bash
 SC="$PWD/skills/panel-review/scripts"; ID=reopen-fixture-0002; rm -rf "/tmp/$ID"; mkdir -p "/tmp/$ID/sweeps/round-1" "/tmp/$ID/sweeps/round-2"
 cat > "/tmp/$ID/index.json" <<'JSON'
-{"round":2,"committed_rounds":[1,2],"issues":[{"id":"i1","state":"contested","rounds_debated":3,"card_rev":4}]}
+{"round":2,"committed_rounds":[1,2],"issues":[{"id":"i1","state":"contested","rounds_debated":3}]}
 JSON
 "$SC/reopen" --id "$ID" --workdir /tmp --category both
 jq -c '.round,.committed_rounds,(.issues[]|{state,rounds_debated})' "/tmp/$ID/index.json"

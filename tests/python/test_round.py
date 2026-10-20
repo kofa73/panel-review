@@ -41,7 +41,6 @@ def issue():
         "detail_contested": False,
         "state": "open",
         "rounds_debated": 0,
-        "card_rev": 0,
     }
 
 
@@ -94,8 +93,6 @@ class RoundTest(unittest.TestCase):
             "diff_hash": hashlib.sha256(diff).hexdigest(),
             "divergence_snapshot": divergence_snapshot,
             "instructions": "",
-            "phase": "round0",
-            "state_version": 1,
             "created": "2026-07-14 00:00:00",
         }
         self.profile = b"# Test review profile\n\nProbe test-specific invariants.\n"

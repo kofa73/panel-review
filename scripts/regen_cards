@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # regen_cards — rebuild every card from the canonical index (used on resume).
 # State is never inferred from cards; cards are always re-derived from the index.
-# Orphan cards (a card whose issue id is no longer in the index) are quarantined
-# to .orphan rather than deleted, so nothing is silently lost.
+# Stale issue cards are deleted before current cards are projected from the index.
 #
 # Usage: regen_cards --id ID --workdir DIR
 set -euo pipefail
@@ -21,26 +20,31 @@ command -v jq >/dev/null 2>&1 || { echo "regen_cards: jq not found" >&2; exit 12
 
 f="/tmp/$id/index.json"; [ -f "$f" ] || { echo "regen_cards: no index for $id" >&2; exit 1; }
 dir="$workdir/.panel-review/$id"; mkdir -p "$dir"
-# state_version lives in the manifest, NOT the index — read it from there
-# (reading $f always yielded 0, leaving card index_rev headers wrong).
-irev="$(jq -r '.state_version // 0' "/tmp/$id/manifest.json" 2>/dev/null || echo 0)"
+if ! jq -e 'type == "object" and (.issues | type == "array") and all(.issues[]; type == "object" and (.id | type == "string" and length > 0))' "$f" >/dev/null 2>&1; then
+  echo "regen_cards: index issue list is invalid" >&2
+  exit 1
+fi
 
-# Render each issue's card.
+# Identify current issue ids first so stale cards can be removed before rendering.
 live=" "
+while IFS= read -r iid; do
+  [ -n "$iid" ] || continue
+  panel_valid_id "$iid" || { echo "regen_cards: invalid issue id: '$iid'" >&2; exit 1; }
+  live="$live$iid "
+done < <(jq -r '.issues[].id' "$f")
+for card in "$dir"/issue-*.md; do
+  [ -e "$card" ] || continue
+  base="$(basename "$card" .md)"; iid="${base#issue-}"
+  case "$live" in *" $iid "*) : ;; *) rm -f -- "$card" ;; esac
+done
+
+# Render each current issue's card.
 failed=0
 while IFS= read -r rec; do
   [ -n "$rec" ] || continue
   iid="$(printf '%s' "$rec" | jq -r '.id')"
-  live="$live$iid "
-  printf '%s' "$rec" | "$here/project_card" --id "$id" --workdir "$workdir" --index-rev "$irev" >/dev/null \
+  printf '%s' "$rec" | "$here/project_card" --id "$id" --workdir "$workdir" >/dev/null \
     || { echo "regen_cards: skipped $iid" >&2; failed=1; continue; }
 done < <(jq -c '.issues[]' "$f")
-
-# Quarantine orphan cards.
-for card in "$dir"/issue-*.md; do
-  [ -e "$card" ] || continue
-  base="$(basename "$card" .md)"; iid="${base#issue-}"
-  case "$live" in *" $iid "*) : ;; *) mkdir -p "$dir/.orphan"; mv -f "$card" "$dir/.orphan/" 2>/dev/null || true ;; esac
-done
 
 [ "$failed" -eq 0 ] || exit 1

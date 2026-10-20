@@ -26,7 +26,6 @@ def issue(issue_id):
         "detail_contested": False,
         "state": "open",
         "rounds_debated": 0,
-        "card_rev": 0,
     }
 
 

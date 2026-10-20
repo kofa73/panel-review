@@ -33,8 +33,8 @@ get a full budget again:
   `peer_reviewed→false`, `fully_vetted→false`, `detail_contested→false` (they must re-earn them).
 - Global: `round→0`, `committed_rounds→[]`.
 - **Kept:** accumulated `evidence_pro`/`evidence_contra` and origins (so the seats see the prior
-  arguments — the whole point of continuing a close call); `card_rev` stays monotonic (resetting it
-  would break stale-card detection — `card_rev` is bumped, never zeroed).
+  arguments — the whole point of continuing a close call). Projected cards are rebuilt from the
+  index when a run resumes.
 - **Untouched:** already-`accepted`/`rejected` issues, and the non-selected leftover category.
 
 ## Architecture — all new logic in deterministic scripts; the agent is nearly unchanged

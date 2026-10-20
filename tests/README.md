@@ -57,11 +57,13 @@ Each exits `3` when its CLI is not installed, which the suite reports as a skip.
 ## What the python suite covers (`tests/python/`)
 
 - **index** (`test_index.py`): `gate-status` low-only predicate; `state` enum
-  validation + `card_rev` bump; read-only `delivery-status` classification and index identity;
+  validation; read-only `delivery-status` classification and index identity;
   `commit-sweep` happy path, idempotent re-commit (no double bump), audit output, new-issue birth,
   and atomic `evaluated_by` coverage; and the rejection branches — format errors → exit 2,
   transaction/semantic errors (duplicate target, stale epoch, out-of-order, nonexistent id,
   invariant violation) → exit 1; `put` invariant; `reopen`.
+- **card cache** (`test_cards.py`): stale-file removal before projection, and current card rendering
+  without a metadata header.
 - **parse_block** (`test_parse_block.py`): normal-mode exit codes (empty→0,
   flat-shape→5, no-block→4); stances parse **byte-identical** to the stored
   fixtures; `--diagnose` pinpoints each failure reason (and exit 5/0); `revision`
