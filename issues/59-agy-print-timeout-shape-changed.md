@@ -117,3 +117,40 @@ question; this issue owns the print-timeout shape and the dead detector.
 The expected behavior above stands: the fix must cover **both** shapes and must not delete
 `agy_ended_with_timeout` on the grounds that it is currently dead. If 1.1.27 produces a third shape,
 add it rather than replacing either.
+
+### 2026-10-19 — agy 1.1.28 brought back the clean-exit case: partial output, exit 0
+
+Installed agy is now **1.4.2**. The changelog records a third print-timeout shape, and it is the
+dangerous one this issue's non-goals warned about:
+
+> **1.1.28** — Changed what happens when `--print-timeout` expires mid-turn: the CLI now returns the
+> partial output it has and exits successfully with a warning on stderr, instead of failing with a
+> timeout error; interrupts such as Ctrl+C still exit non-zero.
+
+What this means for `run_agy`, read from the code and not yet measured:
+
+- `agy_ended_with_timeout` (`scripts/run_agy:86-89`) cannot match. It looks at the stdout tail for
+  the ≤1.1.18 wording, and the new signal is a warning on stderr with unknown wording.
+- `attempt()` returns 0, so a primary timeout **no longer triggers the fallback model**. The truncated
+  answer goes to `parse_block`. It usually has no fenced block yet (status 4), so the pass is either
+  lost without trying the fallback, or the referee salvages a truncated review as if it were complete.
+  Salvage is defined for "a genuine completed CLI review", and the stderr warning is the only sign
+  that this one is not.
+- "The seat still degrades correctly" in the body above held on 1.1.20 only. It is false on 1.1.28+.
+
+Related changes in the same range: fatal headless errors now print a stable `error:` marker on stderr,
+and "a note is printed when the response may be truncated" (1.1.28). Agent or model failures exit `3`
+with an `AGY_ERROR: {…}` JSON line on stderr (1.2.6). A response that streamed partly and then hit a
+model or agent error exits `3` instead of `0` (1.2.10). The default print timeout became unlimited
+(1.2.6); `run_agy` passes `15m` explicitly, so that change does not affect it. A stalled model
+connection is now cancelled and retried after 5 minutes of silence (1.3.6), which uses up part of the
+15-minute budget.
+
+Consequences for the plan above:
+
+- Expected behavior item 2 (capture stderr, match a wording-tolerant pattern) is now the fix for a
+  **live** defect, not a dormant one. The pattern must also cover the 1.1.28 timeout warning and the
+  truncation note. Their exact wording must be measured on 1.4.2 (repeat this issue's probe with
+  `PRINT_TIMEOUT="10s"`).
+- Expected behavior item 4 gains a third fixture: exit 0, partial stdout, warning on stderr.
+- This issue now outranks `issues/61`. Re-ordered in `issues/README.md`.

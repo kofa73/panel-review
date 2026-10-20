@@ -9,11 +9,18 @@
 #         (caller degrades). codex missing -> exit 127.
 #
 # Pins the non-negotiables structurally so they can't be fat-fingered:
-#  - --profile panel-review  (NEVER hardcode -m / a raw model; the profile owns
+#  - --profile panel-review  (NEVER hardcode -m / a raw model; the profile carries
 #                             model selection. Panel Review's profile is separate
 #                             from upstream peer-review and is auto-created from
 #                             assets/default-panel-review.config.toml on first use.
-#                             Override only the profile name via CODEX_PROFILE.)
+#                             Override only the profile name via CODEX_PROFILE.
+#                             The profile does NOT have the last word: Codex layers
+#                             cwd/tree/repo config ABOVE it, so a reviewed repository
+#                             shipping its own .codex/config.toml picks the seat's
+#                             model. That is the user's file and the panel does not
+#                             fight it — `preflight` reports the condition, `start`
+#                             asks, and the binding below is recorded. See
+#                             issues/47-codex-model-pin-is-not-authoritative.md.)
 #  - --dangerously-bypass-approvals-and-sandbox
 #                            (Codex runs with NO sandbox and NO approval prompts.
 #                             This is required, not a convenience: under ANY Codex
@@ -33,12 +40,12 @@
 #                             read-only MCP mode, stripping any global `--edit` the
 #                             user configured via `tilth install codex`. panel-review
 #                             never edits the code under review.)
-# Set CODEX_JSONL=/path to also capture the raw --json event stream (default
-# discarded); --json is required because -o writes only the final message.
+# Set CODEX_SEAT_MODEL_FILE=/path to record what the seat ACTUALLY bound (see the
+# write below). await_seats sets it to /tmp/<ID>/codex-model.txt for every dispatch.
 set -euo pipefail
 
 PROFILE="${CODEX_PROFILE:-panel-review}"
-JSONL="${CODEX_JSONL:-/dev/null}"
+MODEL_FILE="${CODEX_SEAT_MODEL_FILE:-}"
 
 command -v codex >/dev/null 2>&1 || { echo "run_codex: codex CLI not found" >&2; exit 127; }
 
@@ -56,7 +63,8 @@ fi
 
 promptfile="$(mktemp /tmp/codex_prompt.XXXXXX)"
 outfile="$(mktemp /tmp/codex_out.XXXXXX)"
-trap 'rm -f "$promptfile" "$outfile"' EXIT
+errfile="$(mktemp /tmp/codex_err.XXXXXX)"
+trap 'rm -f "$promptfile" "$outfile" "$errfile"' EXIT
 
 if [ "$#" -ge 1 ]; then
   printf '%s' "$1" > "$promptfile"
@@ -64,14 +72,39 @@ else
   cat > "$promptfile"
 fi
 
-# -o writes the final assistant message to outfile; --json events go to JSONL.
+# -o writes the final assistant message to outfile in BOTH output modes, so no
+# --json is needed to get it (verified on codex-cli 0.153.4; the human processor is
+# constructed with the same last_message_file, codex-rs/exec/src/lib.rs:787-793).
+# Human mode is what we want here for a second reason: it prints the resolved config
+# summary — including the model that actually bound — to STDERR, which --json
+# replaces with a thread.started event carrying only a thread id. Codex's own stdout
+# is the human transcript and is discarded; the seat's response comes from outfile.
 # See the header for why the sandbox is bypassed (MCP/tilth + scratch writes) and
 # how repo integrity is enforced instead (scripts/repo_guard + the container).
 if ! codex exec --profile "$PROFILE" --dangerously-bypass-approvals-and-sandbox \
        -c 'mcp_servers.tilth.args=["--mcp"]' \
-       -o "$outfile" --json < "$promptfile" > "$JSONL" 2>/dev/null; then
+       -o "$outfile" < "$promptfile" > /dev/null 2>"$errfile"; then
   echo "run_codex: codex exec failed (profile=$PROFILE)" >&2
   exit 1
+fi
+
+# Record the binding Codex reported for itself, so the verdict can state what really
+# reviewed the code rather than what the profile asked for. The two values live in the
+# config summary Codex writes to stderr between its first two `--------` rules; the
+# prompt echo and the transcript follow the second rule, so bound the range instead of
+# grepping the whole stream (a prompt could contain a line starting "model:"). Nothing
+# downstream depends on this file, so an unrecognized header costs the record, not the
+# pass. ANSI styling is stripped first: Codex omits it for a non-terminal stderr today,
+# but that is its choice to change, not a contract.
+if [ -n "$MODEL_FILE" ]; then
+  header="$(sed -e $'s/\033\\[[0-9;]*m//g' "$errfile" | sed -n '/^-\{3,\}$/,/^-\{3,\}$/p')"
+  model="$(printf '%s\n' "$header" | sed -n 's/^model:[[:space:]]*//p' | head -n1)"
+  effort="$(printf '%s\n' "$header" | sed -n 's/^reasoning effort:[[:space:]]*//p' | head -n1)"
+  if [ -n "$model" ]; then
+    mkdir -p "$(dirname "$MODEL_FILE")"
+    printf 'model=%s\neffort=%s\n' "$model" "${effort:-unknown}" > "$MODEL_FILE.tmp.$$"
+    mv -f "$MODEL_FILE.tmp.$$" "$MODEL_FILE"
+  fi
 fi
 
 cat "$outfile"

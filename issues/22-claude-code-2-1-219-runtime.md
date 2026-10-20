@@ -182,3 +182,35 @@ subagent limit reached` (20 concurrent subagents by default,
 **Filed separately from this review:** `issues/62` (reads outside the working directories can be
 blocked outright, 2.1.257+) and the update to `issues/43` (the 60-minute subagent background-shell
 cap may have been removed in 2.1.260, with the docs contradicting the changelog).
+
+## Comments
+
+### 2026-10-19 — facts from the 2.1.262 → 2.1.303 review
+
+Installed: **2.1.303**. Documentation-only facts; the ones needing work are filed as `issues/64`
+(auto mode and hand-back), `issues/65` (desktop, VS Code and unattended sessions) and `issues/66`
+(new subagent controls).
+
+- **The `opus` alias moved to Opus 5.5** (2.1.280). The Claude seat (`effort: xhigh`) and the referee
+  (`effort: high`) changed model with no change here. 2.1.280 also stopped applying effort levels
+  saved before per-model `/effort` to newly released models. The panel's agents set `effort:` in
+  frontmatter, so they are not affected.
+- **Subagent results now arrive under a header with the result indented** (2.1.277). `start` Step 5
+  validates the artifact for every return except the exact failure stub, so a wrapped ready stub still
+  reaches validation. Not yet observed in a real run.
+- **TaskOutput was removed** (2.1.277), and `taskOutputMaxChars` / `TASK_MAX_OUTPUT_LENGTH` now have
+  no effect. Section 6's note that the setting "supersedes" the variable is out of date. The barrier
+  never used TaskOutput (it waits on a sentinel file).
+- **TaskCreate and TodoWrite** are offered only on Claude 3.x, Opus 4.0–4.7, Sonnet 4.0–4.6 and
+  Haiku 4.5 (2.1.268), unless `CLAUDE_CODE_ENABLE_TODO_TOOLS=1`. This matches `issues/41`.
+- **Agent `tools:` lists** now take only the named MCP server's tools (2.1.299). The Claude seat lists
+  each `mcp__tilth__…` tool by full name, so it is unaffected.
+- **A subagent preloads at most 32 skills** from `skills:` (2.1.295). The referee preloads one.
+- **`SubagentStop` hooks with a specific `matcher`** no longer fire for every stopping subagent whose
+  agent type is empty (2.1.275 fix). The plugin's gate uses a specific matcher, so it previously could
+  have run on unrelated subagents. It exits 0 for agent types it does not gate.
+- **Fork subagents became default-on in `claude -p` and the Agent SDK** (2.1.302), while
+  `docs/sub-agents.md` still says fork mode is off there by default. `preflight` requires the explicit
+  `0` in every session, so the panel is covered either way.
+- **Nesting** (`CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH`) and the concurrent-subagent limit wording
+  (`issues/26`) did not change in this range.

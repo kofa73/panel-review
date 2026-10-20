@@ -79,7 +79,10 @@ The harness does **not** parse flags; you get the raw `$ARGUMENTS` string. Parse
 ## Step 2 — prereqs + scope hash
 
 ```bash
-"$SC/preflight" || { echo "Core prerequisites missing (see above)."; exit 1; }   # also prints CODEX: yes|no / GEMINI: yes|no
+PF="$(mktemp /tmp/panel_preflight.XXXXXX)"                                       # keep the output: you must read two of its lines back
+"$SC/preflight" > "$PF" 2>&1; PF_RC=$?
+cat "$PF"; grep -c '^CODEX_MODEL_LAYER: yes$' "$PF"; rm -f "$PF"                 # the count is 1 when a repo-local Codex config outranks the model pin
+[ "$PF_RC" -eq 0 ] || { echo "Core prerequisites missing (see above)."; exit 1; }   # preflight also prints CODEX: yes|no / GEMINI: yes|no
 # Resolve to a FILE and check the exit code separately — do NOT pipe resolve_diff
 # into diff_hash: a bad ref makes resolve_diff fail but diff_hash succeeds on the
 # empty input, so the pipeline would silently hash an empty diff and proceed.
@@ -94,6 +97,18 @@ rm -f "$DIFF_FILE"
 If `preflight` hard-fails, stop and surface its message. A `CODEX: no` or `GEMINI: no` is fine (the
 review runs with the remaining seats) — pass it through. For a diff scope whose resolved diff is
 empty, you may stop early with "no changes in scope" rather than dispatching.
+
+**If the `CODEX_MODEL_LAYER: yes` count was 1, ask before minting a run** (`AskUserQuestion`). Codex
+layers this repository's own `.codex/config.toml` above panel-review's profile, so the Codex seat will
+review under the model that file names, not the pinned one — and the pin is what makes two runs
+comparable. Show `preflight`'s WARNING block, then ask: *Review under this repository's own Codex model,
+or stop so you can move the file?*
+
+- **Proceed** → continue to Step 3. The run records what actually bound, so the report stays truthful.
+- **Stop** → stop here without minting a run; nothing has been created yet.
+
+This is a question, never a refusal: reviewing a repository under its own configured model is a
+legitimate choice the user may have made deliberately. Only the silence was the defect.
 
 ## Step 3 — refuse if a session already exists
 

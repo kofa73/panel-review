@@ -143,3 +143,25 @@ than a flag flip. The measurements below are what turns it into one or the other
 - Do not weaken `repo_guard` or the write-nothing rule to accommodate the pipeline. If measurement 2
   shows `/boost` writes inside the workdir, the answer is to relocate it or drop it, not to stop
   checking.
+
+## Comments
+
+### 2026-10-19 — agy 1.2.10 moved subagent worktrees out of the workspace
+
+Installed agy is now **1.4.2**. Evidence for measurement 2 (it does not replace the measurement):
+
+- **1.2.10** "Fixed files that subagents write inside their own Git worktree being treated as
+  artifacts … subagent worktrees now live under a `worktrees/` directory in the app data directory".
+  So agy's own subagent worktrees are not created inside the repository under review. Whether
+  `/boost`'s pipeline uses that same mechanism, and whether cutting the worktree still registers it
+  under the reviewed repository's `.git/worktrees/`, is still the decisive check.
+- **1.3.3** fixed subagents started with a `branch` or `share` workspace "silently working in your
+  real checkout" in multi-repository workspaces. On earlier versions that was a direct write into the
+  checkout. Measure on 1.4.2 or later only.
+- **1.3.6** headless `-p` runs skip questions that subagents ask, so a boosted worker cannot block a
+  seat pass waiting for an answer.
+- **1.2.9** headless runs now wait for background tasks until the `--print-timeout` deadline (30-minute
+  cap). A boosted pass that leaves background work running holds the seat until the deadline.
+
+`issues/63` changes the Gemini pins. Measure `/boost` on the new pins, not on the retired
+`Gemini 3.1 Pro (High)`.

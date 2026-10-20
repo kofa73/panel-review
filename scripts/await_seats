@@ -132,6 +132,13 @@ run_one() {
   local args=(--seat "$seat" --tag "$tag" --prompt "$prompt" --raw "$raw" --parsed "$parsed")
   [ -n "$label" ] && args+=(--label "$label")
 
+  # The Codex model pin is not authoritative — a reviewed repository's own
+  # .codex/config.toml outranks our profile — so tell run_codex where to record what
+  # it ACTUALLY bound. `round verdict-input` reads this file into `seat_models`, which
+  # is how the verdict states what reviewed the code instead of what we asked for.
+  # This runs in the per-seat background subshell, so the export is seat-local.
+  [ "$seat" = codex ] && export CODEX_SEAT_MODEL_FILE="/tmp/$id/codex-model.txt"
+
   local out rc
   set +e
   if [ "$seat_timeout" -gt 0 ]; then

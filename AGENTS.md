@@ -151,6 +151,24 @@ workdir holds exactly one review; concurrent runs against the same workdir are u
   root each run — `cd`-ing the wrapper cannot move it. So an agy prompt needs an **absolute** path
   anchor (and ideally an explicit "set the tool `cwd` to `<workdir>`" directive) or it can drift
   (observed: anchored `/home/developer` instead of the workdir under a very large prompt).
+- **The Codex model pin is not authoritative.** `run_codex` pins the seat with
+  `--profile panel-review`, but Codex layers **cwd** (`$PWD/config.toml`), **tree**
+  (`.codex/config.toml` in `$PWD` and its ancestors) and **repo**
+  (`$(git rev-parse --show-toplevel)/.codex/config.toml`) config *above* the profile
+  (`codex-rs/config/src/loader/mod.rs:105-121`). `codex exec` runs with cwd = the repository under
+  review, so a reviewed repository that configures Codex itself picks the model that reviews it —
+  measured on codex-cli 0.153.4, `gpt-5.6-luna`/`max` from a repo-local file beat the profile's
+  `gpt-5.6-sol`/`high`, and the control repo without one bound the profile. The panel does **not**
+  override this (that file is the user's deliberate choice; the defect was the silence): `preflight`
+  reports the condition and emits `CODEX_MODEL_LAYER: yes|no`, `start` asks, and `run_codex` records
+  the binding Codex reports for itself to `/tmp/<ID>/codex-model.txt` so the verdict states what
+  really reviewed the code. Rationale and measurements:
+  `issues/47-codex-model-pin-is-not-authoritative.md`.
+- **`codex exec` needs no `--json` to yield the final message, and human mode says more.** `-o` writes
+  the last assistant message in both output modes. Human mode additionally prints the resolved config
+  summary — `model:`, `reasoning effort:`, `session id:` — to **stderr**, where `--json` replaces it
+  with a `thread.started` event carrying only a thread id. That is why `run_codex` runs without
+  `--json`: it is the only place the effective model is observable.
 - **agy model pins are exact display labels, never slugs.** `run_agy` pins the Gemini seat by
   display label — the form is `Gemini 3.1 Pro (High)`, never the slug `gemini-3.1-pro-high` — and
   the effort rides in the label (so no `--effort`). The pins in force are `PRIMARY_MODEL` /

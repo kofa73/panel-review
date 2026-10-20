@@ -2,7 +2,7 @@
 
 Priority: 47
 
-Status: Pending
+Status: Completed
 
 Source: Simplification panel (Sol, "Runtime-specific simplifications — Codex"), 2026-08-16 — layering
 claim verified against the local Codex checkout `73abda8bfef6`
@@ -143,3 +143,50 @@ do not try to predict the resolution exactly. Over-reporting here costs one line
 Items 3 (whether the auto-created profile file survives) and 4 (`--json`/`-o` conditionality) are
 unaffected by this change — but note item 3's premise is now gone: without runtime overrides the
 profile is still what carries the pin, so it stays.
+
+### 2026-09-05 — implemented as detect / ask / record
+
+Verified live on **codex-cli 0.153.4** before writing anything, in the two repositories the earlier
+comment used (`/workspace/darktable`'s file has since been removed; `/workspace/dt-pr` still carries
+the same one):
+
+| cwd | Repo-local `.codex/config.toml` | **Bound (Codex's own config summary)** |
+|---|---|---|
+| `/workspace/panel-review` | none | `gpt-5.6-sol` / `high` — the profile pin |
+| `/workspace/dt-pr` | `gpt-5.6-luna` / `max` | **`gpt-5.6-luna` / `max`** |
+
+**1. `preflight` detects and reports** (`scripts/preflight`). It collects the config layers above the
+profile that are anchored at or under the workdir — the cwd layer `$PWD/config.toml` and the tree
+layer `.codex/config.toml` in `$PWD` and every ancestor, which subsumes the repo layer since the git
+toplevel is always one of those directories — skipping a `.codex` that *is* Codex's own home, as the
+loader does. A candidate counts only if it sets `model` or `model_reasoning_effort` **at the TOML
+root**; a `model` under some `[table]` is a different key and is not read. The report names the file,
+its values, and the profile's pins, and says the layer applies only if the directory is trusted rather
+than trying to predict Codex's trust resolution. New machine-readable line `CODEX_MODEL_LAYER: yes|no`
+sits ahead of the existing `CODEX:`/`GEMINI:` tail. It is a warning: exit stays 0.
+
+**2. `start` asks** (`skills/start/SKILL.md` Step 2). It now keeps `preflight`'s output, counts that
+line, and on a hit asks (`AskUserQuestion`) whether to review under the repository's own Codex model or
+stop and move the file. Nothing is minted before the answer.
+
+**3. The binding is recorded** (`scripts/run_codex`, `scripts/await_seats`, `scripts/round`). Two facts
+made this observable rather than predicted: `-o` writes the final assistant message in **both** of
+`codex exec`'s output modes, and human mode prints the resolved config summary — including
+`model:` and `reasoning effort:` — to **stderr**, where `--json` replaces it with a `thread.started`
+event carrying only a thread id. So `run_codex` dropped `--json`, captures stderr, and reads the two
+values from between the summary's first two `--------` rules (bounded, so a `model:` line inside the
+echoed prompt cannot win). `await_seats` — the only dispatcher that knows the run id — points it at
+`/tmp/<ID>/codex-model.txt`, and `round verdict-input` surfaces it as `seat_models`, which the protocol
+tells the referee to state in Process notes.
+
+**Item 4 resolved by removal.** `CODEX_JSONL` had no caller anywhere in the repository, and its stated
+rationale ("`--json` is required because `-o` writes only the final message") is false on 0.153.4, so
+the toggle is gone rather than made conditional. Item 3 stands as the last comment left it: without
+runtime overrides the profile still carries the pin, so the auto-created profile file stays.
+
+**Not done, deliberately:** the `--dangerously-bypass-approvals-and-sandbox` non-goal was left
+untouched — it requires its own disposable probe, not this change.
+
+Tests: `tests/run_tests.sh` covers preflight's detection (including the `[table]`-scoped false
+positive and the tail order), `run_codex`'s recording (including the decoy prompt line and the
+no-destination path), and `await_seats`' wiring. 291 pass, 0 fail; `check_contracts` clean.

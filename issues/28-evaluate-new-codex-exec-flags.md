@@ -109,3 +109,24 @@ before the next Codex-seat change; do not assume the bypass flag still bypasses 
 surfaces the plugin touches (`codex exec` flags, config layering, sandbox, MCP, bundled models). The
 Codex baseline in `docs/agents/external-cli-baselines.md` should therefore **not** be advanced on the
 strength of this comment alone.
+
+### 2026-10-19 — codex-cli 0.153.4 → 0.163.0: nothing `run_codex` uses changed
+
+Installed: **0.163.0**. Every flag `run_codex` passes still exists (`--profile`,
+`--dangerously-bypass-approvals-and-sandbox`, `-c`, `-o`). The human-mode config summary that
+`issues/47`'s recording parses (`model:` and `reasoning effort:` between the first two `--------`
+rules on stderr) is unchanged in `codex-rs/exec/src/event_processor_with_human_output.rs` since
+`rust-v0.153.4`; only the sandbox line's arguments changed. That recording was verified on 0.153.4,
+so confirm it once with a real pass on 0.163.0.
+
+New surface, filtered from ~2000 commit subjects for `codex exec`, config layering, sandbox, MCP,
+worktrees and models:
+
+| Flag / behavior | Why it might matter here |
+|---|---|
+| `--cyber-access-program` (`c41a72cd3f`, `6b4daafdb4`) | Per-turn access program, OpenAI provider only. No effect on a review seat. Decline. |
+| Worktrees stable and on by default (`68bc5369ba`); `--worktree` is now a global exec flag | `codex exec` uses a managed worktree only when `--worktree` is passed, which `run_codex` does not do, so the seat still runs in the workdir. If a seat ever runs in a worktree, `repo_guard` would no longer be guarding the copy the seat works in; same question as `issues/60`. |
+| Shared background daemon, `--no-daemon` (`787823cf95`) | TUI only, and launches that pass `--profile` are excluded from implicit daemon reuse. Not applicable. |
+| Guardian (hundreds of commits) | Guardian reviews approval requests. `--dangerously-bypass-approvals-and-sandbox` raises none, so the seat should never reach it. Still unmeasured, as in the 2026-09-05 note. |
+
+As before, this is a filtered read of commit subjects, not a full triage of the delta.

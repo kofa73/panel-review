@@ -109,3 +109,27 @@ Also new in the unreviewed range and worth noting even though they are not flags
 `ripgrep`** replaces whatever the machine provides (1.1.21), so seat search behavior no longer
 varies with the container's tooling; and **`always-proceed` now auto-approves MCP tool calls**
 (1.1.21), which is the mode the tilth MCP server runs under.
+
+### 2026-10-19 — flag surface on agy 1.4.2
+
+New or changed since the 1.1.27 table above:
+
+| Flag / behavior | Version | Why it might matter here |
+|---|---|---|
+| `--mode auto` | 1.3.5 | Auto mode: approves edits and "safe" commands, and a separate agent reviews commands that would leave the terminal sandbox. It adds a second model deciding what the seat may run, the same objection as Codex's `--approve-for-me` in `issues/28`. Expected decision: decline. |
+| `--effort low\|medium\|high\|xhigh\|max` | 1.2.11 | Still ruled out while the label form is the pin contract (`issues/20`). Combined with 1.3.4 (`--model` takes a base name), it is a possible second contract. Decide in `issues/63`, not here. |
+| `--json-schema` | 1.2.14 | Now rejects plain text, bare type names, missing files and a non-object root at startup with exit 1. That makes a bad schema fail loudly, which helps if this candidate is ever adopted. |
+| `--log-file` | in 1.4.2 `--help` | Per-run CLI log path. Makes the model-binding line attributable to one attempt. Candidate mechanism for `issues/63` item 4. |
+
+Not flags, but they change what the seat runs with:
+
+- **1.2.7** retired the legacy `find_by_name`, `grep_search` and `list_dir` tools from the default
+  toolset. The panel's prompts do not name them (checked 2026-10-19).
+- **1.2.16** loads `skills.json`, `rules.json` and other manifests from every `.agents/` directory
+  between the working directory and the project root, and 1.2.10 made directory entries non-recursive.
+  The reviewed repository's own agy customizations reach the Gemini seat. This is the same family as
+  `issues/47` (the reviewed repository configures the seat that reviews it). It is not new, but it
+  now covers more files.
+- **1.1.28** changed the default permission for fetching URLs to "ask". Under
+  `--dangerously-skip-permissions` there is no prompt, but if a fetch is ever denied, see
+  `issues/61` item 1.

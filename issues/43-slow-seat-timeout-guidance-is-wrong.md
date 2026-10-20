@@ -76,3 +76,21 @@ Note that the CLI barrier is unaffected either way while it stays a **blocking f
 the cap only ever applied to *background* shells. The rewrite should say that explicitly — it is the
 reason the panel has not hit the ceiling in practice, and it is the property that would be lost if
 anyone reintroduced a backgrounded wait.
+
+### 2026-10-19 — the docs now agree, and the barrier is not exempt
+
+**The contradiction above is resolved.** `docs/env-vars.md` now lists `CLAUDE_SUBAGENT_BG_SHELL_MAX_MS`
+as "Removed in v2.1.260 and now a no-op". A different limit replaced it. Since 2.1.285, background
+Bash commands have a time limit: 30 minutes by default, set per command with `timeout`, at most
+2 hours. Since 2.1.288 the limit applies **only in unattended sessions** (`-p`, Agent SDK, CI, cloud);
+terminal, desktop and VS Code sessions have none (`docs/tools-reference.md`, "Time limit for
+background commands"). The rewrite can proceed without a measurement for the supported terminal
+setup.
+
+**Correction to the previous comment.** It said the CLI barrier is unaffected "while it stays a
+blocking foreground Agent: the cap only ever applied to background shells". The barrier *is* a
+foreground Agent, but it starts `await_seats` as a **background** shell (`run_in_background: true`,
+`agents/panel-review-cli-barrier.md:65-70`). The old 60-minute cap therefore did apply to it. It never
+fired because `await_seats` finishes within ~40 minutes. The new unattended-session limit (30 minutes,
+or 10 in a text-prompt `-p` run) is shorter than that, so it would fire. The code fix (pass an
+explicit `timeout`) is filed as `issues/65` item 2. This issue keeps the README guidance only.

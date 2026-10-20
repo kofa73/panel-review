@@ -150,3 +150,16 @@ file rather than from this issue.
 The recommendation in "Decisions required" item 3 stands but its value is stale: match what is
 actually proven on this machine (`gpt-5.6-sol`), or take `gpt-6-astra` only after a real review run
 on it. Do not adopt a model on catalogue position alone.
+
+### 2026-10-19 — the Gemini half moved to issue 63; Codex has GPT-6 candidates
+
+**Gemini.** On agy 1.4.2 both current pins are gone from `agy models` (only Gemini 4 Argon and
+Gemini 3.8 Flash remain). That is a defect, not a refresh, so it is filed as `issues/63`, which
+supersedes this issue's Gemini half.
+
+**Codex.** The bundled catalogue at codex `main` (2026-10-19; installed codex-cli **0.163.0**) lists
+`gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-sol`, `gpt-6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`,
+`gpt-5.6-luna` and `gpt-5.5`. GPT-6 Sol and Luna were added on 2026-09-22 (`49e95cc73f`).
+`gpt-5.6-sol`, which this machine's `~/.codex/panel-review.config.toml` runs at `high`, is still
+listed, so nothing is broken. The shipped asset still says `gpt-5.5`/`xhigh`. The 2026-09-05 advice
+still applies: adopt a newer model only after a real review run on it.

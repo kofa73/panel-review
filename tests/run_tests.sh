@@ -128,6 +128,102 @@ rm "$empty_claude_config/settings.json"
     CODEX_LOG="$TMP/codex5.log" PATH="$mockbin:$PATH" "$SC/preflight"
 ) > "$TMP/preflight-add-dir.out" 2>&1; rc=$?
 assert_exit "add-dir launch marker satisfies preflight" 0 "$rc"
+
+section "preflight — a Codex config layer above the profile (issue 47)"
+# Codex layers cwd/tree/repo config ABOVE `--profile panel-review`, so a reviewed
+# repository's own .codex/config.toml decides which model reviews it. Measured live on
+# codex-cli 0.153.4. preflight only REPORTS it (the file is the user's), so the machine
+# line must flip and the human block must name both sides of the difference.
+pin_home="$TMP/codex-pin-home"; mkdir -p "$pin_home/.codex"
+cat > "$pin_home/.codex/panel-review.config.toml" <<'EOF'
+model = "pinned-model"
+model_reasoning_effort = "pinned-effort"
+EOF
+layer_repo="$TMP/codex-layer-repo"; mkdir -p "$layer_repo/.codex"
+git -C "$layer_repo" init -q
+cat > "$layer_repo/.codex/config.toml" <<'EOF'
+model = "repo-model"
+model_reasoning_effort = "repo-effort"
+
+[some_table]
+model = "must-not-be-read"
+EOF
+(
+  cd "$layer_repo" || exit 1
+  CLAUDE_CODE_FORK_SUBAGENT=0 CLAUDE_CONFIG_DIR="$empty_claude_config" HOME="$pin_home" \
+    CODEX_LOG="$TMP/codex6.log" PATH="$mockbin:$PATH" "$SC/preflight"
+) > "$TMP/preflight-layer.out" 2>&1; rc=$?
+assert_exit "a Codex model layer is a warning, not a hard failure" 0 "$rc"
+assert_file_contains "layer report is machine-readable"  'CODEX_MODEL_LAYER: yes' "$TMP/preflight-layer.out"
+assert_file_contains "layer report names the file"       "$layer_repo/.codex/config.toml" "$TMP/preflight-layer.out"
+assert_file_contains "layer report shows its values"     'model = repo-model   model_reasoning_effort = repo-effort' "$TMP/preflight-layer.out"
+assert_file_contains "layer report shows the pin"        'panel-review pins model = pinned-model   model_reasoning_effort = pinned-effort' "$TMP/preflight-layer.out"
+# A `model` under a [table] is a different key; reading it would report a phantom override.
+assert_file_not_contains "table-scoped model is not read" 'must-not-be-read' "$TMP/preflight-layer.out"
+# The seat-detection tail must stay parseable, with the new line ahead of it. The
+# Gemini value is whatever the host has, so match its shape, not its answer.
+tail3="$(tail -n3 "$TMP/preflight-layer.out" | tr '\n' ' ')"
+case "$tail3" in
+  'CODEX_MODEL_LAYER: yes CODEX: yes GEMINI: '*) ok "tail order stays CODEX_MODEL_LAYER, CODEX, GEMINI";;
+  *) bad "tail order stays CODEX_MODEL_LAYER, CODEX, GEMINI" "got [$tail3]";;
+esac
+
+clean_repo="$TMP/codex-clean-repo"; mkdir -p "$clean_repo"
+git -C "$clean_repo" init -q
+(
+  cd "$clean_repo" || exit 1
+  CLAUDE_CODE_FORK_SUBAGENT=0 CLAUDE_CONFIG_DIR="$empty_claude_config" HOME="$pin_home" \
+    CODEX_LOG="$TMP/codex7.log" PATH="$mockbin:$PATH" "$SC/preflight"
+) > "$TMP/preflight-nolayer.out" 2>&1; rc=$?
+assert_exit "no Codex layer -> preflight succeeds" 0 "$rc"
+assert_file_contains "no layer -> machine line says no" 'CODEX_MODEL_LAYER: no' "$TMP/preflight-nolayer.out"
+assert_file_not_contains "no layer -> no warning block" 'above the panel-review profile' "$TMP/preflight-nolayer.out"
+
+section "run_codex — human output mode records the model that actually bound (issue 47)"
+# `-o` yields the final message in BOTH output modes, so --json is not needed for it
+# (verified on codex-cli 0.153.4). Human mode is preferred because it prints the resolved
+# config summary — the model that actually bound — to stderr, which --json replaces with a
+# thread id. The mock reproduces that stderr shape, including a decoy "model:" line in the
+# prompt echo AFTER the summary's closing rule.
+rc_mockbin="$TMP/runcodexbin"; mkdir -p "$rc_mockbin"
+cat > "$rc_mockbin/codex" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" > "$CODEX_ARGS_LOG"
+out=""; prev=""; for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
+cat >/dev/null
+{
+  echo "Reading prompt from stdin..."
+  echo "OpenAI Codex v0.153.4"
+  echo "--------"
+  echo "workdir: $PWD"
+  echo "model: bound-model"
+  echo "provider: openai"
+  echo "reasoning effort: bound-effort"
+  echo "session id: 0000"
+  echo "--------"
+  echo "user"
+  echo "model: decoy-from-the-prompt"
+} >&2
+printf 'SEAT RESPONSE\n' > "$out"
+printf 'human transcript on stdout\n'
+EOF
+chmod +x "$rc_mockbin/codex"
+rc_home="$TMP/runcodexhome"; mkdir -p "$rc_home"
+rc_model="$TMP/runcodex-model.txt"
+rc_out="$(printf 'PROMPT\n' | CODEX_ARGS_LOG="$TMP/runcodex.args" CODEX_SEAT_MODEL_FILE="$rc_model" \
+  HOME="$rc_home" PATH="$rc_mockbin:$PATH" "$SC/run_codex" 2>/dev/null)"; rc=$?
+assert_exit "run_codex succeeds" 0 "$rc"
+assert_eq "run_codex relays only the -o response" 'SEAT RESPONSE' "$rc_out"
+assert_file_not_contains "run_codex no longer passes --json" '--json' "$TMP/runcodex.args"
+assert_file_contains "run_codex still pins the profile" '--profile panel-review' "$TMP/runcodex.args"
+assert_eq "records the bound model"  'model=bound-model'   "$(sed -n '1p' "$rc_model")"
+assert_eq "records the bound effort" 'effort=bound-effort' "$(sed -n '2p' "$rc_model")"
+# The record must come from the config summary, never from the echoed prompt below it.
+assert_file_not_contains "decoy prompt line does not win" 'decoy-from-the-prompt' "$rc_model"
+# No destination set -> no file, and the seat pass is unaffected.
+rc_out2="$(printf 'PROMPT\n' | CODEX_ARGS_LOG="$TMP/runcodex.args2" HOME="$rc_home" \
+  PATH="$rc_mockbin:$PATH" "$SC/run_codex" 2>/dev/null)"
+assert_eq "no destination -> seat still works" 'SEAT RESPONSE' "$rc_out2"
 assert_file_not_contains "add-dir launch marker emits no block" 'blockReadsOutsideWorkingDirectories blocks' "$TMP/preflight-add-dir.out"
 
 rm "$pf_repo/.claude/settings.json"
@@ -575,6 +671,29 @@ assert_exit "seat missing --raw -> exit 2" 2 "$?"
 # nonzero and writes NO done-file, so an absent done-file is ambiguous between "still running" and
 # "crashed at startup". This is exactly why the barrier wraps await_seats in an exit-code sentinel.
 if [ -f "$TMP/d" ]; then bad "await_seats wrote a done-file despite a setup error"; else ok "await_seats writes no done-file on a setup error (barrier needs the sentinel)"; fi
+
+section "await_seats — points run_codex at the run's model record (issue 47)"
+# The barrier is the only dispatcher that knows the run id, so it is where the Codex
+# model record gets its destination. Without this wiring `round verdict-input` has no
+# `seat_models` and the verdict can only repeat the pin it asked for.
+rec_mockbin="$TMP/awaitrecbin"; mkdir -p "$rec_mockbin"
+cat > "$rec_mockbin/codex" <<'EOF'
+#!/usr/bin/env bash
+out=""; prev=""; for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
+cat >/dev/null
+printf 'OpenAI Codex v0.153.4\n--------\nmodel: barrier-model\nreasoning effort: barrier-effort\n--------\nuser\n' >&2
+printf '```findings\n%s\n```\n' '{"claim":"c","location":"a.c:1","category":"correctness","severity":"high","points":[{"assertion":"x","location":"a.c:1"}]}' > "$out"
+EOF
+chmod +x "$rec_mockbin/codex"
+rec_id="$PREFIX-modelrec"
+PATH="$rec_mockbin:$PATH" HOME="$TMP/awaitrechome" \
+  "$SC/await_seats" --id "$rec_id" --tag findings --prompt "$TMP/await.prompt" --seat-timeout 0 \
+    --seat codex --raw "$TMP/await.raw/c.rec.txt" --parsed "$TMP/await.f.codex.rec.json" \
+    --status "$TMP/await.st.codex.rec" --done "$TMP/await.done.rec" >/dev/null 2>&1
+assert_exit "barrier exits 0 with the model record wired" 0 "$?"
+assert_eq "codex still engages" '0' "$(cat "$TMP/await.st.codex.rec")"
+assert_file_contains "barrier records the bound model under the run"  'model=barrier-model'   "/tmp/$rec_id/codex-model.txt"
+assert_file_contains "barrier records the bound effort under the run" 'effort=barrier-effort' "/tmp/$rec_id/codex-model.txt"
 
 section "protocol wording — the barrier's wait signal is the sentinel, never --done"
 # The behavioral invariant above (no done-file on a setup error) is WHY the barrier must wait on the

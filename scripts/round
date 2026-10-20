@@ -899,6 +899,22 @@ def cmd_verdict_input(run_id):
                 origins[path.name] = [line for line in path.read_text(encoding="utf-8").splitlines() if line]
             elif ".raw." not in path.name and not path.name.endswith(".raw.txt"):
                 origins[path.name] = path.read_text(encoding="utf-8")
+    # What the Codex seat ACTUALLY bound, as Codex reported it (run_codex writes this;
+    # await_seats points it here). The profile's pin is only a request: Codex layers the
+    # reviewed repository's own .codex/config.toml above it, so the verdict must state the
+    # observed binding rather than the asked-for one. Absent file = the seat never ran, or
+    # ran before this record existed; the verdict simply says nothing then.
+    seat_models = {}
+    codex_model_file = directory / "codex-model.txt"
+    if codex_model_file.is_file():
+        observed = {}
+        for line in codex_model_file.read_text(encoding="utf-8").splitlines():
+            key, separator, value = line.partition("=")
+            if separator and value.strip():
+                observed[key.strip()] = value.strip()
+        if observed:
+            seat_models["codex"] = observed
+
     round0 = None
     round0_panel = directory / "round0.panel.json"
     if round0_panel.is_file():
@@ -925,6 +941,7 @@ def cmd_verdict_input(run_id):
                 )
             },
             "configured": configured_panel(directory),
+            "seat_models": seat_models,
             "round0": round0,
             "index": index,
             "origins": origins,

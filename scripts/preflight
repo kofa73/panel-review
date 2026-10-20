@@ -7,8 +7,10 @@
 # peers, so the review only needs Claude + one of them.
 #
 # Exit 1 if the core is unusable; exit 0 otherwise. Prints human-readable
-# status. The final two lines are "CODEX: yes|no" and "GEMINI: yes|no" for
-# scripted seat detection.
+# status. The final three lines are "CODEX_MODEL_LAYER: yes|no", "CODEX: yes|no"
+# and "GEMINI: yes|no" for scripted detection. CODEX_MODEL_LAYER reports a Codex
+# config layer above the panel-review profile that sets the seat's model — a
+# warning the caller must surface, never a hard failure.
 #
 # Single source of truth for both the skill and /panel-review's prereq report —
 # keep the checks here so the two can't drift. Writes no files (read-only):
@@ -108,6 +110,85 @@ fi
 # At least one peer seat must be present.
 have_codex=no;  command -v codex >/dev/null 2>&1 && have_codex=yes
 have_gemini=no; command -v agy   >/dev/null 2>&1 && have_gemini=yes
+
+# The Codex seat's model pin is NOT authoritative on its own. Codex composes its
+# configuration from layers, and three of them sit ABOVE the `--profile panel-review`
+# layer that carries our pin (codex-rs/config/src/loader/mod.rs:105-121, checkout
+# ddf04ad267): cwd `$PWD/config.toml`, tree `.codex/config.toml` in $PWD and its
+# ancestors, and repo `$(git rev-parse --show-toplevel)/.codex/config.toml`. `codex exec`
+# runs with cwd = the repository under review, so a reviewed repository that ships its own
+# Codex config silently decides which model reviews it. Measured on codex-cli 0.153.4:
+# in a repository whose `.codex/config.toml` set `gpt-5.6-luna`/`max`, the seat bound
+# exactly that, while the profile's `gpt-5.6-sol`/`high` bound in a repository without one.
+#
+# This is a REPORT, not an override. Reviewing a repository under its own configured
+# model is a legitimate choice — the user wrote that file. What must not happen is that
+# the choice is invisible, because the pin is what makes two runs comparable. `start`
+# asks; `run_codex` records what actually bound (see `/tmp/<ID>/codex-model.txt`).
+codex_model_layer=no
+if [ "$have_codex" = yes ]; then
+  # Read a bare top-level `key = value` from a TOML file. Everything from the first table
+  # header on belongs to some `[table]`, where `model` is a different key entirely, so stop
+  # there. Comment stripping is naive (a `#` inside a quoted value would be cut); model
+  # names and effort levels contain none.
+  toml_root_value() {
+    sed -e 's/#.*//' "$1" 2>/dev/null \
+      | sed -n '/^[[:space:]]*\[/q;p' \
+      | sed -n "s/^[[:space:]]*$2[[:space:]]*=[[:space:]]*[\"']\{0,1\}\([^\"']*\)[\"']\{0,1\}[[:space:]]*\$/\1/p" \
+      | head -n1
+  }
+
+  # $HOME/.codex, not $CODEX_HOME, on purpose: this must name the same file run_codex
+  # creates and pins from, and run_codex uses $HOME. Before the first run that file does
+  # not exist yet, so fall back to the shipped asset run_codex will copy into place.
+  codex_home="$HOME/.codex"
+  codex_profile="${CODEX_PROFILE:-panel-review}"
+  profile_file="$codex_home/$codex_profile.config.toml"
+  [ -f "$profile_file" ] \
+    || profile_file="$(cd "$(dirname "$0")" && pwd)/../assets/default-$codex_profile.config.toml"
+
+  # Candidates: the cwd layer, then the tree layer walked to the filesystem root. The repo
+  # layer's `$(git rev-parse --show-toplevel)/.codex/config.toml` is always one of the tree
+  # candidates, since the toplevel is $PWD or an ancestor of it. Codex skips a `.codex` that
+  # IS its own home (that file is the lower-precedence user layer), so skip it here too.
+  candidates=("$(pwd -P)/config.toml")
+  dir="$(pwd -P)"
+  while :; do
+    if [ "$dir/.codex" != "$codex_home" ] && ! [ "$dir/.codex" -ef "$codex_home" ] 2>/dev/null; then
+      candidates+=("$dir/.codex/config.toml")
+    fi
+    [ "$dir" = "/" ] && break
+    dir="$(dirname "$dir")"
+  done
+
+  overriding=()
+  for file in "${candidates[@]}"; do
+    [ -f "$file" ] || continue
+    layer_model="$(toml_root_value "$file" model)"
+    layer_effort="$(toml_root_value "$file" model_reasoning_effort)"
+    [ -n "$layer_model" ] || [ -n "$layer_effort" ] || continue
+    overriding+=("$file|${layer_model:-<unset>}|${layer_effort:-<unset>}")
+  done
+
+  if [ "${#overriding[@]}" -gt 0 ]; then
+    codex_model_layer=yes
+    pin_model="$(toml_root_value "$profile_file" model)"
+    pin_effort="$(toml_root_value "$profile_file" model_reasoning_effort)"
+    echo "WARNING: a Codex config layer above the panel-review profile sets the seat's model."
+    echo "         Codex resolves cwd/tree/repo config ABOVE '--profile $codex_profile', so these win:"
+    for entry in "${overriding[@]}"; do
+      echo "             ${entry%%|*}"
+      rest="${entry#*|}"
+      echo "                 model = ${rest%%|*}   model_reasoning_effort = ${rest#*|}"
+    done
+    echo "         panel-review pins model = ${pin_model:-<unset>}   model_reasoning_effort = ${pin_effort:-<unset>}"
+    echo "         from $profile_file"
+    echo "         Codex disables these layers for an untrusted directory, so this may not apply —"
+    echo "         it is reported, not predicted. Reviewing under the repository's own model is a"
+    echo "         legitimate choice; it just must not be invisible, because the pin is what makes"
+    echo "         two runs comparable. Move or edit the file to review under the pin instead."
+  fi
+fi
 if [ "$have_codex" = no ] && [ "$have_gemini" = no ]; then
   echo "ERROR: no peer seat available — install the codex CLI (npm i -g @openai/codex) or agy (Gemini)."
   hard_fail=1
@@ -135,6 +216,7 @@ if [ "$have_gemini" = no ]; then
   echo "NOTE: agy CLI not found — Gemini seat unavailable (running without it)."
 fi
 
+echo "CODEX_MODEL_LAYER: $codex_model_layer"
 echo "CODEX: $have_codex"
 echo "GEMINI: $have_gemini"
 

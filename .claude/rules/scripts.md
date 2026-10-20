@@ -66,7 +66,11 @@ byte-exact.
 - `project_card` / `regen_cards` — the **only** way to render issue records → blind cards.
 - `run_codex` / `run_agy` — the **only** way to call the Codex / Gemini seats; they pin the
   model/profile and the flags that let MCP/tilth run (`run_codex` bypasses the Codex sandbox, `run_agy`
-  passes `--dangerously-skip-permissions`). Never call `codex`/`agy` raw.
+  passes `--dangerously-skip-permissions`). Never call `codex`/`agy` raw. `run_codex`'s profile pin is
+  a request Codex can overrule — cwd/tree/repo config layers sit above the profile — so it also
+  **records** the binding Codex reports for itself into `CODEX_SEAT_MODEL_FILE` (issue 47). Detection
+  belongs to `preflight`, asking to `start`, recording here; none of the three overrides the user's
+  own `.codex/config.toml`.
 - `repo_guard` — protects the code under review. `snapshot` records the tracked tree (a
   `git stash create` SHA + sha256 manifest) at the start; `verify --restore` after each seat pass
   reverts and reports tracked-file drift. Guards tracked content only — leaves untracked scratch and

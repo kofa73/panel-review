@@ -30,7 +30,7 @@ reference; grepping a script for its flags wastes a full source-read into your c
 ```bash
 # $ROOT/$SC/$PR are derived in the bootstrap (from the substituted plugin
 # root); re-derive them at the top of every Bash command as the bootstrap shows.
-"$SC/preflight"                              # env check; tail "CODEX: yes|no"/"GEMINI: yes|no"; exit 1 = core unusable (needs jq, git, work-tree, ≥1 peer)
+"$SC/preflight"                              # env check; tail "CODEX_MODEL_LAYER: yes|no"/"CODEX: yes|no"/"GEMINI: yes|no"; exit 1 = core unusable (needs jq, git, work-tree, ≥1 peer). CODEX_MODEL_LAYER: yes = a repo/cwd/tree Codex config outranks our model pin; a warning `start` already asked about, never yours to act on
 "$SC/resolve_instructions" --id <id>         # manifest.instructions -> verbatim/none text (exit 0) OR compose sentinel (exit 3 = auto, you compose)
 "$SC/assemble" TMPL KEY=file ...             # splice files into a template's {{KEY}} sentinels -> stdout
 "$SC/repo_guard" snapshot --id <id> --workdir <dir>          # record tracked-tree baseline (git stash create SHA + sha256 manifest)
@@ -759,8 +759,9 @@ human's intent when they chose to continue. Do **not** re-apply the gate on resu
 # Verdict synthesis
 
 Run `"$SC/round" verdict-input "$id"` and read that single compact result. It contains the stable
-manifest, configured panel, final index, structured origins, guard facts, and Round-0 attempt history
-plus final seat statuses needed below; do not re-read those state files separately. Use the Round-0
+manifest, configured panel, the Codex seat's observed model binding, final index, structured origins,
+guard facts, and Round-0 attempt history plus final seat statuses needed below; do not re-read those
+state files separately. Use the Round-0
 summary to report every retry and final down-seat result in Process notes. Present **everything**,
 surfacing origins only here. Severity → headings: `critical`/`high` → **Critical**, `medium` →
 **Important**, `low` → **Minor**, `style` → **Style notes**.
@@ -800,6 +801,10 @@ surfacing origins only here. Severity → headings: `critical`/`high` → **Crit
 ### Process notes
 - independent Round-0 support per accepted issue; notable field mutations ("high → low on agreement")
 - seat health: timeouts, retries, or any configured seat down; any blind-leak-check result
+- **Codex seat model:** when `seat_models.codex` is present, state its `model`/`effort` verbatim
+  ("Codex seat: `gpt-5.6-luna`, effort `max`"). This is what Codex reported binding, not what the
+  panel's profile asked for — a reviewed repository's own `.codex/config.toml` outranks the pin, so
+  the record is the only place the verdict's provenance can be true
 - **guard violations:** if `/tmp/$id/origins/guard.round0.txt` or `guard.debate.txt` is non-empty, list
   each drifted tracked file **loudly** here ("⚠ a seat modified `<file>` during review; reverted from
   the start-of-review snapshot") — the review continued, but a seat broke the read-only contract

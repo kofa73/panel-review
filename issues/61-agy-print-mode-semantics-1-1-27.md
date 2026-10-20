@@ -92,3 +92,27 @@ expansion **on** so `/boost` works, which rules out adopting `--disable-slash-co
   measurement; land whichever comes first without rewriting the other.
 - Do not adopt any new agy flag here. `issues/23` is the register that records a decision per flag.
 - Do not change model pins (`issues/21`) or add `/boost` (`issues/60`) as part of this issue.
+
+## Comments
+
+### 2026-10-19 — exit codes moved again between 1.1.28 and 1.4.2
+
+Installed agy is now **1.4.2**. Measure there, not on 1.1.27. Changes since this issue was filed:
+
+- **Item 1 is narrower but not closed.** 1.2.10: headless runs "that streamed part of a response and
+  then ended on a model or agent error" now exit `3` instead of `0`. 1.2.6: agent or model API
+  failures exit `3` (was `1`) and print a structured `AGY_ERROR: {…}` line on stderr. Both help
+  `run_agy`, which treats any non-zero exit as a failed attempt. Tool errors and permission denials
+  still exit 0 (the 1.1.20 change stands), so the degraded-answer case this issue is about remains.
+- **New stderr signals.** 1.1.28 added a stable `error:` marker for fatal errors and "a note … when
+  the response may be truncated". Together with `AGY_ERROR` and the 1.1.27 denied-actions notice,
+  these are the candidates for item 2's detector. `issues/59` needs the same stderr capture, so
+  design it once.
+- **1.2.15** "Improved how the agent handles a permission request that is not approved … it now
+  respects the denial and no longer tries to work around it". With `--dangerously-skip-permissions`
+  this should not arise, but it changes what a denied pass looks like.
+- **1.3.6** headless `-p` runs skip questions that subagents ask, so a subagent cannot hang waiting
+  for an answer. This matters only if `issues/60` adopts `/boost`.
+- **Item 4:** `--disable-slash-commands` is unchanged on 1.4.2.
+
+The timeout half moved to `issues/59` (agy 1.1.28 made a timed-out pass exit 0 with partial output).
