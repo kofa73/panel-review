@@ -8,6 +8,22 @@ Source: usability review, 2026-08-16
 
 Triage: ready-for-human
 
+## Resolution
+
+Implemented 2026-10-20. Renamed the user-facing free-text placeholder to `<topic>` in the start hint,
+usage error, README example, and referee handoff. The internal `question=` scope token remains
+unchanged pending the owner decision below because the manifest persists it.
+
+## Open questions for the owner
+
+Should the internal `question=` scope token be renamed to `topic=`?
+
+- **Keep `question=` (recommended).** This preserves compatibility with saved manifests and keeps
+  the user-facing wording clear. The token is internal, so renaming it adds compatibility work
+  without changing the command users type.
+- **Rename to `topic=`.** `resolve_diff` must accept both prefixes for one release to resume existing
+  runs, or the change must be declared breaking for in-flight runs.
+
 ## Problem
 
 The scope alternatives are advertised as:
@@ -29,7 +45,7 @@ The result is two concrete confusions:
   which *is* the "say what you want looked at" channel — so the hint appears to offer two ways to
   phrase a request, when in fact one names the subject and the other steers the reviewers.
 - The two are **mutually exclusive by construction** and the naming hides it: a bare free-text scope
-  has no separate instructions channel at all (`README.md:214` — "the question text *is* the
+  has no separate instructions channel at all (`README.md:276` — "the question text *is* the
   scope"). A user who reads `<question>` as "the thing I want to ask about this diff" gets a
   diffless review of their sentence.
 
@@ -45,7 +61,7 @@ compatibility cost, so it should be decided on its own merits rather than dragge
 **Layer 1 — user-facing placeholder (do this).** One name, used in every surface a user reads:
 
 - `skills/start/SKILL.md:5` (`argument-hint`) and its usage error at `skills/start/SKILL.md:74`
-- `README.md:160` (usage block) and `README.md:214` (the instructions note)
+- `README.md:222` (usage block) and `README.md:276` (the instructions note)
 - `skills/panel-review-for-agent/SKILL.md:41` (the referee's scope line, user-visible in prose)
 
 Candidates, with the trade-off:
@@ -69,12 +85,12 @@ breaking in-flight runs.
 
 ## Verification
 
-- `grep -rn "<question>" README.md skills/` returns nothing after layer 1.
-- `scripts/check_contracts --root .` passes (confirm first whether any invariant pins the old
-  placeholder; the current grep shows none, but the check must be rerun after edits).
-- `./tests/run_tests.sh` passes.
-- A `start` invocation with a bare free-text argument still produces the same `question=`/`topic=`
-  manifest scope and the same diffless behavior — this is a naming change, not a behavior change.
+- `rg -n '<question>' README.md skills` — no matches.
+- `scripts/check_contracts --root .` — passed.
+- `./tests/run_tests.sh` — `PASS: 419`, `FAIL: 0`.
+- `git diff --check` — passed.
+- A bare free-text `start` invocation was not run because this change does not alter the parser,
+  manifest token, or resolver. No runtime behavior changed.
 
 ## Non-goals
 

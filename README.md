@@ -219,7 +219,7 @@ panel-review:status                              # read-only: prereqs + any save
 panel-review:start --base <branch>                # review your branch's changes vs <branch>
 panel-review:start --uncommitted                  # review staged + unstaged + untracked changes
 panel-review:start --commit <SHA>                 # review a single commit
-panel-review:start "<question>"                   # validate an answer to a broad technical question
+panel-review:start "<topic>"                      # review a free-text topic or question (no diff)
 panel-review:start --uncommitted --issue-rounds 3 --max-rounds 5   # override the loop limits
 panel-review:start --uncommitted --debate-low                      # debate even an all-low set
 panel-review:start --base main --review-profile /path/domain-review.md  # replace generic priorities
@@ -273,8 +273,8 @@ Two ways to pass it, and **positionality matters**:
   it's most useful with `--base`/`--commit`.
 
 Notes:
-- A bare **`<question>`** scope (no diff) has no separate instructions channel — the question text
-  *is* the scope.
+- A bare **`<topic>`** scope reviews that text without a diff and has no separate instructions
+  channel. The text itself is the scope, whether it names a code topic or asks a technical question.
 - Instructions are **not** part of a run's resume identity — `panel-review:status` shows what's
   stored, and `panel-review:resume`/`panel-review:continue` adopt them from the manifest rather than
   comparing a retyped value. Only `panel-review:start` accepts instructions at all; passing them to

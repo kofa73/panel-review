@@ -38,7 +38,7 @@ and spawned you with, in your prompt:
 - `mode=fresh` or `mode=resume`
 - `id=<RUN_ID>` — the run id; `/tmp/<id>/` is your state, `.panel-review/<id>/` your cards
 - `workdir=<DIR>` — the repo root (run everything from here)
-- `scope=<base=X | uncommitted | commit=SHA | the question text>`
+- `scope=<base=X | uncommitted | commit=SHA | the topic text>`
 - the resolved round limits (also in the manifest)
 - the selected review profile is NOT in your prompt — `round` validates the manifest metadata and
   saved `/tmp/<id>/review-profile.md` snapshot, then gives every seat the same absolute reference

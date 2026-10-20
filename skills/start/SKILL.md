@@ -2,7 +2,7 @@
 name: start
 description: Start a fresh panel review (three-way blind debate across Claude + Codex + Gemini). Takes the scope, optional review profile, optional author instructions, and round limits. Refuses if a saved review already exists for this workdir.
 disable-model-invocation: true
-argument-hint: "--base <branch> | --uncommitted | --commit <SHA> | <question>  [--review-profile <path>] [--issue-rounds N] [--max-rounds N] [--debate-low]  [<focus text> | --instructions <text|auto>]"
+argument-hint: "--base <branch> | --uncommitted | --commit <SHA> | <topic>  [--review-profile <path>] [--issue-rounds N] [--max-rounds N] [--debate-low]  [<focus text> | --instructions <text|auto>]"
 ---
 
 # panel-review:start
@@ -71,7 +71,7 @@ The harness does **not** parse flags; you get the raw `$ARGUMENTS` string. Parse
 
 3. If **no scope flag was given AND** nothing remains after removing the flags → print exactly:
    ```
-   Specify a scope: --base <branch> | --uncommitted | --commit <SHA> | <question>  [--review-profile <path>] [--issue-rounds N] [--max-rounds N]  [<focus text> | --instructions <text|auto>]
+   Specify a scope: --base <branch> | --uncommitted | --commit <SHA> | <topic>  [--review-profile <path>] [--issue-rounds N] [--max-rounds N]  [<focus text> | --instructions <text|auto>]
    ```
    and stop. (`--uncommitted` legitimately leaves no positional text — that is a valid scope, not
    an error. Never guess a base branch.)
