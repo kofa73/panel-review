@@ -268,6 +268,45 @@ def check_tree(errors, root):
             )
 
     for location, text, required in (
+        ("rendered:round0", round0, "non-independent when it copies another seat's distinctive wording"),
+        ("rendered:round0", round0, "shared conclusion, location, or conventional phrase alone is not copying"),
+        ("rendered:round0", round0, "remove the other co-raiser(s) from `raised_by`"),
+        ("rendered:round0", round0, "origins/independence.round0.txt"),
+        ("rendered:round0", round0, "filtered Round-0 raiser list for each issue in `/tmp/$id/origins/round0.origins.txt`"),
+        ("rendered:debate", normalized(debate), "same-pass raisers and original finding text in `/tmp/$id/origins/epoch-$epoch.round-$round.origins.txt`"),
+        ("rendered:verdict", verdict, "report each dropped co-raiser"),
+        ("rendered:verdict", verdict, "as a blindness incident"),
+        ("rendered:verdict", verdict, "origin record from each issue's birth pass for its \"flagged by\" list"),
+        ("rendered:verdict", verdict, "for a Round-0-born issue, use the post-drop raiser list in `/tmp/$id/origins/round0.origins.txt` for both that list and the independent Round-0 support count"),
+        ("rendered:verdict", verdict, "for an issue born in debate, use its `epoch-<epoch>.round-<N>.origins.txt` record for \"flagged by\" and report independent Round-0 support as `0`"),
+        ("rendered:verdict", verdict, "never count dropped co-raisers or use cumulative `evaluated_by` for the Round-0 support count"),
+        ("README.md", normalized(readme), "a copied or near-verbatim finding counts once"),
+        ("README.md", normalized(readme), "the verdict's \"flagged by\" list uses each issue's birth-pass origins"),
+        ("README.md", normalized(readme), "debate-born issues have zero independent Round-0 support"),
+    ):
+        if required.lower() not in text.lower():
+            fail(
+                errors,
+                "round0-independence-contract",
+                location,
+                f"missing `{required}` behavior",
+            )
+
+    independence_notice = "A copied Round-0 finding counts once. The referee records any dropped co-raiser"
+    for location, text in (
+        ("prompts/blind_pass.tmpl", templates["round0"]),
+        ("prompts/debate.tmpl", templates["debate"]),
+        ("agents/panel-review-claude-seat.md", claude_seat),
+    ):
+        if independence_notice not in text:
+            fail(
+                errors,
+                "round0-independence-contract",
+                location,
+                "is missing the copied-finding consequence",
+            )
+
+    for location, text, required in (
         ("README.md", normalized(readme), "retry each non-complete batch once"),
         ("rendered:debate", normalized(debate), "Retry every non-complete batch once"),
     ):

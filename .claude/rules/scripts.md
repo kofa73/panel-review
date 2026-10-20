@@ -48,6 +48,13 @@ byte-exact.
   freezes that phase's configured panel and exact blind prompt, reconstructs and retains complete
   Round-0 raw/status/parsed checkpoints, records the initial/single-retry/later-resume attempts, and
   selectively prepares only originally configured, currently available down or incomplete seats.
+  Round-0 clustering remains referee judgment: only independent discoveries enter `raised_by`; the
+  referee records post-drop raisers in `origins/round0.origins.txt`, records copied co-raisers and
+  their text evidence in `origins/independence.round0.txt`, and reports each drop as a blindness
+  incident in Process notes. For a debate-born issue, it records the same-pass raisers and original
+  finding text in `origins/epoch-<epoch>.round-<N>.origins.txt`; the epoch prevents a later
+  continuation from overwriting the record. Verdict synthesis uses the issue's birth-pass origin
+  record for "Flagged by" and reports zero independent Round-0 support for debate-born issues.
   `verdict-input` returns that attempt history with final Round-0 seat statuses so Process notes
   survive resume and context compaction. It prepares the common one-batch debate with the same
   profile, collects compact engagement/guard status,

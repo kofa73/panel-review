@@ -109,6 +109,60 @@ class ContractConsistencyTest(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(invariant, result.stderr)
 
+    def test_round0_duplicate_consequence_stays_in_all_seat_instructions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_contract_tree(root)
+            prompt = root / "prompts/blind_pass.tmpl"
+            text = prompt.read_text(encoding="utf-8")
+            text = text.replace(
+                "A copied Round-0 finding counts once. The referee records any dropped co-raiser",
+                "A copied Round-0 finding is ignored. The referee records any dropped co-raiser",
+                1,
+            )
+            prompt.write_text(text, encoding="utf-8")
+
+            result = self.run_check(root)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("round0-independence-contract", result.stderr)
+
+    def test_round0_protocol_requires_the_referee_to_drop_copied_co_raisers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_contract_tree(root)
+            protocol = root / "skills/panel-review-for-agent/references/protocol.md"
+            text = protocol.read_text(encoding="utf-8")
+            text = text.replace(
+                "remove the other\n   co-raiser(s) from `raised_by`",
+                "keep every co-raiser in `raised_by`",
+                1,
+            )
+            protocol.write_text(text, encoding="utf-8")
+
+            result = self.run_check(root)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("round0-independence-contract", result.stderr)
+
+    def test_verdict_uses_birth_pass_origins_and_separates_round0_support(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_contract_tree(root)
+            protocol = root / "skills/panel-review-for-agent/references/protocol.md"
+            text = protocol.read_text(encoding="utf-8")
+            text = text.replace(
+                "Use the origin record from each issue's birth pass for its \"Flagged by\" list.",
+                "Use the Round-0 origins for every issue's \"Flagged by\" list.",
+                1,
+            )
+            protocol.write_text(text, encoding="utf-8")
+
+            result = self.run_check(root)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("round0-independence-contract", result.stderr)
+
     def test_direct_normal_debate_transaction_helpers_are_rejected(self):
         commands = (
             '"$SC/merge_payload" /tmp/base.json < /tmp/addendum.json',

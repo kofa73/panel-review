@@ -2,7 +2,7 @@
 
 Priority: 55
 
-Status: Pending
+Status: Completed
 
 Source: Maintainer proposal, 2026-08-16, from observed referee behavior in run
 `panel-20260816-080558-5ab680af` — the Gemini seat picked up Codex's in-tree scratch file and emitted
@@ -58,10 +58,31 @@ convergence on boilerplate.
 
 ## Verification
 
-- A fixture where two seats' Round-0 findings are byte-identical, asserting the resulting index has
-  that issue `open` with one raiser, not `accepted` with two.
-- The verdict template's "independent Round-0 support: {n}" reflects the post-drop count.
-- One real review after issue 24 lands, confirming the rule is not routinely triggered.
+- `./tests/run_tests.sh`: `PASS: 419`, `FAIL: 0`.
+- The byte-identical Round-0 fixture retains one raiser and asserts that `birth_index` emits an open
+  issue with `evaluated_by` containing only that raiser.
+- `scripts/check_contracts` and its 11 focused tests require the clustering rule, origin records,
+  birth-pass attribution, and post-drop Round-0 support count instructions.
+- A smoke review completed on 2026-10-20. It found no copied co-raiser; the report and
+  `round0.origins.txt` both recorded independent support as 3.
+
+## Resolution
+
+The Round-0 protocol now defines copied or near-verbatim text as non-independent, retains one copy,
+removes duplicate co-raisers from `raised_by`, and records the filtered raiser list in
+`/tmp/<id>/origins/round0.origins.txt`. It records each drop and its text evidence in
+`/tmp/<id>/origins/independence.round0.txt` for the verdict's Process notes. The issue remains in the
+index and is born `open` when one independent raiser remains. The verdict uses the filtered list for
+its Round-0 support count. Verdict attribution uses each issue's birth-pass origins. Debate-born
+issues use their same-pass raisers and original finding text from
+`epoch-<epoch>.round-<N>.origins.txt` and have zero independent Round-0 support. The epoch keeps a
+later continuation from overwriting an earlier birth-pass record. The optional similarity checker
+was left out per the issue-index triage; the referee keeps this semantic judgment.
+
+`check_contracts` and its tests pin the protocol, seat-facing consequence, and use of the post-drop
+origin list for support counts. The byte-identical fixture tests the resulting one-raiser birth
+state. The real smoke review found distinct wording and evidence across the three seats, so it did not
+exercise a co-raiser drop.
 
 ## Non-goals
 
@@ -86,9 +107,7 @@ copied another participant's finding". Two parts, split:
   the required blocks. This targets the confusion actually observed (the Gemini seat called the file
   "the checkpoint's JSON assertion"), and the self-report gives the referee a signal it otherwise only
   gets by byte-comparing raws after the fact. It is a convenience, not a control.
-- **Deferred to this issue:** any statement of the *consequence*. "Your work will be discarded"
-  overstates the remedy specified above (one copy kept, duplicate dropped from `raised_by`, issue born
-  `open`), describes a one-off improvisation rather than an implemented rule, and aims a deterrent at
-  a malicious seat — which the trust model says not to guard against. When the rule lands here, add a
-  sentence matching what the code then does, e.g. that duplicated text counts once and the run's
-  independence note records it.
+- **Resolved here:** the prompts and Claude seat now state the actual consequence: a copied Round-0
+  finding counts once, and the referee records a dropped co-raiser and its text evidence in Process
+  notes. This explains the rule without threatening a seat with a stronger consequence than the
+  protocol implements.

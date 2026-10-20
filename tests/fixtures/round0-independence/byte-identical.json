@@ -1,0 +1,22 @@
+{
+  "raw": {
+    "codex": "{\"claim\":\"The sub declaration is missing a colon\",\"location\":\"calc.py:5\",\"evidence_pro\":[{\"location\":\"calc.py:5\",\"assertion\":\"def sub(a, b) has no trailing colon\"}]}",
+    "gemini": "{\"claim\":\"The sub declaration is missing a colon\",\"location\":\"calc.py:5\",\"evidence_pro\":[{\"location\":\"calc.py:5\",\"assertion\":\"def sub(a, b) has no trailing colon\"}]}"
+  },
+  "issues": [
+    {
+      "id": "i1",
+      "claim": "The sub declaration is missing a colon",
+      "location": "calc.py:5",
+      "category": "correctness",
+      "severity": "high",
+      "evidence_pro": [
+        {
+          "location": "calc.py:5",
+          "assertion": "def sub(a, b) has no trailing colon"
+        }
+      ],
+      "raised_by": ["codex"]
+    }
+  ]
+}

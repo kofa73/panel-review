@@ -73,7 +73,8 @@ Each exits `3` when its CLI is not installed, which the suite reports as a skip.
   flagged pre-emit while domain vocabulary passes; file input; invalid tags and missing arguments.
 - **instruction contracts** (`test_contract_consistency.py`): the live tree passes the ownership
   checker; known barrier/path/return/panel/health/delivery/stance drift is reintroduced one case at a
-  time and must fail with the invariant name; direct normal-debate transaction helpers are rejected.
+  time and must fail with the invariant name; the Round-0 copied-finding consequence and referee
+  co-raiser drop are pinned; direct normal-debate transaction helpers are rejected.
 - **decide_round** (`test_decide_round.py`): round-1/round-2 transitions;
   effective-value enum convergence (stays-open, ceiling→detail_contested,
   true-unanimity→adopt); split support/reject cannot adopt a unilateral revision;
@@ -126,7 +127,8 @@ Each exits `3` when its CLI is not installed, which the suite reports as a skip.
   `blockReadsOutsideWorkingDirectories` without a persistent `/tmp` grant or the explicit
   `--add-dir` launch marker.
 - **birth_index**: birth-unanimity state/flags/coverage (unanimous→accepted/peer,
-  full-panel→fully_vetted, divergence→detail_contested, partial/single→open),
+  full-panel→fully_vetted, divergence→detail_contested, partial/single→open; the byte-identical
+  Round-0 fixture keeps one raiser and produces an open issue),
   `evaluated_by` from raisers, and validation rejects (style severity, unknown
   raiser, duplicate id, empty evidence → exit 3); output installs via `index put`.
 - **run_seat**: dispatch + parse status (mock CLI on `PATH`), a single dispatch —

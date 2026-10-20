@@ -174,9 +174,15 @@ A **point**: `{"location":"file:line"|["file:line",...]|"analysis","assertion":"
   optional. `evidence`/`new_evidence` are optional. It is a stream of objects, **not** an array — read it line-by-line (`while read` /
   `[json.loads(l) for l in f]`), the way `decide_round` does; `jq '.[]'` over it is wrong.
 
-**Origins are yours alone.** Keep origin seats, Round-0 agreement count, original raw wording, and
-per-round stances in `/tmp/<id>/origins/` (write them with any atomic means, e.g. `index`-style temp
-files or `project_card`'s sibling `write_card`). The per-round field-mutation audit trail in
+**Origins are yours alone.** Keep each finding's origin and original wording, the post-drop
+independent raisers for each Round-0 issue, and per-round stances in `/tmp/<id>/origins/` (write them
+with any atomic means, e.g. `index`-style temp files or `project_card`'s sibling `write_card`). Store
+the filtered Round-0 raiser list in `round0.origins.txt`; store dropped co-raisers and their text
+evidence in `independence.round0.txt`. For each debate-born issue, store its same-pass raisers and
+original finding text in `epoch-<epoch>.round-<N>.origins.txt`, keyed by issue id. The epoch keeps a
+later continuation from overwriting an earlier birth-pass record. Use the filtered Round-0 list only
+for independent Round-0 support counts.
+The per-round field-mutation audit trail in
 `/tmp/<id>/audit/round-<N>.md` is written **for you** by `index commit-sweep` as it applies each
 round — you do not write it. The `audit/` trail is for human inspection only; nothing reads it back.
 **None of this ever enters a card or a seat prompt.** `project_card` only renders the
@@ -291,12 +297,24 @@ is settled may you continue with clustering below.
      non-contradictory; if they conflict (e.g. `x>0` vs `x<0`), keep the points **separate**.
    - **Different call sites / locations of the same *pattern* stay distinct** (three sites passing
      NULL = three points, not one). **When unsure, do not merge.**
-   - **Drop nothing and truncate nothing.** Show all materially-different points, both sides.
+   - **Keep every materially-different point and truncate nothing.** Show both sides.
    - This is also the test for folding a later `new_findings` item into an existing issue.
 
-2. **Emit your clustered issues; `birth_index` assigns birth state.** Your merge (step 1) is the
-   judgment; the *birth state* it implies is mechanical, so build a finding-to-issue **map** and hand
-   it to `birth_index` rather than computing states by hand. For each clustered issue write one JSON
+2. **Count only independent discoveries in `raised_by`.** You alone can compare the raw origins.
+   Treat a finding as non-independent when it copies another seat's distinctive wording or evidence
+   point order. Byte-identical or near-verbatim spans are strong signals. A shared conclusion,
+   location, or conventional phrase alone is not copying; preserve independently expressed
+   convergence. When the text shows a copied finding, keep one copy in the issue and remove the other
+   co-raiser(s) from `raised_by`. Keep materially distinct evidence points. If one independent
+   raiser remains, `birth_index` creates the issue as `open`, so it enters debate. Store the filtered
+   Round-0 raiser list for each issue in `/tmp/$id/origins/round0.origins.txt`. Record each drop, the
+   retained and dropped seats, and the concrete text evidence in
+   `/tmp/$id/origins/independence.round0.txt`. A drop is a blindness incident.
+
+   **Emit your clustered issues; `birth_index` assigns birth state.** Your merge (step 1) and the
+   independence judgment above are the semantic decisions; the *birth state* they imply is
+   mechanical, so build a finding-to-issue **map** and hand it to `birth_index` rather than computing
+   states by hand. For each clustered issue write one JSON
    object: `claim`, `location`, `category`, `severity`, `evidence_pro` (the merged points), the
    `raised_by` list (the available seats that independently raised it), and `detail_divergence:true`
    if the raisers agreed it exists but differed on severity/location. Assign ids `i1,i2,…`. **Drop
@@ -618,7 +636,10 @@ the common one-batch shape.
      it `open` with `peer_reviewed=false`. In the same addendum, set `evaluated_by[<new id>]` to all
      same-pass raisers, sorted and unique — including the single raiser of a non-unanimous open issue.
      `index commit-sweep` permits that coverage entry to target its same-transaction `add_issues`
-     record while all other mutation types remain existing-only.
+     record while all other mutation types remain existing-only. Record each new issue's same-pass
+     raisers and original finding text in
+     `/tmp/$id/origins/epoch-$epoch.round-$round.origins.txt`, keyed by issue id. This birth-pass
+     record supplies the issue's "Flagged by" list in the verdict.
    - **Addendum shape.** The addendum is payload-shaped for `round commit --addendum`, using only
      these consumed top-level keys: `bump`, `set_state`, `set_flag`, `revise`, `add_evidence`,
      `add_issues`, and `evaluated_by`. Unknown keys are rejected so a typo cannot silently drop an
@@ -796,6 +817,12 @@ summary to report every retry and final down-seat result in Process notes. Prese
 surfacing origins only here. Severity → headings: `critical`/`high` → **Critical**, `medium` →
 **Important**, `low` → **Minor**, `style` → **Style notes**.
 
+Use the origin record from each issue's birth pass for its "Flagged by" list. For a Round-0-born
+issue, use the post-drop raiser list in `/tmp/$id/origins/round0.origins.txt` for both that list and
+the independent Round-0 support count. For an issue born in debate, use its `epoch-<epoch>.round-<N>.origins.txt`
+record for "Flagged by" and report independent Round-0 support as `0`. Never count dropped co-raisers
+or use cumulative `evaluated_by` for the Round-0 support count.
+
 ```markdown
 ## Panel Review — {scope}
 **Seats:** {seats that engaged — e.g. Claude + Codex (GPT) + Gemini}{" — {down seat(s)} unavailable" if any peer was down}
@@ -830,6 +857,8 @@ surfacing origins only here. Severity → headings: `critical`/`high` → **Crit
 
 ### Process notes
 - independent Round-0 support per accepted issue; notable field mutations ("high → low on agreement")
+- if `/tmp/$id/origins/independence.round0.txt` is non-empty, report each dropped co-raiser and
+  its text evidence as a blindness incident
 - seat health: timeouts, retries, or any configured seat down; any blind-leak-check result
 - **Codex seat model:** when `seat_models.codex` is present, state its `model`/`effort` verbatim
   ("Codex seat: `gpt-5.6-luna`, effort `max`"). This is what Codex reported binding, not what the

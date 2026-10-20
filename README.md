@@ -101,7 +101,9 @@ their findings, and drives them to a verdict. The review proceeds in two phases:
 
 1. **Round 0 (the blind pass).** Each seat reviews the scope on its own, with no knowledge of the
    others. A seat that produces no usable response is retried once before the pass degrades. The
-   referee then merges the independent finding sets into a single list of **issues**.
+   referee then merges the independent finding sets into a single list of **issues**. Only
+   independent discoveries count in `raised_by`: a copied or near-verbatim finding counts once. The
+   referee logs any dropped co-raiser and its text evidence as a blindness incident.
 2. **Debate.** For each issue, the referee shows every seat both sides of the argument and asks it
    to take a **stance** (support / reject). This repeats over a bounded number of rounds.
 
@@ -412,8 +414,9 @@ Blindness is the whole point, and two choices enforce it:
   alone knows each point's **origins**; the **cards** the seats read carry none. A card is the
   Markdown rendering of an issue with those origins stripped out.
 - **The Claude seat is a cold subagent, never forked.** It is spawned fresh each pass with no
-  memory. A fork would inherit the referee's context and defeat blindness. So all three seats are
-  genuinely independent and can fail independently.
+  memory. A fork would inherit the referee's context and defeat blindness. Each seat starts Round 0
+  independently, but accidental exposure can still happen. The referee checks origins for copied
+  text and counts a non-independent finding once. Shared conclusions alone do not count as copying.
 
 Keeping promoted text blind is then **referee judgment with a narrow scripted backstop**. The
 discriminator is *attribution*, not vocabulary: "the Claude seat's prompt anchors the wrong path" is
@@ -465,6 +468,9 @@ settle an issue), the state advances:
   the evidence materially conflicts with that outcome and debate budget remains. At a limit, the
   forced terminal human handoff still applies instead of leaving the issue open
 
+The verdict's "Flagged by" list uses each issue's birth-pass origins. Debate-born issues have zero
+independent Round-0 support.
+
 Beyond its state, each issue record also carries three boolean **flags**, two **counters**, and its
 **evidence**:
 
@@ -475,8 +481,9 @@ Beyond its state, each issue record also carries three boolean **flags**, two **
   (a revision number bumped on every change, used to detect a stale projected card). Neither is the
   stance tally: the 2:1 vote is never stored on the issue, only in `origins/`.
 - **evidence** — the `pro` and `contra` points the seats raised, merged and deduplicated (only points
-  at the same location and mechanism are merged). Evidence **accumulates unconditionally** every
-  round and is carried to the verdict; nothing a seat raised is dropped.
+  at the same location and mechanism are merged). Materially distinct evidence accumulates every
+  round and is carried to the verdict. A copied Round-0 finding is represented once, while its issue
+  remains open for debate when only one independent raiser remains.
 
 ### The wrapper scripts
 
@@ -522,7 +529,7 @@ These hooks provide bounded runtime enforcement, not a security boundary.
 | `diff_hash` | Stable hash of the resolved diff, for the manifest and the resume/diverged check |
 | `assemble` | Splice scope + a diff **reference** (or card paths) + the rendered seat contract into a prompt template without an LLM retyping them |
 | `seat_contract.py` | Authoritative seat-output contract: defines fields, examples, stance values, phase-required blocks/cardinality, normalization, and renders panel-size-correct Round-0/debate instructions. Its Python interface is shared by runtime validators; its `render` command supports exceptional manual prompt assembly |
-| `check_contracts` | Validate the ownership map, every rendered panel-size/phase variant, runtime-valid examples, merge-payload rejection behavior, the prose-first Gemini prompt prefix, repo_guard's index and legacy-baseline recovery contract, and forbidden legacy wording; failures name the violated invariant and location |
+| `check_contracts` | Validate the ownership map, every rendered panel-size/phase variant, runtime-valid examples, birth-pass attribution and Round-0 independence guidance, merge-payload rejection behavior, the prose-first Gemini prompt prefix, repo_guard's index and legacy-baseline recovery contract, and forbidden legacy wording; failures name the violated invariant and location |
 | `resolve_instructions` | Resolve `manifest.instructions` to the seat-facing text for the two deterministic cases (verbatim author text, or the "(none …)" line); returns a compose **sentinel** (exit 3) for `auto`, the only case that needs the referee to write neutral context |
 | `stage_review_profile` | Resolve and validate one built-in or external profile source, atomically snapshot its exact bytes, and return its source-path/size/SHA-256 metadata; the source is never reloaded after run creation |
 | `run_codex` | The **only** way to call the Codex seat — defaults `--profile panel-review` (auto-creates the profile from a shipped default) and runs with the sandbox **bypassed** (`--dangerously-bypass-approvals-and-sandbox`, the only mode where Codex's MCP/tilth runs and it can write scratch; integrity is enforced by `repo_guard`, not this sandbox). Runs in Codex's human output mode, which reports the model that actually bound; with `CODEX_SEAT_MODEL_FILE` set it records that binding (the profile pin is outranked by a reviewed repository's own Codex config) |
@@ -582,7 +589,7 @@ derived, regenerable cache; state is never inferred from them.
 | `/tmp/<ID>/codex-model.txt` | the model and reasoning effort the Codex seat **actually bound**, as Codex reported them on its own config summary — written by `run_codex` (the barrier supplies the path), surfaced by `round verdict-input` as `seat_models.codex`, and stated in the verdict's Process notes. The profile pin is only what was asked for; a reviewed repository's own `.codex/config.toml` outranks it (referee only) |
 | `/tmp/<ID>/agy-model.txt` | the label agy logged as **bound** (`model=`) on the last successful Gemini pass, next to the pin that pass requested (`requested=`) — written by `run_agy` (the barrier supplies the path), surfaced by `round verdict-input` as `seat_models.gemini`, and stated in the verdict's Process notes. Best effort: it reads an internal agy log line, so nothing depends on it (referee only) |
 | `/tmp/<ID>/agy-logs/` | agy's own CLI log for each Gemini attempt (`run_agy` passes `--log-file` here when agy offers it). agy then writes nothing to its default log directory, so this is where a failed Gemini pass is diagnosed. `run_agy` reads the current attempt's log once, right after it succeeds, to write `agy-model.txt`; after that the logs are **for inspection only — never read back by the process**, and are removed with the run directory unless `PANEL_REVIEW_KEEP_TMP=true` |
-| `/tmp/<ID>/origins/` | who raised each point, its original wording, and the per-round stances — the data the blind cards omit; **read back** by the referee to track review coverage and to attribute findings in the verdict (referee only) |
+| `/tmp/<ID>/origins/` | who raised each point, its original wording, and the per-round stances — the data the blind cards omit; `round0.origins.txt` records post-drop Round-0 raisers, `epoch-<epoch>.round-<N>.origins.txt` records debate-born issues' same-pass raisers and original finding text, and `independence.round0.txt` records dropped co-raisers and their text evidence; the birth-pass record supplies "Flagged by", while only Round-0 origins supply independent Round-0 support; **read back** by the referee (referee only) |
 | `/tmp/<ID>/audit/` | `round-<N>.md` — a human-readable trail of the issue-field changes applied in each debate round (state, flag, severity/claim/location revisions, evidence, new issues), written mechanically by `index commit-sweep`; **for inspection only — never read back by the process** |
 | `/tmp/<ID>/epochs/epoch-<n>/` | a snapshot of a finished debate cycle, taken by `reopen` when `panel-review:continue` starts the next cycle. Because per-round artifacts are named `round<N>`/`round-<N>` with **no epoch component**, the new cycle's round 1 overwrites the previous cycle's round 1 in place; this archive preserves the prior cycle's raws/prompts/sweeps/audit/index/verdict. **For inspection only — never read back by the process** |
 

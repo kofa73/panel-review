@@ -657,6 +657,15 @@ assert_eq "evaluated_by = the raisers (sorted unique)" '["claude","codex","gemin
 assert_eq "i2 evaluated_by tracks 2 raisers"            '["claude","codex"]'         "$(jq -c '.evaluated_by.i2' "/tmp/$id/index.json")"
 assert_eq "index installs cleanly (gate-status reads it)" '{"open":2,"low_only":false}' "$("$SC/index" gate-status "$id")"
 
+section "birth_index — a filtered Round-0 co-raiser does not create birth consensus"
+id="$PREFIX-birth-copy"; rm -rf "/tmp/$id"; mkdir -p "/tmp/$id"
+fixture="$root/tests/fixtures/round0-independence/byte-identical.json"
+assert_eq "duplicate fixture findings are byte-identical" 'true' "$(jq -r '.raw.codex == .raw.gemini' "$fixture")"
+assert_eq "expected issue map keeps one independent raiser" '["codex"]' "$(jq -c '.issues[0].raised_by' "$fixture")"
+jq -c '.issues' "$fixture" > "$TMP/birth.copy.specs.json"
+"$SC/birth_index" --available "codex gemini" --configured "codex gemini" < "$TMP/birth.copy.specs.json" > "/tmp/$id/index.json" 2>/dev/null; assert_exit "birth_index byte-identical fixture -> 0" 0 "$?"
+assert_eq "filtered duplicate co-raiser -> open with one origin" 'open|false|["codex"]' "$(jq -r '(.issues[]|select(.id=="i1")|"\(.state)|\(.peer_reviewed)") + "|" + (.evaluated_by.i1|tojson)' "/tmp/$id/index.json")"
+
 section "birth_index — degraded panel: unanimous-but-down seat is not fully_vetted"
 id="$PREFIX-birth-down"; rm -rf "/tmp/$id"; mkdir -p "/tmp/$id"
 echo '[{"id":"i1","claim":"c","location":"a:1","category":"correctness","severity":"high","evidence_pro":[{"location":"a:1","assertion":"x"}],"raised_by":["codex","claude"]}]' \
