@@ -107,8 +107,8 @@ byte-exact.
   runtime parsing. Use its `render` command only for exceptional manual prompt assembly; normal
   prompt preparation goes through `round`. Do not add a second prompt schema or stance enum.
 - `check_contracts` — the repository-level consistency gate for the ownership map in `CONTRACTS.md`,
-  every phase/panel rendering, runtime-valid examples, and narrow forbidden legacy wording checks.
-  Failures name the invariant and location.
+  every phase/panel rendering, runtime-valid examples, README/protocol's current-round settlement
+  limit, and narrow forbidden legacy wording checks. Failures name the invariant and location.
 - `check_draft` — the **seat-facing** pre-emit validator (spliced into prompts as `{{CHECK}}`; the
   referee never calls it). Wrapper over `parse_block --diagnose` and the shared seat-contract
   normalizers — don't re-implement the finding/stance checks. Reports rejected items and retained

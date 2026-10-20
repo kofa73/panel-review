@@ -2,12 +2,19 @@
 
 Priority: 22
 
-Status: Pending
+Status: Completed
 
 Source: Claude Code documentation review (2.1.215 → 2.1.222), 2026-08-05; extended with the
 2.1.223 → 2.1.233 review, 2026-08-15 (see section 5)
 
 Triage: ready-for-agent
+
+## Resolution
+
+Completed 2026-10-20. README now documents the nested-subagent floor, depth setting, and model-pin
+override; AGENTS.md records thinking inheritance and the skill-preload constraint. The existing
+context-cost baseline is attributed to the July 2026 `opus` alias with its telemetry limitation.
+The TaskOutput note below is corrected for Claude Code 2.1.277.
 
 ## Problem
 
@@ -147,10 +154,10 @@ line in the same spirit as `issues/62`, or at minimum a README note.
 record: the referee is spawned once and runs for the whole review, so a 1-hour subagent TTL changes
 the cost profile of a long panel. Measure before adopting — 1-hour cache *writes* bill higher.
 
-**Output-size settings replaced the env vars.** `bashOutputMaxChars` (up to 128K) supersedes
-`BASH_MAX_OUTPUT_LENGTH`, and `taskOutputMaxChars` supersedes `TASK_MAX_OUTPUT_LENGTH`; when the
-setting is present the variable is ignored. Any guidance the panel gives about seat or barrier
-output limits should name the settings first.
+**Output-size settings replaced some env vars.** `bashOutputMaxChars` (up to 128K) supersedes
+`BASH_MAX_OUTPUT_LENGTH`. Claude Code removed `TaskOutput` in 2.1.277, so `taskOutputMaxChars` and
+`TASK_MAX_OUTPUT_LENGTH` no longer affect output. Any guidance the panel gives about Bash output
+limits should name `bashOutputMaxChars` first.
 
 **`maxTurns` returns are now marked partial (2.1.246+).** A subagent that hits its `maxTurns` limit
 returns its output "marked as partial, with a hint to continue it via `SendMessage`", instead of

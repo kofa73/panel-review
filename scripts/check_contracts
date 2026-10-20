@@ -237,6 +237,18 @@ def check_tree(errors, root):
         for name in ("start", "resume", "continue")
     }
     readme = read(root, "README.md")
+    settlement_limit = (
+        "Settlement uses only stances from seats engaged in the current round. It does not guarantee "
+        "correctness, and a seat's earlier dissent does not block later settlement when that seat is absent."
+    )
+    for location, text in (("README.md", readme), ("protocol.md", protocol)):
+        if settlement_limit not in normalized(text):
+            fail(
+                errors,
+                "round-consensus-limit",
+                location,
+                "does not state the current-round consensus and correctness limit",
+            )
     if "agy expands leading slash commands in print mode" not in readme.lower():
         fail(
             errors,

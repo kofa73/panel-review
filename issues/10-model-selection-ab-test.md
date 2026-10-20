@@ -31,3 +31,10 @@ context architecture and controller model together would make the result uninter
 - Require comparable quality and reliability before considering cost savings.
 
 No model change is warranted without that evidence.
+
+## Existing benchmark model
+
+The context-cost run dated 2026-07-12 used the `model: opus` alias before Claude Code 2.1.219 made
+Opus 5 the default on 2026-07-24. Release chronology attributes it to Opus 4.8, not Opus 5 or 5.5.
+The run manifest does not record the resolved Claude model, so this attribution follows the alias
+timeline and is not runtime telemetry.

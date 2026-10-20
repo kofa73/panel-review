@@ -699,6 +699,9 @@ stance). `support` affirms issue existence and may independently propose revised
 script decides every row mechanically except the two prose calls it cannot make — synthesizing a
 merged `claim`, and clustering new findings — which it hands to you (step 10).
 
+Settlement uses only stances from seats engaged in the current round. It does not guarantee
+correctness, and a seat's earlier dissent does not block later settlement when that seat is absent.
+
 | Condition | Result |
 |-----------|--------|
 | New issue, **all available seats (≥2)** raised it in one pass | **accepted** (terminal — birth) |

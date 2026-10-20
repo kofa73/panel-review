@@ -53,6 +53,26 @@ class ContractConsistencyTest(unittest.TestCase):
         shutil.copy2(ROOT / "CONTRACTS.md", root / "CONTRACTS.md")
         shutil.copy2(ROOT / "README.md", root / "README.md")
 
+    def test_round_consensus_limit_is_required_in_readme_and_protocol(self):
+        for relative_path in (
+            "README.md",
+            "skills/panel-review-for-agent/references/protocol.md",
+        ):
+            with self.subTest(path=relative_path), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.copy_contract_tree(root)
+                target = root / relative_path
+                original = target.read_text(encoding="utf-8")
+                start = original.index("Settlement uses only stances from")
+                end = original.index("that seat is absent.", start) + len("that seat is absent.")
+                revised = original[:start] + original[end:]
+                target.write_text(revised, encoding="utf-8")
+
+                result = self.run_check(root)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("round-consensus-limit", result.stderr)
+
     def test_each_known_drift_is_reported_by_invariant_name(self):
         cases = [
             (

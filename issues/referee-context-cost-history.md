@@ -22,6 +22,11 @@ used about 71% of a five-hour Claude window in Round 0 and one debate round. The
 normally: four subagents were spawned and the repository guard remained clean. The cost combined
 inherent deep review of large source files with avoidable growth in the long-lived referee context.
 
+The run's `model: opus` pin dates from 2026-07-12. Claude Code 2.1.219 made Opus 5 the default Opus
+model on 2026-07-24, so release chronology attributes this baseline to Opus 4.8. The run manifest
+does not record the resolved Claude model; this is an alias-based attribution, not captured runtime
+model telemetry.
+
 The referee was the largest consumer in that run: approximately 2.82 million weighted tokens, 52% of
 the run, 86 turns, and a peak context near 253K. Repeated cache reads made retained context expensive
 across every later turn.

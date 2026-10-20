@@ -9,8 +9,16 @@ Built on the original version: https://github.com/jcputney/agent-peer-review.
 
 > **Requirements & status.** Use the **latest version of Claude Code** — panel-review spawns nested
 > subagents (the referee spawns each seat) and relies on recent plugin/subagent behavior, so older
-> versions may misbehave. The project is **work-in-progress**: as both this code and Claude Code
+> versions may misbehave. Use Claude Code 2.1.219 or later for the default nested-subagent depth of
+> three; 2.1.217 and 2.1.218 default to one and cannot run panel-review without an override. In every
+> version, `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH` must allow at least two layers; a value of `1`
+> prevents the referee from spawning its seats and CLI barrier. The project is **work-in-progress**:
+> as both this code and Claude Code
 > evolve, you may hit rough edges. Update Claude Code (`claude update`) before reporting an issue.
+> The Claude agents pin `model: opus`, but `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` overrides those pins
+> and applies `CLAUDE_CODE_SUBAGENT_MODEL`; when that variable is unset or `inherit`, it applies the
+> main session's model. Organization restrictions can prevent the pin from binding, in which case
+> Claude Code warns and uses an allowed model or falls back to the parent model.
 > Since Claude Code 2.1.284, sessions without an explicit permission mode start in `auto` mode
 > outside HIPAA organizations. Panel-review supports `auto`: a `PreToolUse` hook checks each gated
 > agent's `SubagentHandback` status, and `SubagentStop` accepts empty or free-form closing text.
@@ -109,8 +117,12 @@ their findings, and drives them to a verdict. The review proceeds in two phases:
 
 Three rules govern how it treats the result:
 
-- **Unanimity or the human.** An issue is settled only when the seats are unanimous. Anything
-  contested goes to you — there is no majority vote and no referee fact-checking inside the loop.
+- **Unanimity or the human.** In debate, an issue is accepted or rejected only when every seat
+  engaged in that round agrees, with at least two seats engaged. Settlement uses only stances from
+  seats engaged in the current round. It does not guarantee correctness, and a seat's earlier
+  dissent does not block later settlement when that seat is absent. Mixed stances remain open until
+  a round limit, then become contested. There is no majority vote or referee fact-checking inside
+  the loop.
 - **Nothing is hidden.** Every issue is shown, including rejected ones, with the reason it was
   dropped.
 - **Graceful degradation.** Either peer seat — Codex or Gemini — may be missing or fail mid-review.
@@ -443,8 +455,8 @@ the convergence rules below.
 An issue occupies one of five **states**:
 
 - **open** — not yet settled; carries into the next round.
-- **accepted** — settled: every engaged seat supported it.
-- **rejected** — settled: every engaged seat rejected it.
+- **accepted** — settled: every seat engaged in the settling round supported it (at least two).
+- **rejected** — settled: every seat engaged in the settling round rejected it (at least two).
 - **contested** — still split at the round limit, but reviewed (≥1 round with the 2-seat quorum) — handed to you.
 - **unresolved** — unsettled at the round limit and never reviewed (the 2-seat quorum was never met) — handed to you.
 

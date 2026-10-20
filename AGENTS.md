@@ -147,6 +147,10 @@ workdir holds exactly one review; concurrent runs against the same workdir are u
 
 ## Non-obvious facts (hard-won)
 
+- **Claude seat thinking follows the session.** Since Claude Code 2.1.198, a subagent inherits the
+  main conversation's extended-thinking setting. There is no per-subagent switch for thinking on or
+  off; the Claude seat's pinned `effort: xhigh` does not control that toggle. The same review can
+  therefore use different Claude-seat thinking settings across sessions.
 - **Seat working directory.** The Claude seat (a referee subagent) and the Codex seat (`run_codex` →
   `codex exec`) both inherit the referee's cwd = workdir (repo root). **agy is the exception**: its
   tools run in its own managed sandbox (`~/.gemini/antigravity-cli/scratch`), and it infers the repo
@@ -213,6 +217,8 @@ workdir holds exactly one review; concurrent runs against the same workdir are u
 - `${CLAUDE_PLUGIN_ROOT}` in SKILL.md files is substituted at skill-load time; it is **not** a runtime
   shell env var (empty in the shell). Keep the literal verbatim. Scripts find their own dir via
   `here="$(cd "$(dirname "$0")" && pwd)"`.
+- `disable-model-invocation: true` prevents a skill from being preloaded into a subagent. For a
+  skill intended only for agent preloading, use `user-invocable: false` instead.
 - Bash scripts use `set -euo pipefail`; both bash and Python scripts validate run IDs through
   `panel_require_id` before touching any filesystem path.
 - Never pipe a command that can fail into one that succeeds on empty input (e.g. `resolve_diff |
