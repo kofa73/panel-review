@@ -1,4 +1,4 @@
-# Re-verify the two agy workarounds against agy 1.1.13
+# Re-verify the two agy workarounds on the current CLI
 
 Priority: 27
 
@@ -10,10 +10,11 @@ Triage: ready-for-human
 
 ## Problem
 
-Two of the "Non-obvious facts (hard-won)" in `AGENTS.md` describe agy behavior that agy has since
-changed. Each fact carries a workaround the plugin pays for on every run, and neither has been
-re-measured on 1.1.13. Nothing is known to be broken — the risk is the opposite: carrying
-complexity, and prompt budget, for defects that may be fixed.
+Two facts in `AGENTS.md` describe agy behavior that may have changed. Each fact carries a
+workaround the plugin pays for on every run. A short probe touched the repo-root question, but the
+realistic-size root comparison and >99 KB prompt replay remain incomplete on the current CLI.
+Nothing is known to be broken. The risk is carrying complexity and prompt budget for defects that may
+be fixed.
 
 ### 1. The repo-root guess (agy runs tools in its own sandbox)
 
@@ -44,8 +45,8 @@ hypothesis, not a finding — the original observation was correlational too.
 
 ## Expected outcome
 
-A dated re-measurement of both facts on 1.1.13, and `AGENTS.md` updated to say what is true now,
-keeping the historical observation and its version. Specifically:
+A dated re-measurement of both facts on the installed agy, and `AGENTS.md` updated to say what is true
+now while keeping the historical observations and their versions. Specifically:
 
 - Fact 1: run a seat pass with the current prompt anchor and one without it, at a realistic prompt
   size, and record where agy's tools actually resolved. Update the fact; decide `--add-dir`
@@ -73,6 +74,21 @@ does not exist in 1.1.13 (usage error, exit 1). `scripts/run_agy`'s header alrea
 - Do not change `run_agy`'s invocation form or model pins here (issues 20 and 21).
 - Do not raise the prompt-size budget as part of this issue.
 
+## Open questions for the owner
+
+1. Can the remaining large-prompt measurements run in a later live-test slot, after issue 63 selects
+   the seat pins?
+   - (a) **Recommended:** compare the prompt with and without the absolute path at realistic size,
+     then replay the historical >99 KB prompt. Coordinate with issues 23 and 60 so one setup also
+     measures `--add-dir` and the worktree location.
+   - (b) Defer those calls and keep the issue Pending. This leaves the current safeguards in place
+     but does not answer either behavioral question.
+2. How should the required real-review check proceed under the no-`git checkout` rule?
+   - (a) **Recommended:** provide a smoke script that creates its test branch without `git checkout`,
+     then run it with a Gemini seat engaged. The current `/tmp/panel-issue-run/smoke.sh` runs
+     `git checkout -q -b bug`; a compliant script would meet the issue's verification requirement.
+   - (b) Waive the real-review check for this documentation-only update and leave this issue Pending.
+
 ## Comments
 
 ### 2026-09-05 — the version this issue names is four releases stale
@@ -91,3 +107,20 @@ question this issue asks about the anchor, one level down. Take the two measurem
 both are live; they share a setup.
 
 Nothing here changes this issue's scope or its non-goals — only the version to measure on.
+
+### 2026-10-20 — small root probe on agy 1.4.3
+
+`agy --version` reported **1.4.3**. `agy models` listed `Gemini 3.8 Flash (Low)`, used for one
+short print-mode probe. The prompt contained no repository path:
+
+```sh
+printf '%s' 'Use a terminal tool to report the current working directory and the output of git rev-parse --show-toplevel from that same directory. Do not open or change files. Return only those two values.' | timeout 30 agy --print-timeout=20s --model 'Gemini 3.8 Flash (Low)' --dangerously-skip-permissions
+```
+
+The command exited 0 and returned `/workspace/panel-review` for both values. This is a small probe,
+not a seat pass or a realistic-size comparison. The current CLI's anchored-versus-unanchored root
+behavior at realistic prompt size remains unmeasured. No >99 KB prompt was sent, so the truncation
+change and fenced-block behavior also remain unmeasured. Keep both safeguards in place.
+
+The real-review verification remains open. The provided smoke script invokes `git checkout -q -b bug`,
+which the worker brief prohibits. This update changes documentation only; no panel review was run.

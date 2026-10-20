@@ -146,11 +146,13 @@ workdir holds exactly one review; concurrent runs against the same workdir are u
 ## Non-obvious facts (hard-won)
 
 - **Seat working directory.** The Claude seat (a referee subagent) and the Codex seat (`run_codex` →
-  `codex exec`) both inherit the referee's cwd = workdir (repo root). **agy is the exception**: it runs
-  its tools inside its own managed sandbox (`~/.gemini/antigravity-cli/scratch`) and *guesses* the repo
-  root each run — `cd`-ing the wrapper cannot move it. So an agy prompt needs an **absolute** path
-  anchor (and ideally an explicit "set the tool `cwd` to `<workdir>`" directive) or it can drift
-  (observed: anchored `/home/developer` instead of the workdir under a very large prompt).
+  `codex exec`) both inherit the referee's cwd = workdir (repo root). **agy is the exception**: its
+  tools run in its own managed sandbox (`~/.gemini/antigravity-cli/scratch`), and it infers the repo
+  root. A short, unanchored print-mode probe on agy 1.4.3, launched from `/workspace/panel-review`,
+  reported that path for both `pwd` and `git rev-parse --show-toplevel` (2026-10-20). An earlier
+  large-prompt probe resolved to `/home/developer`; that case has not been repeated on 1.4.3. Keep
+  the absolute workdir path and explicit tool `cwd` directive until the realistic-size comparison is
+  done.
 - **The Codex model pin is not authoritative.** `run_codex` pins the seat with
   `--profile panel-review`, but Codex layers **cwd** (`$PWD/config.toml`), **tree**
   (`.codex/config.toml` in `$PWD` and its ancestors) and **repo**
@@ -198,10 +200,11 @@ workdir holds exactly one review; concurrent runs against the same workdir are u
   to the canonical `.salvaged` side file and installs it through `round salvage-debate`, so the
   original raw is never overwritten. A failed Claude delivery is retried or dropped instead because
   `write_seat_raw` validates the complete response before installation.
-- **Prompt size correlates with agy prose-not-JSONL failures.** Empirically, `round0.prompt` >~99 KB
-  (a huge inlined diff diluting attention, contract buried at the end) yielded prose-without-fence from
-  the Gemini seat; ≤~87 KB yielded valid blocks. Not code-proven, but keep prompts lean and the output
-  contract salient.
+- **Prompt size and Gemini block shape.** Historical measurements found that `round0.prompt` >~99 KB
+  yielded prose without a fence, while prompts ≤~87 KB yielded valid blocks. The agy 1.1.13
+  trajectory-truncation fix is a plausible explanation, but the >99 KB prompt has not been replayed
+  on agy 1.4.3. Keep prompts lean and the output contract salient until that check is done; see
+  `issues/27-recheck-agy-workarounds-on-1-1-13.md`.
 
 ## Conventions
 

@@ -398,8 +398,9 @@ the common one-batch shape.
 2. `epoch="$(jq -r '.run_epoch // 0' "/tmp/$id/index.json")"`
 3. `"$SC/sweep" begin "$id" $round "$epoch"` and `"$SC/regen_cards" --id "$id" --workdir "$workdir"` (cards
    reflect all accumulated evidence). Collect the open cards' **absolute paths**
-   `<workdir>/.panel-review/<id>/issue-<oid>.md` (absolute for the same reason the
-   scratch dir is — agy guesses its own repo root, so a relative card path can drift).
+   `<workdir>/.panel-review/<id>/issue-<oid>.md` (absolute because agy infers its repo root. A short,
+   unanchored probe on agy 1.4.3 resolved the current workdir, but realistic-size behavior remains
+   unmeasured; see issue 27).
 4. **Generate the common single-batch plan.** After `sweep begin`, have `sweep plan-scaffold` read
    the open issue IDs and build one batch for every seat in the current panel. Save its stdout, then
    do not hand-write the JSON. The trailing seats are the current panel from `preflight`, because

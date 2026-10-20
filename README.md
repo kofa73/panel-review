@@ -383,7 +383,8 @@ start      ── parse scope (commit=abc123) + profile + round limits; hash the
            │  (separate context)
 referee    ── Round 0: assemble one blind prompt, dispatch seats, retry actual down responses once
   (agent)  ── merge findings into issues (judgment); project blind cards
-           ── debate sweeps: cards → seats → stances → transitions → commit (checkpointed)
+           ── debate sweeps: cards → seats → stances → transitions → commit (checkpointed); retry
+               each non-complete batch once
            ── synthesize + persist the verdict; return the fixed success/write-failure/review-failure status; clean up when eligible
            │  (back in main conversation)
 start      ── validates the artifact; reports only `/tmp/<ID>.md` + minimal control status
@@ -485,11 +486,14 @@ recovering it is the referee's job (see "Salvage" in the referee protocol), not 
 `scripts/seat_contract.py` is the authoritative owner of seat blocks, fields, stance values,
 normalization, phase cardinality, and their rendered instructions. `round` renders that contract into
 both templates, while `parse_block`, `write_seat_raw`, `sweep`, and `decide_round` consume the same
-data and validation rules. Each template also carries the **absolute review root** and directs a seat to set its
-tool `cwd` to it — agy runs tools in its own sandbox and guesses the repo root, so a relative anchor
-can drift; and the blind prompt references the diff **file** rather than inlining its body (a 240 KB
-inlined diff diluted attention and correlated with the Gemini seat emitting prose instead of a
-fenced block).
+data and validation rules. Each template also carries the **absolute review root** and directs a seat
+to set its tool `cwd` to it. agy runs tools in its own sandbox and infers the repo root. A short,
+unanchored print-mode probe on agy 1.4.3 from `/workspace/panel-review` resolved both `pwd` and Git's
+root correctly, but realistic-size behavior remains unmeasured. Keep the absolute path until that
+comparison is done. The blind prompt references the diff **file** instead of inlining its body. A
+240 KB inline diff correlated with the Gemini seat returning prose instead of a fenced block, and
+the historical >99 KB prompt-size result has not been replayed on agy 1.4.3. Keep prompts lean and
+the contract salient (issue 27).
 
 The plugin gates two model-return boundaries: Claude seat → referee and referee → main command. In
 `auto` mode, Claude Code delivers each report through `SubagentHandback`, so a `PreToolUse` hook

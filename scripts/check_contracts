@@ -223,6 +223,18 @@ def check_tree(errors, root):
                 f"missing `{required}` behavior",
             )
 
+    for location, text, required in (
+        ("README.md", normalized(readme), "retry each non-complete batch once"),
+        ("rendered:debate", normalized(debate), "Retry every non-complete batch once"),
+    ):
+        if required.lower() not in text.lower():
+            fail(
+                errors,
+                "debate-retry-contract",
+                location,
+                f"missing `{required}` behavior",
+            )
+
     if "if it finds index.phase=round0 load round0 too" not in normalized(bootstrap):
         fail(
             errors,
