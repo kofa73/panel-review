@@ -52,7 +52,8 @@ byte-exact.
   files or hand-write the common plan.
 - `round` — the referee's coarse normal-path module over the owners in this list. It resolves and
   assembles Round 0 with the rendered seat contract and validated saved review-profile reference,
-  marks the workdir as the code root, identifies Round 0's external diff plus the saved profile
+  reads the saved seat timeout through `user_config.py`, and writes it explicitly into every CLI
+  barrier command. It marks the workdir as the code root, identifies Round 0's external diff plus the saved profile
   and scratch inputs by full absolute path, and keeps the explicit tool-`cwd` directive in both
   prompts. It freezes that phase's configured panel and exact blind prompt, reconstructs and retains
   complete Round-0 raw/status/parsed checkpoints, records the initial/single-retry/later-resume attempts, and
@@ -136,10 +137,11 @@ byte-exact.
   delivery. An already-active referee stop-hook continuation may stop so correction cannot
   become an unbounded loop. These hooks provide bounded runtime enforcement, not a security boundary.
 - `await_seats` — the barrier that owns CLI-seat waiting; runs every CLI seat concurrently (each via
-  `run_seat`) in ONE job with a per-seat outer timeout, writes per-seat status + a combined `--done`
-  summary. **Run it via the `panel-review-cli-barrier` Agent, never as a referee-backgrounded Bash
-  job.** The barrier sets `timeout: 2700000` ms on its detached Bash call so unattended-session
-  limits exceed the ~43-minute wait budget. The referee issues that barrier and the Claude-seat Agent
+  `run_seat`) in ONE job with an explicit per-seat timeout, writes per-seat status + a combined
+  `--done` summary, and ignores inherited timeout variables. **Run it via the
+  `panel-review-cli-barrier` Agent, never as a referee-backgrounded Bash job.** The Agent derives its
+  detached Bash timeout and sentinel-wait count from the saved seat timeout plus a completion margin.
+  The referee issues that barrier and the Claude-seat Agent
   together in one assistant response, both with `run_in_background: false`; the calls run
   concurrently and block the referee until both return. There are no referee
   `date`/`ps`/`cat status.*`/narration turns between dispatch and the combined return.
@@ -150,6 +152,10 @@ byte-exact.
   `index put`.
 - `resolve_instructions` — resolves `manifest.instructions` for the deterministic verbatim/none cases;
   returns the compose sentinel (exit 3) for `auto` (the only case the referee composes).
+- `user_config.py` — the only loader and validator for the XDG versioned config. It resolves new-run
+  profile selectors and execution-setting defaults, reads and updates saved execution settings
+  without reloading defaults, and supplies action-time cleanup retention. `cleanup` and `discard`
+  call it before deleting state.
 - `stage_review_profile` — resolves one source path, requires a readable regular non-empty UTF-8
   file of at most 64 KiB, atomically snapshots its exact bytes, and returns source-path/size/SHA-256
   metadata. `init_run` is its only lifecycle caller; resumes never reload the source path.
@@ -177,9 +183,9 @@ byte-exact.
   `index delivery-status`, then emits only the fixed filename plus minimal gate/continuation status.
   It is the sole final-return interface for `start`/`resume`/`continue`.
 - `init_run` / `resume_check` / `cleanup` / `discard` / `inspect_run` / `set_limits` — run lifecycle
-  and resume/diverged/stale classification. `PANEL_REVIEW_KEEP_TMP=true` makes `cleanup`/`discard` keep
+  and resume/diverged/stale classification. `cleanup.keep_tmp` makes `cleanup`/`discard` keep
   `/tmp/<id>/` (diagnostics) while still removing the workspace marker/cards/git-exclude. `init_run`
-  selects the built-in profile when no external path is supplied and publishes the marker only after
+  resolves profile names through `user_config.py` and publishes the marker only after
   the profile snapshot, uncommitted-scope divergence snapshot, manifest, and index exist.
   `scope_diagnostics` owns that tracked-diff/untracked-path snapshot and its read-only comparison;
   `inspect_run`, `resume_check`, and `round` report the results without weakening the hash gate.

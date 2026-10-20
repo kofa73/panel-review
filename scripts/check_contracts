@@ -447,6 +447,7 @@ def check_tree(errors, root):
         "scripts/panel_common.py",
         "scripts/round",
         "scripts/stage_review_profile",
+        "scripts/user_config.py",
         "scripts/scope_diagnostics",
         "skills/panel-review-for-agent/references/protocol.md",
         "agents/panel-review-cli-barrier.md",
@@ -468,11 +469,79 @@ def check_tree(errors, root):
     agent_status_hook = read(root, "hooks/enforce_agent_status_stub")
     hook_config = json.loads(read(root, "hooks/hooks.json"))
     round_script = read(root, "scripts/round")
+    user_config = read(root, "scripts/user_config.py")
+    init_run = read(root, "scripts/init_run")
+    cleanup_script = read(root, "scripts/cleanup")
+    discard_script = read(root, "scripts/discard")
+    await_seats = read(root, "scripts/await_seats")
     commands = {
         name: read(root, f"skills/{name}/SKILL.md")
         for name in ("start", "resume", "continue")
     }
     debate = read_protocol_phase(root, "debate")
+
+    for name in ("resume", "continue"):
+        command = commands[name]
+        update_guard = re.search(
+            r'(?ms)^"\$SC/set_limits" "\$\{SETTING_ARGS\[@\]\}" \|\| \{\n(.*?)^\}',
+            command,
+        )
+        dispatch_at = command.find("subagent_type: panel-review:panel-review-referee")
+        reopen_at = command.find('"$SC/reopen"') if name == "continue" else -1
+        if (
+            update_guard is None
+            or "exit 1" not in update_guard.group(1)
+            or dispatch_at < 0
+            or update_guard.start() > dispatch_at
+            or (reopen_at >= 0 and update_guard.start() > reopen_at)
+        ):
+            fail(
+                errors,
+                "saved-setting-update-guard",
+                f"skills/{name}/SKILL.md",
+                "must stop on set_limits failure before reopening or dispatching the saved run",
+            )
+
+    for required in (
+        "XDG_CONFIG_HOME",
+        'base / "panel-review" / "config.json"',
+        "ALLOWED_ROOT_KEYS",
+        "MAX_SEAT_TIMEOUT_SECONDS",
+        "defaults.review_profile",
+        "cleanup.keep_tmp",
+        "reject_legacy_environment",
+        "saved_limits",
+    ):
+        if required not in user_config:
+            fail(
+                errors,
+                "user-config-owner",
+                "scripts/user_config.py",
+                f"missing config behavior `{required}`",
+            )
+    if '"$here/user_config.py" resolve-start' not in init_run:
+        fail(errors, "user-config-owner", "scripts/init_run", "does not resolve start settings")
+    resolve_at = init_run.find('"$here/user_config.py" resolve-start')
+    create_at = init_run.find('mkdir "/tmp/$id"')
+    if create_at >= 0 and resolve_at > create_at:
+        fail(errors, "user-config-owner", "scripts/init_run", "resolves config after claiming run state")
+    for name, script in (("cleanup", cleanup_script), ("discard", discard_script)):
+        operational_lines = "\n".join(
+            line for line in script.splitlines() if not line.lstrip().startswith("#")
+        )
+        policy_at = operational_lines.find('"$here/user_config.py" cleanup-policy')
+        delete_at = operational_lines.find("rm -rf")
+        if policy_at < 0 or (delete_at >= 0 and policy_at > delete_at):
+            fail(
+                errors,
+                "cleanup-config-before-delete",
+                f"scripts/{name}",
+                "must validate the current config before deleting state",
+            )
+    if "user_config import ConfigError, saved_limits" not in round_script or '"--seat-timeout"' not in round_script:
+        fail(errors, "saved-seat-timeout-owner", "scripts/round", "does not pass saved timeout to barriers")
+    if "PANEL_REVIEW_SEAT_TIMEOUT" in await_seats:
+        fail(errors, "saved-seat-timeout-owner", "scripts/await_seats", "reads inherited timeout state")
 
     for marker in ('panel_atomic_write(str(directory / "diff_info.txt")', '"DIFFINFO": directory / "diff_info.txt"'):
         if marker not in round_script:
@@ -688,6 +757,26 @@ def check_tree(errors, root):
                 "agents/panel-review-cli-barrier.md",
                 f"missing shell operation `{required}`",
             )
+    for required in (
+        "seat_timeout_seconds=<N>",
+        "seat_timeout_seconds+60",
+        "ceil(wait_budget_seconds/100)",
+        "timeout: wait_budget_seconds*1000",
+    ):
+        if required not in barrier:
+            fail(
+                errors,
+                "cli-barrier-timeout-owner",
+                "agents/panel-review-cli-barrier.md",
+                f"missing saved-timeout wait rule `{required}`",
+            )
+    if "`seat_timeout_seconds=$seat_timeout_seconds`" not in debate:
+        fail(
+            errors,
+            "multi-batch-barrier-timeout",
+            "skills/panel-review-for-agent/references/protocol.md",
+            "manual multi-batch dispatch does not pass the saved timeout to the CLI barrier",
+        )
     if not re.search(r"\brun_in_background:\s*true\b", barrier):
         fail(
             errors,

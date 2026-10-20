@@ -6,7 +6,7 @@ Status: Pending
 
 Source: design discussion, 2026-07-20
 
-Triage: ready-for-agent
+Triage: ready-for-human
 
 ## Decision
 
@@ -179,3 +179,33 @@ than review behavior.
 - Do not make every script parse user configuration; resolve run settings at creation and propagate
   them through the manifest.
 - Do not move installer or standard operating-system environment conventions into runtime config.
+
+## Partial implementation (2026-10-20)
+
+Added the XDG version 1 config loader and integrated named/profile-path selection, project-neutral
+defaults, manifest-backed round and seat-timeout settings, action-time cleanup retention, legacy
+environment migration errors, and status/result metadata. Round preparation now passes the saved
+timeout to every CLI barrier, whose wait count and background timeout are derived from that value.
+README, command skills, the canonical protocol, ownership docs, contract checks, and tests describe
+the same behavior. Focused configuration, round, and verdict-artifact tests pass. The full suite
+passes (`PASS: 372  FAIL: 0`), `scripts/check_contracts --root .` passes, and `git diff --check` is
+clean.
+
+The implementation caps `seat_timeout_seconds` at 7110: the barrier's derived background timeout
+adds 60 seconds and must stay below Claude Code's two-hour limit, with 30 seconds of headroom. That
+upper bound narrows the issue's stated positive-integer range and needs an owner decision.
+
+The real-review smoke was not run. The supplied `/tmp/panel-issue-run/smoke.sh` invokes `git commit`
+and `git checkout`, both prohibited by the worker brief; the end-to-end runtime path remains
+unverified here.
+
+## Open questions for the owner
+
+1. Should the supported `seat_timeout_seconds` maximum remain 7110 seconds?
+   - Keep the 7110-second maximum, recommended because the barrier's per-call timeout cannot exceed
+     Claude Code's two-hour limit and the 30-second headroom protects that boundary.
+   - Allow larger values only after redesigning the barrier so it does not depend on one background
+     command whose timeout is capped at two hours.
+
+   The current implementation keeps the runtime within the documented platform limit. Supporting a
+   larger timeout requires a different wait lifecycle, not a larger numeric validation limit.

@@ -17,6 +17,9 @@ root="$(cd "$here/.." && pwd)"
 SC="$root/scripts"
 TMP="$(mktemp -d /tmp/pr-tests.XXXXXX)"
 PREFIX="pr-test-$$"
+export XDG_CONFIG_HOME="$TMP/xdg"
+mkdir -p "$XDG_CONFIG_HOME"
+unset PANEL_REVIEW_KEEP_TMP PANEL_REVIEW_SEAT_TIMEOUT
 trap 'rm -rf "$TMP"; rm -rf /tmp/'"$PREFIX"'-* 2>/dev/null' EXIT
 
 pass=0; fail=0
@@ -1082,21 +1085,62 @@ profile_size="$(wc -c < "$TMP/domain-profile.md" | tr -d ' ')"
 id="$("$SC/init_run" --workdir "$profile_repo" --scope 'question=test' --issue-rounds 2 --max-rounds 4 \
   --diff-hash "$(printf '' | "$SC/diff_hash")" --instructions '' --review-profile "$TMP/domain-profile.md")"
 assert_eq "manifest emits the documented run metadata" 'created,diff_hash,divergence_snapshot,id,instructions,limits,review_profile,scope,workdir' "$(jq -r 'keys|sort|join(",")' "/tmp/$id/manifest.json")"
+assert_eq "manifest saves the requested profile selector" "$TMP/domain-profile.md" "$(jq -r '.review_profile.selector' "/tmp/$id/manifest.json")"
+assert_eq "manifest saves the built-in timeout" '2400' "$(jq -r '.limits.seat_timeout_seconds' "/tmp/$id/manifest.json")"
 assert_eq "external profile bytes are snapshotted exactly" "$profile_hash" "$("$SC/diff_hash" < "/tmp/$id/review-profile.md")"
 assert_eq "external profile path is resolved" "$(realpath "$TMP/domain-profile.md")" "$(jq -r '.review_profile.source_path' "/tmp/$id/manifest.json")"
 assert_eq "external profile hash is recorded" "$profile_hash" "$(jq -r '.review_profile.sha256' "/tmp/$id/manifest.json")"
 assert_eq "external profile size is recorded" "$profile_size" "$(jq -r '.review_profile.size' "/tmp/$id/manifest.json")"
 inspection="$("$SC/inspect_run" --id "$id" --workdir "$profile_repo")"
 assert_eq "status metadata carries the profile path" "$(realpath "$TMP/domain-profile.md")" "$(jq -r '.review_profile.source_path' <<<"$inspection")"
+assert_eq "status metadata carries the profile selector" "$TMP/domain-profile.md" "$(jq -r '.review_profile.selector' <<<"$inspection")"
 assert_eq "status metadata carries the profile hash" "$profile_hash" "$(jq -r '.review_profile.sha256' <<<"$inspection")"
-PANEL_REVIEW_KEEP_TMP=false "$SC/cleanup" --id "$id" --workdir "$profile_repo"
+"$SC/cleanup" --id "$id" --workdir "$profile_repo"
 
 default_repo="$TMP/default-profile-repo"; mkdir -p "$default_repo"; git -C "$default_repo" init -q
 id="$("$SC/init_run" --workdir "$default_repo" --scope 'question=test' --issue-rounds 2 --max-rounds 4 \
   --diff-hash "$(printf '' | "$SC/diff_hash")" --instructions '')"
 assert_eq "built-in profile is snapshotted exactly" "$("$SC/diff_hash" < "$root/profiles/default.md")" "$("$SC/diff_hash" < "/tmp/$id/review-profile.md")"
 assert_eq "built-in profile source is recorded" "$(realpath "$root/profiles/default.md")" "$(jq -r '.review_profile.source_path' "/tmp/$id/manifest.json")"
-PANEL_REVIEW_KEEP_TMP=false "$SC/cleanup" --id "$id" --workdir "$default_repo"
+assert_eq "built-in profile selector is recorded" 'builtin:generic' "$(jq -r '.review_profile.selector' "/tmp/$id/manifest.json")"
+"$SC/cleanup" --id "$id" --workdir "$default_repo"
+
+section "init_run / set_limits — configured profile and saved setting precedence"
+config_file="$XDG_CONFIG_HOME/panel-review/config.json"
+mkdir -p "$(dirname "$config_file")"
+configured_profile="$TMP/configured-profile.md"
+printf '# Configured profile\n' > "$configured_profile"
+cat > "$config_file" <<JSON
+{"version":1,"profiles":{"domain":"$configured_profile"},"defaults":{"review_profile":"domain","issue_rounds":3,"max_rounds":6,"seat_timeout_seconds":1800}}
+JSON
+configured_repo="$TMP/configured-repo"; mkdir -p "$configured_repo"; git -C "$configured_repo" init -q
+id="$("$SC/init_run" --workdir "$configured_repo" --scope 'question=configured' \
+  --diff-hash "$(printf '' | "$SC/diff_hash")" --instructions '')"
+assert_eq "named default profile is saved as provenance" 'domain' "$(jq -r '.review_profile.selector' "/tmp/$id/manifest.json")"
+assert_eq "configured round defaults are saved" '3,6' "$(jq -r '[.limits.issue_rounds,.limits.max_rounds]|join(",")' "/tmp/$id/manifest.json")"
+assert_eq "configured timeout default is saved" '1800' "$(jq -r '.limits.seat_timeout_seconds' "/tmp/$id/manifest.json")"
+cat > "$config_file" <<'JSON'
+{"version":1,"defaults":{"issue_rounds":1,"max_rounds":2,"seat_timeout_seconds":3600}}
+JSON
+"$SC/set_limits" --id "$id" --seat-timeout 900
+assert_eq "saved run ignores changed config round defaults" '3,6' "$(jq -r '[.limits.issue_rounds,.limits.max_rounds]|join(",")' "/tmp/$id/manifest.json")"
+assert_eq "explicit timeout override updates saved run" '900' "$(jq -r '.limits.seat_timeout_seconds' "/tmp/$id/manifest.json")"
+"$SC/cleanup" --id "$id" --workdir "$configured_repo"
+
+generic_repo="$TMP/configured-generic-repo"; mkdir -p "$generic_repo"; git -C "$generic_repo" init -q
+id="$("$SC/init_run" --workdir "$generic_repo" --scope 'question=configured' \
+  --diff-hash "$(printf '' | "$SC/diff_hash")" --instructions '' --review-profile builtin:generic)"
+assert_eq "explicit generic profile overrides configured default" 'builtin:generic' "$(jq -r '.review_profile.selector' "/tmp/$id/manifest.json")"
+"$SC/cleanup" --id "$id" --workdir "$generic_repo"
+
+invalid_config_repo="$TMP/invalid-config-repo"; mkdir -p "$invalid_config_repo"; git -C "$invalid_config_repo" init -q
+printf '{bad json\n' > "$config_file"
+"$SC/init_run" --workdir "$invalid_config_repo" --scope 'question=configured' \
+  --diff-hash "$(printf '' | "$SC/diff_hash")" --instructions '' >/dev/null 2>&1; rc=$?
+assert_exit "invalid config fails run creation" 1 "$rc"
+markers="$(find "$invalid_config_repo/.panel-review" -name .panel-run -print 2>/dev/null | wc -l | tr -d ' ')"
+assert_eq "invalid config creates no run marker" 0 "$markers"
+rm -f "$config_file"
 
 for invalid in missing empty binary large directory; do
   invalid_repo="$TMP/invalid-$invalid"; mkdir -p "$invalid_repo"; git -C "$invalid_repo" init -q
@@ -1159,7 +1203,7 @@ restored_hash="$(resolve_uncommitted_hash)"
 assert_eq "removing the stray file restores the original diff hash" "$snapshot_hash" "$restored_hash"
 resume_output="$("$SC/resume_check" --workdir "$divergence_repo" --scope uncommitted --diff-hash "$restored_hash")"
 assert_eq "the unchanged run can resume after hash restoration" "resume $id" "$resume_output"
-PANEL_REVIEW_KEEP_TMP=false "$SC/cleanup" --id "$id" --workdir "$divergence_repo"
+"$SC/cleanup" --id "$id" --workdir "$divergence_repo"
 
 section "resume_check / inspect_run — malformed index is stale without backup recovery"
 corrupt_repo="$TMP/corrupt-index-repo"; mkdir -p "$corrupt_repo"; git -C "$corrupt_repo" init -q
@@ -1179,7 +1223,7 @@ resume_output="$("$SC/resume_check" --workdir "$corrupt_repo" --scope 'question=
 assert_eq "resume check marks a malformed index stale" "stale $id" "$resume_output"
 assert_eq "resume check leaves the malformed index untouched" "$corrupt_before" "$(cat "/tmp/$id/index.json")"
 assert_eq "resume check leaves the valid backup untouched" "$backup_before" "$(cat "/tmp/$id/index.json.bak")"
-PANEL_REVIEW_KEEP_TMP=false "$SC/cleanup" --id "$id" --workdir "$corrupt_repo"
+"$SC/cleanup" --id "$id" --workdir "$corrupt_repo"
 
 section "large uncommitted divergence snapshots and reports"
 large_divergence_repo="$TMP/large-divergence-repo"; mkdir -p "$large_divergence_repo"; git -C "$large_divergence_repo" init -q
@@ -1214,49 +1258,56 @@ assert_exit "large divergence inspection succeeds" 0 "$?"
 assert_eq "large report names every new path" '45' "$(jq -r '.divergence.new_untracked_paths|length' "$TMP/large-divergence-inspection.json")"
 if [ "$(wc -c < "$TMP/large-divergence-inspection.json")" -gt 131072 ]; then ok "large report exceeds Linux's per-argument limit"; else bad "large report exceeds Linux's per-argument limit"; fi
 assert_eq "large report keeps the diverged state" 'diverged' "$(jq -r '.state' "$TMP/large-divergence-inspection.json")"
-PANEL_REVIEW_KEEP_TMP=false "$SC/cleanup" --id "$large_id" --workdir "$large_divergence_repo"
+"$SC/cleanup" --id "$large_id" --workdir "$large_divergence_repo"
 
 # ---------------------------------------------------------------------------
-section "cleanup / discard — PANEL_REVIEW_KEEP_TMP preserves /tmp diagnostics"
+section "cleanup / discard — action-time config retention and validation"
 keeprepo="$TMP/keep-repo"; mkdir -p "$keeprepo"; ( cd "$keeprepo" && git init -q )
+config_file="$XDG_CONFIG_HOME/panel-review/config.json"; mkdir -p "$(dirname "$config_file")"
 id="$PREFIX-keep"; rm -rf "/tmp/$id"; mkdir -p "/tmp/$id"; echo '{"id":"x"}' > "/tmp/$id/manifest.json"
 mkdir -p "$keeprepo/.panel-review/$id"; echo "$id" > "$keeprepo/.panel-review/$id/.panel-run"
-PANEL_REVIEW_KEEP_TMP=true "$SC/cleanup" --id "$id" --workdir "$keeprepo" 2>/dev/null
-assert_eq "KEEP_TMP cleanup removes the marker"     'gone'    "$([ -d "$keeprepo/.panel-review/$id" ] && echo here || echo gone)"
-assert_eq "KEEP_TMP cleanup preserves /tmp/<id>"    'kept'    "$([ -d "/tmp/$id" ] && echo kept || echo gone)"
-# Default behavior (env var unset/false) must purge /tmp/<id>. The test runner may
-# itself export PANEL_REVIEW_KEEP_TMP=true (it is a documented diagnostic toggle), so
-# clear it explicitly here — otherwise this case silently inherits the ambient value
-# and stops testing the default at all.
+printf '{"version":1,"cleanup":{"keep_tmp":true}}\n' > "$config_file"
+"$SC/cleanup" --id "$id" --workdir "$keeprepo" 2>/dev/null
+assert_eq "configured cleanup removes the marker" 'gone' "$([ -d "$keeprepo/.panel-review/$id" ] && echo here || echo gone)"
+assert_eq "configured cleanup preserves /tmp/<id>" 'kept' "$([ -d "/tmp/$id" ] && echo kept || echo gone)"
+rm -f "$config_file"
 mkdir -p "$keeprepo/.panel-review/$id"; echo "$id" > "$keeprepo/.panel-review/$id/.panel-run"
-env -u PANEL_REVIEW_KEEP_TMP "$SC/cleanup" --id "$id" --workdir "$keeprepo" 2>/dev/null
-assert_eq "default cleanup removes /tmp/<id>"       'gone'    "$([ -d "/tmp/$id" ] && echo kept || echo gone)"
-# Same env-var sensitivity holds for explicit false.
-mkdir -p "/tmp/$id"; echo '{"id":"x"}' > "/tmp/$id/manifest.json"
-mkdir -p "$keeprepo/.panel-review/$id"; echo "$id" > "$keeprepo/.panel-review/$id/.panel-run"
-PANEL_REVIEW_KEEP_TMP=false "$SC/cleanup" --id "$id" --workdir "$keeprepo" 2>/dev/null
-assert_eq "KEEP_TMP=false cleanup removes /tmp/<id>" 'gone'   "$([ -d "/tmp/$id" ] && echo kept || echo gone)"
+"$SC/cleanup" --id "$id" --workdir "$keeprepo" 2>/dev/null
+assert_eq "missing config uses cleanup=false" 'gone' "$([ -d "/tmp/$id" ] && echo kept || echo gone)"
+
 id="$PREFIX-keep2"; rm -rf "/tmp/$id"; mkdir -p "/tmp/$id"; echo '{}' > "/tmp/$id/manifest.json"
 mkdir -p "$keeprepo/.panel-review/$id"; echo "$id" > "$keeprepo/.panel-review/$id/.panel-run"
-PANEL_REVIEW_KEEP_TMP=true "$SC/discard" --workdir "$keeprepo" >/dev/null
-assert_eq "KEEP_TMP discard preserves /tmp/<id>"    'kept'    "$([ -d "/tmp/$id" ] && echo kept || echo gone)"
-assert_eq "KEEP_TMP discard still clears .panel-review" 'gone' "$([ -d "$keeprepo/.panel-review" ] && echo here || echo gone)"
+printf '{"version":1,"cleanup":{"keep_tmp":true}}\n' > "$config_file"
+"$SC/discard" --workdir "$keeprepo" >/dev/null
+assert_eq "configured discard preserves /tmp/<id>" 'kept' "$([ -d "/tmp/$id" ] && echo kept || echo gone)"
+assert_eq "configured discard clears .panel-review" 'gone' "$([ -d "$keeprepo/.panel-review" ] && echo here || echo gone)"
 rm -rf "/tmp/$id"
-# Default discard purges /tmp/<id> too (again clearing the ambient toggle).
+
 id="$PREFIX-keep3"; rm -rf "/tmp/$id"; mkdir -p "/tmp/$id"; echo '{}' > "/tmp/$id/manifest.json"
 mkdir -p "$keeprepo/.panel-review/$id"; echo "$id" > "$keeprepo/.panel-review/$id/.panel-run"
-env -u PANEL_REVIEW_KEEP_TMP "$SC/discard" --workdir "$keeprepo" >/dev/null
-assert_eq "default discard removes /tmp/<id>"       'gone'    "$([ -d "/tmp/$id" ] && echo kept || echo gone)"
-rm -rf "/tmp/$id"
-# Explicit false discards /tmp/<id> as well (symmetry with the cleanup=false case).
-id="$PREFIX-keep4"; rm -rf "/tmp/$id"; mkdir -p "/tmp/$id"; echo '{}' > "/tmp/$id/manifest.json"
-mkdir -p "$keeprepo/.panel-review/$id"; echo "$id" > "$keeprepo/.panel-review/$id/.panel-run"
-PANEL_REVIEW_KEEP_TMP=false "$SC/discard" --workdir "$keeprepo" >/dev/null
-assert_eq "KEEP_TMP=false discard removes /tmp/<id>" 'gone'   "$([ -d "/tmp/$id" ] && echo kept || echo gone)"
-rm -rf "/tmp/$id"
+rm -f "$config_file"
+"$SC/discard" --workdir "$keeprepo" >/dev/null
+assert_eq "missing config makes discard remove /tmp/<id>" 'gone' "$([ -d "/tmp/$id" ] && echo kept || echo gone)"
+
+for action in cleanup discard; do
+  id="$PREFIX-invalid-config-$action"; rm -rf "/tmp/$id"; mkdir -p "/tmp/$id"; echo '{}' > "/tmp/$id/manifest.json"
+  mkdir -p "$keeprepo/.panel-review/$id"; echo "$id" > "$keeprepo/.panel-review/$id/.panel-run"
+  printf '{bad json\n' > "$config_file"
+  if [ "$action" = cleanup ]; then
+    "$SC/cleanup" --id "$id" --workdir "$keeprepo" >/dev/null 2>&1; rc=$?
+  else
+    "$SC/discard" --workdir "$keeprepo" >/dev/null 2>&1; rc=$?
+  fi
+  assert_exit "$action rejects invalid config" 1 "$rc"
+  assert_eq "$action leaves marker on config failure" 'kept' "$([ -d "$keeprepo/.panel-review/$id" ] && echo kept || echo gone)"
+  assert_eq "$action leaves /tmp state on config failure" 'kept' "$([ -d "/tmp/$id" ] && echo kept || echo gone)"
+  rm -rf "$keeprepo/.panel-review/$id" "/tmp/$id"
+done
+rm -f "$config_file"
+
 invalid_id="$PREFIX-invalid name"; mkdir -p "$keeprepo/.panel-review/$invalid_id" "/tmp/$invalid_id"
 printf '%s\n' "$invalid_id" > "$keeprepo/.panel-review/$invalid_id/.panel-run"
-discard_output="$(env -u PANEL_REVIEW_KEEP_TMP "$SC/discard" --workdir "$keeprepo")"
+discard_output="$("$SC/discard" --workdir "$keeprepo")"
 assert_eq "discard prints one summary for valid or invalid marker names" \
   'Cleared .panel-review/ for this workdir.' "$discard_output"
 assert_eq "discard removes an invalidly named marker" 'gone' "$([ -d "$keeprepo/.panel-review" ] && echo here || echo gone)"

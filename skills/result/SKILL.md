@@ -23,6 +23,6 @@ id="$ARGUMENTS"
 ```
 
 The reader validates the artifact ID, completion status, metadata shape, and diff-hash shape, then
-prints the saved review-profile path/hash followed by the verdict body. Legacy artifacts without
-profile metadata still print only their verdict body. Present stdout verbatim. Do not parse the frontmatter, summarize
+prints the saved profile selector, source path/hash/size, round limits, seat timeout, and verdict
+body. Legacy artifacts without profile metadata still print only their verdict body. Present stdout verbatim. Do not parse the frontmatter, summarize
 the verdict, resume the run, or dispatch any seat. If validation fails, surface the script's error.

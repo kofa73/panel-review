@@ -148,9 +148,11 @@ Each exits `3` when its CLI is not installed, which the suite reports as a skip.
 - **resume_check / inspect_run**: malformed `index.json` is stale even with a valid `.bak`; neither
   check rewrites the live index or backup. Command skills preserve stale state until manual recovery
   or explicit discard.
-- **cleanup / discard**: `PANEL_REVIEW_KEEP_TMP=true` preserves `/tmp/<id>` while
-  removing the marker / `.panel-review`; the default still removes valid `/tmp/<id>` paths, and
-  discard removes invalidly named markers without mapping them to `/tmp` and emits one summary line.
+- **user_config / cleanup / discard**: validates the XDG `config.json`, profile selectors, and
+  merged defaults; saves run settings independently of later config changes; cleanup reads the
+  current `cleanup.keep_tmp` policy and rejects invalid config before deleting state. Missing config
+  removes valid `/tmp/<id>` paths; discard removes invalidly named markers without mapping them to
+  `/tmp` and emits one summary line.
 - **Protocol/template contracts**: runs `seat_contract.py render` through runtime parsing and pins
   the documented batch-completeness,
   dropped-seat cleanup, Round-0 retry/resume boundary, low-only gate, coverage,

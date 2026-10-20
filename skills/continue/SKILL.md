@@ -1,8 +1,8 @@
 ---
 name: continue
-description: Re-debate a finished panel review's leftover unresolved/contested issues. Takes an optional leftover category plus round-limit overrides — scope, review profile, and instructions come from the saved session. Redirects to status/resume/discard if the saved session isn't finished-with-leftovers.
+description: Re-debate a finished panel review's leftover unresolved/contested issues. Takes an optional leftover category plus execution-setting overrides — scope, review profile, and instructions come from the saved session. Redirects to status/resume/discard if the saved session isn't finished-with-leftovers.
 disable-model-invocation: true
-argument-hint: "[unresolved|contested]  [--issue-rounds N] [--max-rounds N]"
+argument-hint: "[unresolved|contested]  [--issue-rounds N] [--max-rounds N] [--seat-timeout N]"
 ---
 
 # panel-review:continue
@@ -18,12 +18,12 @@ ROOT="${CLAUDE_PLUGIN_ROOT}"; ROOT="${ROOT%/}"   # strip trailing slash so $SC h
 SC="$ROOT/scripts"
 ```
 
-## Step 1 — parse `$ARGUMENTS` (category + limit overrides only)
+## Step 1 — parse `$ARGUMENTS` (category + setting overrides only)
 
 - **Category.** If `$ARGUMENTS` contains the word `unresolved` or `contested`, set `CAT` to that;
   otherwise `CAT=both`.
-- **Limit overrides.** Apply `--issue-rounds N` / `--max-rounds N` if present (track whether each was
-  actually given).
+- **Setting overrides.** Apply `--issue-rounds N`, `--max-rounds N`, and `--seat-timeout N` if
+  present. Set `ISS_OVERRIDE`, `MAX_OVERRIDE`, and `TIMEOUT_OVERRIDE` only for supplied values.
 - Anything else in `$ARGUMENTS` — a scope flag, free text, `--review-profile`, or `--instructions` — is a hard error:
   > `panel-review:continue` takes the scope, review profile, and instructions from the saved review; it doesn't accept
   > them. `panel-review:status` shows what's stored.
@@ -43,9 +43,24 @@ ids=(); [ -d "$base" ] && for d in "$base"/*/; do [ -f "$d/.panel-run" ] && ids+
 
 ## Step 3 — adopt scope/profile/limits/instructions, resolve the current diff
 
-Identical to `resume`'s Step 3: read `scope`/`PROFILE`/`ISS`/`MAX`/`INSTR` from `/tmp/$id/manifest.json`, apply
-any Step 1 limit overrides, resolve + hash the current diff for `scope` into `DH`. If the scope no
+Identical to `resume`'s Step 3: read `scope`/`PROFILE`/`INSTR` from `/tmp/$id/manifest.json`, read
+the saved `ISS`/`MAX` values through `user_config.py read-settings`, resolve + hash the current diff
+for `scope` into `DH`. Do not read `config.json`. If the scope no
 longer resolves, emit the same diverged-family message `resume` does and stop.
+
+```bash
+man="/tmp/$id/manifest.json"
+[ -s "$man" ] || { echo "Saved review metadata is missing; no state was changed."; exit 1; }
+scope="$(jq -r '.scope' "$man")"
+INSTR="$(jq -r '.instructions // ""' "$man")"
+PROFILE="$(jq -r '.review_profile.source_path' "$man")"
+RUN_SETTINGS="$("$SC/user_config.py" read-settings --id "$id")" || {
+  echo "Could not read saved settings. Stop before reopening or dispatch."
+  exit 1
+}
+ISS="$(jq -r '.limits.issue_rounds' <<<"$RUN_SETTINGS")"
+MAX="$(jq -r '.limits.max_rounds' <<<"$RUN_SETTINGS")"
+```
 
 ## Step 4 — the redirect: act only if the session is finished with leftovers
 
@@ -67,20 +82,34 @@ longer resolves, emit the same diverged-family message `resume` does and stop.
   to manual recovery or `panel-review:discard` if they want to abandon it. Stop.
 - **`fresh`/`ambiguous`** → same fallback as `resume`'s Step 4. Stop.
 
-## Step 5 — confirm the category has leftovers, reopen, write back limits, dispatch
+## Step 5 — confirm the category has leftovers, save settings, reopen, dispatch
 
 ```bash
 have="$(jq --arg c "$CAT" '[.issues[] | select(($c=="both" and (.state=="unresolved" or .state=="contested")) or (.state==$c))] | length' "/tmp/$id/index.json")"
 [ "$have" -gt 0 ] || { echo "Run $id has no $CAT issue to continue."; exit 1; }
+```
+
+Merge supplied overrides into the saved settings before reopening. `set_limits` ignores user
+defaults and writes the effective values back to the manifest:
+
+```bash
+SETTING_ARGS=(--id "$id")
+[ -z "${ISS_OVERRIDE:-}" ] || SETTING_ARGS+=(--issue-rounds "$ISS_OVERRIDE")
+[ -z "${MAX_OVERRIDE:-}" ] || SETTING_ARGS+=(--max-rounds "$MAX_OVERRIDE")
+[ -z "${TIMEOUT_OVERRIDE:-}" ] || SETTING_ARGS+=(--seat-timeout "$TIMEOUT_OVERRIDE")
+"$SC/set_limits" "${SETTING_ARGS[@]}" || {
+  echo "Could not update saved settings. Stop before reopening or dispatch."
+  exit 1
+}
+RUN_SETTINGS="$("$SC/user_config.py" read-settings --id "$id")" || {
+  echo "Could not read saved settings. Stop before reopening or dispatch."
+  exit 1
+}
+ISS="$(jq -r '.limits.issue_rounds' <<<"$RUN_SETTINGS")"
+MAX="$(jq -r '.limits.max_rounds' <<<"$RUN_SETTINGS")"
 "$SC/reopen" --id "$id" --category "$CAT" || { echo "Could not re-open run $id."; exit 1; }
 EPOCH="$(jq -r '.run_epoch // 0' "/tmp/$id/index.json")"
 ID="$id"  # shared variable name used by start's artifact-only delivery step
-```
-
-If Step 3's overrides changed `ISS`/`MAX` from the manifest's stored values, write them back:
-
-```bash
-"$SC/set_limits" --id "$id" --issue-rounds "$ISS" --max-rounds "$MAX"
 ```
 
 Spawn the `panel-review:panel-review-referee` subagent (Agent tool):

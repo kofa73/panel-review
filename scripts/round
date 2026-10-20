@@ -13,6 +13,7 @@ import tempfile
 
 from panel_common import panel_atomic_write, panel_require_id
 from seat_contract import render_contract
+from user_config import ConfigError, saved_limits
 
 
 HERE = Path(__file__).resolve().parent
@@ -74,6 +75,10 @@ def state(run_id):
     index = load_json(directory / "index.json")
     if manifest.get("id") != run_id:
         raise RoundError("manifest id does not match the requested run")
+    try:
+        manifest["limits"] = saved_limits(manifest)
+    except ConfigError as error:
+        raise RoundError(f"manifest execution settings are invalid: {error}") from error
     workdir = manifest.get("workdir")
     if not isinstance(workdir, str) or not os.path.isdir(workdir):
         raise RoundError("manifest workdir is missing or invalid")
@@ -216,7 +221,7 @@ def remove_files(*paths):
             pass
 
 
-def barrier_command(directory, tag, prompt, round_number, batch, cli_seats):
+def barrier_command(directory, tag, prompt, round_number, batch, cli_seats, seat_timeout):
     if round_number == 0:
         done = directory / "await.round0.txt"
         script = directory / "cli_barrier.round0.sh"
@@ -229,7 +234,17 @@ def barrier_command(directory, tag, prompt, round_number, batch, cli_seats):
         status_name = lambda seat: directory / f"status.round{round_number}.{seat}.{batch}"
         parsed_name = lambda seat: directory / f"nf.{round_number}.{seat}.{batch}.json"
         raw_name = lambda seat: directory / "raw" / f"round{round_number}.{seat}.{batch}.txt"
-    command = [HERE / "await_seats", "--id", directory.name, "--tag", tag, "--prompt", prompt]
+    command = [
+        HERE / "await_seats",
+        "--id",
+        directory.name,
+        "--tag",
+        tag,
+        "--prompt",
+        prompt,
+        "--seat-timeout",
+        str(seat_timeout),
+    ]
     for seat in cli_seats:
         command.extend(
             [
@@ -444,7 +459,15 @@ def cmd_prepare_round0(run_id, seats, attempt_kind):
         directory / "cli_barrier.round0.sh",
     )
     if cli_seats:
-        barrier, done = barrier_command(directory, "findings", prompt, 0, None, cli_seats)
+        barrier, done = barrier_command(
+            directory,
+            "findings",
+            prompt,
+            0,
+            None,
+            cli_seats,
+            manifest["limits"]["seat_timeout_seconds"],
+        )
         command_value = str(barrier)
         done_value = str(done)
         sentinel_value = str(directory / "await.round0.sentinel")
@@ -469,6 +492,7 @@ def cmd_prepare_round0(run_id, seats, attempt_kind):
             "command": command_value,
             "done": done_value,
             "sentinel": sentinel_value,
+            "seat_timeout_seconds": manifest["limits"]["seat_timeout_seconds"],
         }
     )
 
@@ -660,13 +684,17 @@ def cmd_prepare_debate(run_id, seats):
         )
     barriers = []
     if cli_seats:
-        barrier, done = barrier_command(directory, "new_findings", prompt, round_number, batch, cli_seats)
+        seat_timeout = manifest["limits"]["seat_timeout_seconds"]
+        barrier, done = barrier_command(
+            directory, "new_findings", prompt, round_number, batch, cli_seats, seat_timeout
+        )
         barriers.append(
             {
                 "batch": batch,
                 "command": str(barrier),
                 "done": str(done),
                 "sentinel": str(directory / f"await.round{round_number}.{batch}.sentinel"),
+                "seat_timeout_seconds": seat_timeout,
             }
         )
     emit(

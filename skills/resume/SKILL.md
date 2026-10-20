@@ -1,8 +1,8 @@
 ---
 name: resume
-description: Resume an interrupted panel review (mid-debate, crashed, or stopped). Takes only optional round-limit overrides — scope, review profile, and instructions come from the saved session. Redirects to status/continue/discard if the saved session isn't interrupted.
+description: Resume an interrupted panel review (mid-debate, crashed, or stopped). Takes optional execution-setting overrides — scope, review profile, and instructions come from the saved session. Redirects to status/continue/discard if the saved session isn't interrupted.
 disable-model-invocation: true
-argument-hint: "[--issue-rounds N] [--max-rounds N]"
+argument-hint: "[--issue-rounds N] [--max-rounds N] [--seat-timeout N]"
 ---
 
 # panel-review:resume
@@ -18,10 +18,11 @@ ROOT="${CLAUDE_PLUGIN_ROOT}"; ROOT="${ROOT%/}"   # strip trailing slash so $SC h
 SC="$ROOT/scripts"
 ```
 
-## Step 1 — parse `$ARGUMENTS` (limit overrides only)
+## Step 1 — parse `$ARGUMENTS` (execution-setting overrides only)
 
-Apply `--issue-rounds N` / `--max-rounds N` if present (track whether each was actually given — you
-need that later to decide whether to write back an override). Anything else in `$ARGUMENTS` — a scope
+Apply `--issue-rounds N`, `--max-rounds N`, and `--seat-timeout N` if present. Set
+`ISS_OVERRIDE`, `MAX_OVERRIDE`, and `TIMEOUT_OVERRIDE` only for values the user supplied. Track each
+value for the manifest update in Step 5. Anything else in `$ARGUMENTS` — a scope
 flag, free text, `--review-profile`, or `--instructions` — is a hard error:
 
 > `panel-review:resume` takes the scope, review profile, and instructions from the saved review; it doesn't accept
@@ -43,7 +44,7 @@ ids=(); [ -d "$base" ] && for d in "$base"/*/; do [ -f "$d/.panel-run" ] && ids+
   Stop.
 - **1** → `id="${ids[0]}"`. Continue to Step 3.
 
-## Step 3 — adopt scope/profile/limits/instructions, resolve the current diff
+## Step 3 — adopt scope/profile/settings/instructions, resolve the current diff
 
 ```bash
 man="/tmp/$id/manifest.json"
@@ -52,14 +53,18 @@ man="/tmp/$id/manifest.json"
   exit 1
 }
 scope="$(jq -r '.scope' "$man")"
-ISS="$(jq -r '.limits.issue_rounds' "$man")"
-MAX="$(jq -r '.limits.max_rounds' "$man")"
+RUN_SETTINGS="$("$SC/user_config.py" read-settings --id "$id")" || {
+  echo "Saved execution settings are invalid. No state was changed. Inspect the run or discard it if you want to abandon it."
+  exit 1
+}
+ISS="$(jq -r '.limits.issue_rounds' <<<"$RUN_SETTINGS")"
+MAX="$(jq -r '.limits.max_rounds' <<<"$RUN_SETTINGS")"
 INSTR="$(jq -r '.instructions // ""' "$man")"
 PROFILE="$(jq -r '.review_profile.source_path' "$man")" # provenance only; seats use /tmp/$id/review-profile.md
 ```
 
-Apply any `--issue-rounds`/`--max-rounds` override from Step 1 on top of the adopted `ISS`/`MAX` now
-(validate as `start` does: positive integers, `issue-rounds ≤ max-rounds`).
+The saved manifest supplies every setting the user did not override. Do not read `config.json` here.
+`set_limits` merges and validates explicit values before dispatch.
 
 Resolve + hash the **current** diff for the adopted `scope` (same as `start`'s Step 2):
 
@@ -105,13 +110,26 @@ rm -f "$DIFF_FILE"
   if it somehow does, treat `fresh` as "no saved review" and `ambiguous` as the Step 2 ambiguous
   message. Stop.
 
-## Step 5 — write back limit overrides, dispatch
+## Step 5 — write back setting overrides, dispatch
 
-If Step 3's overrides changed `ISS`/`MAX` from the manifest's stored values, write them back so the
-referee picks them up:
+Merge supplied overrides into the saved settings before dispatch. `set_limits` ignores user defaults
+and writes the effective values back to the manifest:
 
 ```bash
-"$SC/set_limits" --id "$id" --issue-rounds "$ISS" --max-rounds "$MAX"
+SETTING_ARGS=(--id "$id")
+[ -z "${ISS_OVERRIDE:-}" ] || SETTING_ARGS+=(--issue-rounds "$ISS_OVERRIDE")
+[ -z "${MAX_OVERRIDE:-}" ] || SETTING_ARGS+=(--max-rounds "$MAX_OVERRIDE")
+[ -z "${TIMEOUT_OVERRIDE:-}" ] || SETTING_ARGS+=(--seat-timeout "$TIMEOUT_OVERRIDE")
+"$SC/set_limits" "${SETTING_ARGS[@]}" || {
+  echo "Could not update saved settings. Stop before dispatch."
+  exit 1
+}
+RUN_SETTINGS="$("$SC/user_config.py" read-settings --id "$id")" || {
+  echo "Could not read saved settings. Stop before dispatch."
+  exit 1
+}
+ISS="$(jq -r '.limits.issue_rounds' <<<"$RUN_SETTINGS")"
+MAX="$(jq -r '.limits.max_rounds' <<<"$RUN_SETTINGS")"
 ```
 
 In all cases, capture the current continuation epoch for failed-response artifact validation:

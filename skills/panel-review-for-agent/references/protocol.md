@@ -76,11 +76,11 @@ it is an absolute path under `/tmp/<id>/work`, deliberately outside every reposi
 
 **CLI seats are long-running.** Run their prepared command only through the
 `panel-review-cli-barrier` Agent; never run or background `await_seats` yourself. Pass the Agent the
-`command`, `done`, and `sentinel` paths produced by `round prepare-*`. The barrier's own agent
-definition owns how it launches and waits. Its background `Bash` call sets `timeout: 2700000` ms
-(45 minutes), above the ~43-minute wait budget and below Claude Code's two-hour maximum for
-unattended background commands. On return, consume only its `await_seats_rc` result and the status
-files through `round collect-*`.
+`command`, `done`, `sentinel`, and `seat_timeout_seconds` fields produced by `round prepare-*`. The
+barrier computes a wait budget 60 seconds longer than the saved timeout and derives its background
+tool timeout and short-wait count from that budget. `user_config.py` caps the saved timeout so the
+barrier stays below Claude Code's two-hour limit. On return, consume only its `await_seats_rc` result
+and the status files through `round collect-*`.
 
 Dispatch the CLI-barrier and fresh Claude-seat Agent calls together in one assistant response, both
 with `run_in_background: false`. Multiple foreground Agent calls in one response run concurrently,
@@ -261,8 +261,8 @@ the available peer seat(s), then call:
 "$SC/round" prepare-round0 "$id" <configured seats...>
 ```
 
-Its compact JSON gives `prompt`, an optional `claude_prompt`, and optional CLI-barrier
-`command`/`done`/`sentinel` paths. It owns diff resolution, the guard snapshot,
+Its compact JSON gives `prompt`, an optional `claude_prompt`, optional CLI-barrier
+`command`/`done`/`sentinel` paths, and the saved `seat_timeout_seconds`. It owns diff resolution, the guard snapshot,
 saved-review-profile validation/reference, absolute path anchors, seat-contract rendering, prompt
 assembly, completed-seat checkpoint retention, and selective retry preparation; do not repeat those
 mechanics. In seat prompts, code under review (and debate card files) resolve under the workdir;
@@ -272,7 +272,8 @@ Every prompt tells seats to pass the workdir explicitly as the tool `cwd`. Exit 
 neutral sentences based on branch name, commit subjects, and status—not an interpretation of the
 diff—to the returned path, then call `prepare-round0` again. A diff-hash mismatch is a hard stop.
 
-Issue every non-null returned Agent call together in one assistant response, then take no turns
+Pass the saved timeout as `seat_timeout_seconds=<value>` to each CLI-barrier Agent. The prepared
+command already passes that value to every CLI seat. Issue every non-null returned Agent call together in one assistant response, then take no turns
 until they have returned. Call `round collect-round0 "$id" --final`; its JSON is the authoritative
 engagement/count/guard summary. A CLI parse status 4/5 may use the lazily loaded `salvage` phase and
 then be recollected. A missing Claude raw means the seat failed closed and is down—never salvage
@@ -394,6 +395,7 @@ Claude plus the available peer seat(s), then prepare the common pass:
 ```
 
 Its JSON gives the round/epoch, shared CLI prompt, optional Claude-specific prompt, and barrier paths.
+Each barrier entry includes the saved `seat_timeout_seconds`; pass it to the CLI-barrier Agent.
 Spawn one CLI barrier per returned entry and a fresh Claude Agent only when `claude_prompt` is
 non-null; a missing entry/prompt is already checkpointed and must not be re-dispatched. Issue every
 returned Agent call together in one assistant response with `run_in_background: false`; they run
@@ -507,12 +509,14 @@ the common one-batch shape.
    # prompt to a script (--tag new_findings parses the new-findings block; `sweep
    # ingest-batch` re-reads the SAME raw file for stances below), then run it via the
    # cli-barrier Agent — never background await_seats yourself (it would not wake you).
-   printf '%s\n' "$SC/await_seats --id $id --tag new_findings --prompt /tmp/$id/debate.$round.prompt --seat codex --raw /tmp/$id/raw/round$round.codex.$batch.txt --parsed /tmp/$id/nf.$round.codex.json --status /tmp/$id/status.round$round.codex.$batch --seat gemini --raw /tmp/$id/raw/round$round.gemini.$batch.txt --parsed /tmp/$id/nf.$round.gemini.json --status /tmp/$id/status.round$round.gemini.$batch --done /tmp/$id/await.round$round.$batch.txt" > /tmp/$id/cli_barrier.round$round.$batch.sh
+   seat_timeout_seconds="$(jq -r '.limits.seat_timeout_seconds // 2400' "/tmp/$id/manifest.json")"
+   printf '%s\n' "$SC/await_seats --id $id --tag new_findings --prompt /tmp/$id/debate.$round.prompt --seat-timeout $seat_timeout_seconds --seat codex --raw /tmp/$id/raw/round$round.codex.$batch.txt --parsed /tmp/$id/nf.$round.codex.json --status /tmp/$id/status.round$round.codex.$batch --seat gemini --raw /tmp/$id/raw/round$round.gemini.$batch.txt --parsed /tmp/$id/nf.$round.gemini.json --status /tmp/$id/status.round$round.gemini.$batch --done /tmp/$id/await.round$round.$batch.txt" > /tmp/$id/cli_barrier.round$round.$batch.sh
    ```
    Spawn the **CLI barrier** as an Agent with
    `subagent_type: panel-review:panel-review-cli-barrier`
    (`command=/tmp/<id>/cli_barrier.round$round.$batch.sh`, `done=/tmp/<id>/await.round$round.$batch.txt`,
-   `sentinel=/tmp/<id>/await.round$round.$batch.sentinel`, `workdir=<repo root>`; on its return an
+   `sentinel=/tmp/<id>/await.round$round.$batch.sentinel`,
+   `seat_timeout_seconds=$seat_timeout_seconds`, `workdir=<repo root>`; on its return an
    `await_seats_rc` that is nonzero or `absent` means the seats did not run this batch — treat those
    CLI seats as down for the batch and note it in Process notes) and the **fresh Claude seat** as its
    own Agent alongside it (it cannot run inside `await_seats`). Issue every barrier and Claude-seat

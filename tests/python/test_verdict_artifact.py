@@ -23,16 +23,22 @@ class VerdictArtifactTest(unittest.TestCase):
         self.run_dir = Path("/tmp") / self.run_id
         self.run_dir.mkdir()
         self.artifact = Path("/tmp") / f"{self.run_id}.md"
+        self.config_home = tempfile.TemporaryDirectory()
+        self.lifecycle_env = os.environ.copy()
+        self.lifecycle_env["XDG_CONFIG_HOME"] = self.config_home.name
+        self.lifecycle_env.pop("PANEL_REVIEW_KEEP_TMP", None)
+        self.lifecycle_env.pop("PANEL_REVIEW_SEAT_TIMEOUT", None)
         self.scope = "question=check the durable result"
         self.diff_hash = "a" * 64
         manifest = {
             "id": self.run_id,
             "scope": self.scope,
             "instructions": "focus on correctness",
-            "limits": {"issue_rounds": 2, "max_rounds": 4},
+            "limits": {"issue_rounds": 2, "max_rounds": 4, "seat_timeout_seconds": 2400},
             "diff_hash": self.diff_hash,
             "created": "2026-07-14 00:00:00",
             "review_profile": {
+                "selector": "domain",
                 "source_path": "/home/developer/.claude/skills/example/references/review-profile.md",
                 "sha256": "b" * 64,
                 "size": 1234,
@@ -51,6 +57,7 @@ class VerdictArtifactTest(unittest.TestCase):
         shutil.rmtree(self.run_dir, ignore_errors=True)
         self.artifact.unlink(missing_ok=True)
         Path(str(self.artifact) + ".bak").unlink(missing_ok=True)
+        self.config_home.cleanup()
 
     def write_index(self, state, phase="debate", run_epoch=0, severity="low"):
         (self.run_dir / "index.json").write_text(
@@ -86,9 +93,7 @@ class VerdictArtifactTest(unittest.TestCase):
         return self.read_artifact("--delivery", *extra)
 
     def default_lifecycle_env(self):
-        env = os.environ.copy()
-        env.pop("PANEL_REVIEW_KEEP_TMP", None)
-        return env
+        return self.lifecycle_env
 
     def test_finished_artifact_records_profile_and_reader_identifies_it(self):
         written = self.write_artifact()
@@ -96,9 +101,12 @@ class VerdictArtifactTest(unittest.TestCase):
         artifact = self.artifact.read_text(encoding="utf-8")
         self.assertIn("run_epoch: 0\n", artifact)
         self.assertIn("status: finished\n", artifact)
+        self.assertIn('review_profile_selector: "domain"\n', artifact)
         self.assertIn('review_profile_path: "/home/developer/.claude/skills/example/references/review-profile.md"\n', artifact)
         self.assertIn(f"review_profile_sha256: {'b' * 64}\n", artifact)
         self.assertIn("review_profile_size: 1234\n", artifact)
+        self.assertIn("limits: issue-rounds=2 max-rounds=4\n", artifact)
+        self.assertIn("seat_timeout_seconds: 2400\n", artifact)
 
         result = self.read_artifact(
             "--scope", self.scope,
@@ -108,8 +116,12 @@ class VerdictArtifactTest(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         expected = (
+            "Review profile selector: domain\n"
             "Review profile: /home/developer/.claude/skills/example/references/review-profile.md\n"
-            f"SHA-256: {'b' * 64}\n\n"
+            f"SHA-256: {'b' * 64}\n"
+            "Size: 1234 bytes\n"
+            "Round limits: issue-rounds=2 max-rounds=4\n"
+            "Seat timeout: 2400 seconds\n\n"
             f"{self.body}"
         )
         self.assertEqual(result.stdout, expected)
@@ -121,7 +133,11 @@ class VerdictArtifactTest(unittest.TestCase):
         self.assertEqual(self.write_artifact().returncode, 0)
         lines = self.artifact.read_text(encoding="utf-8").splitlines(keepends=True)
         self.artifact.write_text(
-            "".join(line for line in lines if not line.startswith("review_profile_")),
+            "".join(
+                line for line in lines
+                if not line.startswith("review_profile_")
+                and not line.startswith("seat_timeout_seconds:")
+            ),
             encoding="utf-8",
         )
 
@@ -339,8 +355,12 @@ class VerdictArtifactTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
             result.stdout,
+            "Review profile selector: domain\n"
             "Review profile: /home/developer/.claude/skills/example/references/review-profile.md\n"
-            f"SHA-256: {'b' * 64}\n\n"
+            f"SHA-256: {'b' * 64}\n"
+            "Size: 1234 bytes\n"
+            "Round limits: issue-rounds=2 max-rounds=4\n"
+            "Seat timeout: 2400 seconds\n\n"
             f"{self.body}",
         )
         delivery = self.deliver_artifact()

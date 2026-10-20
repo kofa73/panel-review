@@ -9,10 +9,18 @@ import subprocess
 import sys
 
 from panel_common import panel_require_id
+from user_config import MAX_SEAT_TIMEOUT_SECONDS
 
 
 USAGE = "usage: read_verdict_artifact --id ID [--delivery] [--scope SCOPE --diff-hash HASH --run-epoch N]"
-JSON_FIELDS = {"scope", "instructions", "seats", "rounds", "review_profile_path"}
+JSON_FIELDS = {
+    "scope",
+    "instructions",
+    "seats",
+    "rounds",
+    "review_profile_selector",
+    "review_profile_path",
+}
 PROFILE_FIELDS = {"review_profile_path", "review_profile_sha256", "review_profile_size"}
 REQUIRED_FIELDS = {
     "id",
@@ -168,6 +176,12 @@ def validate(fields, run_id, expected_scope, expected_hash, expected_epoch, allo
             raise ArtifactError("artifact review_profile_size is invalid")
         if int(fields["review_profile_size"]) > 64 * 1024:
             raise ArtifactError("artifact review_profile_size is invalid")
+    if "review_profile_selector" in fields and not fields["review_profile_selector"]:
+        raise ArtifactError("artifact review_profile_selector is invalid")
+    if "seat_timeout_seconds" in fields:
+        timeout = fields["seat_timeout_seconds"]
+        if re.fullmatch(r"[1-9][0-9]*", timeout) is None or int(timeout) > MAX_SEAT_TIMEOUT_SECONDS:
+            raise ArtifactError("artifact seat_timeout_seconds is invalid")
     if expected_scope is not None and fields["scope"] != expected_scope:
         raise ArtifactError("artifact scope does not match the requested run")
     if expected_hash is not None and fields["diff_hash"] != expected_hash:
@@ -250,13 +264,32 @@ def delivery_text(fields, run_id):
 
 
 def result_text(fields, body):
-    if not PROFILE_FIELDS <= fields.keys():
+    if "review_profile_selector" not in fields and "seat_timeout_seconds" not in fields:
+        if PROFILE_FIELDS <= fields.keys():
+            return (
+                f"Review profile: {fields['review_profile_path']}\n"
+                f"SHA-256: {fields['review_profile_sha256']}\n\n"
+                f"{body}"
+            )
         return body
-    return (
-        f"Review profile: {fields['review_profile_path']}\n"
-        f"SHA-256: {fields['review_profile_sha256']}\n\n"
-        f"{body}"
-    )
+    metadata = []
+    if "review_profile_selector" in fields:
+        metadata.append(f"Review profile selector: {fields['review_profile_selector']}")
+    if PROFILE_FIELDS <= fields.keys():
+        metadata.extend(
+            [
+                f"Review profile: {fields['review_profile_path']}",
+                f"SHA-256: {fields['review_profile_sha256']}",
+                f"Size: {fields['review_profile_size']} bytes",
+            ]
+        )
+    if "limits" in fields:
+        metadata.append(f"Round limits: {fields['limits']}")
+    if "seat_timeout_seconds" in fields:
+        metadata.append(f"Seat timeout: {fields['seat_timeout_seconds']} seconds")
+    if not metadata:
+        return body
+    return "\n".join(metadata) + "\n\n" + body
 
 
 def main(argv):

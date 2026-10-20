@@ -18,13 +18,17 @@ while [ "$#" -gt 0 ]; do
 done
 panel_require_id "$id"; [ -n "$workdir" ] || { echo "cleanup: need --workdir" >&2; exit 2; }
 
+# Validate the whole config before deleting either workspace or /tmp state.
+policy="$("$here/user_config.py" cleanup-policy)"
+keep_tmp="$(jq -r '.keep_tmp' <<<"$policy")"
+
 marker="$workdir/.panel-review/$id"
 # Guard: only ever rm a path that ends in our validated id, under the expected roots.
 [ -d "$marker" ] && rm -rf -- "$marker"
-# PANEL_REVIEW_KEEP_TMP=true preserves the /tmp/<id> diagnostic dir (manifest,
-# index, sweeps, raw, audit) while still removing all workspace state below.
-if panel_keep_tmp; then
-  echo "cleanup: PANEL_REVIEW_KEEP_TMP=true — preserving /tmp/$id (workspace state removed)" >&2
+# cleanup.keep_tmp preserves the /tmp/<id> diagnostic dir while still removing
+# the workspace state below.
+if [ "$keep_tmp" = true ]; then
+  echo "cleanup: cleanup.keep_tmp=true — preserving /tmp/$id (workspace state removed)" >&2
 else
   [ -d "/tmp/$id" ] && rm -rf -- "/tmp/$id"
 fi
@@ -36,7 +40,10 @@ fi
 
 base="$workdir/.panel-review"
 if [ -d "$base" ]; then
-  remaining=0; for d in "$base"/*/; do [ -d "$d" ] && remaining=1; done
+  remaining=0
+  for d in "$base"/*/; do
+    if [ -d "$d" ]; then remaining=1; fi
+  done
   if [ "$remaining" -eq 0 ]; then
     # No run dirs left. Clear the whole base — it may still hold worktree-wide
     # stray files such as .init.lock that a bare rmdir would choke on, leaving the

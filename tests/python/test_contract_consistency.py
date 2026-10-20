@@ -109,6 +109,37 @@ class ContractConsistencyTest(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("stale-run-handoff", result.stderr)
 
+    def test_resume_and_continue_stop_when_saved_setting_update_fails(self):
+        for name in ("resume", "continue"):
+            with self.subTest(command=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.copy_contract_tree(root)
+                skill = root / f"skills/{name}/SKILL.md"
+                text = skill.read_text(encoding="utf-8")
+                guarded_call = '"$SC/set_limits" "${SETTING_ARGS[@]}" || {'
+                self.assertIn(guarded_call, text)
+                skill.write_text(text.replace(guarded_call, '"$SC/set_limits" "${SETTING_ARGS[@]}"', 1), encoding="utf-8")
+
+                result = self.run_check(root)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("saved-setting-update-guard", result.stderr)
+
+    def test_multi_batch_barrier_dispatch_passes_saved_timeout(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_contract_tree(root)
+            protocol = root / "skills/panel-review-for-agent/references/protocol.md"
+            text = protocol.read_text(encoding="utf-8")
+            timeout_field = "`seat_timeout_seconds=$seat_timeout_seconds`"
+            self.assertIn(timeout_field, text)
+            protocol.write_text(text.replace(timeout_field, "`workdir=<repo root>`", 1), encoding="utf-8")
+
+            result = self.run_check(root)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("multi-batch-barrier-timeout", result.stderr)
+
     def test_card_cache_contract_rejects_metadata_and_late_cleanup(self):
         cases = [
             ("scripts/project_card", "printf '<!-- panel stale -->\\n'\\n"),
@@ -250,6 +281,9 @@ class ContractConsistencyTest(unittest.TestCase):
         (root / "scripts").mkdir()
         shutil.copy2(ROOT / "scripts/read_protocol_phase", root / "scripts/read_protocol_phase")
         shutil.copy2(ROOT / "scripts/round", root / "scripts/round")
+        shutil.copy2(ROOT / "scripts/user_config.py", root / "scripts/user_config.py")
+        for name in ("init_run", "cleanup", "discard", "await_seats"):
+            shutil.copy2(ROOT / "scripts" / name, root / "scripts" / name)
         shutil.copy2(ROOT / "scripts/merge_payload", root / "scripts/merge_payload")
         shutil.copy2(ROOT / "scripts/repo_guard", root / "scripts/repo_guard")
         for name in (

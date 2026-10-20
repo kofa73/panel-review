@@ -1,14 +1,14 @@
 ---
 name: start
-description: Start a fresh panel review (three-way blind debate across Claude + Codex + Gemini). Takes the scope, optional review profile, optional author instructions, and round limits. Refuses if a saved review already exists for this workdir.
+description: Start a fresh panel review (three-way blind debate across Claude + Codex + Gemini). Takes the scope, optional review profile, author instructions, and execution-setting overrides. Refuses if a saved review already exists for this workdir.
 disable-model-invocation: true
-argument-hint: "--base <branch> | --uncommitted | --commit <SHA> | <topic>  [--review-profile <path>] [--issue-rounds N] [--max-rounds N] [--debate-low]  [<focus text> | --instructions <text|auto>]"
+argument-hint: "--base <branch> | --uncommitted | --commit <SHA> | <topic>  [--review-profile <selector>] [--issue-rounds N] [--max-rounds N] [--seat-timeout N] [--debate-low]  [<focus text> | --instructions <text|auto>]"
 ---
 
 # panel-review:start
 
 You are the **main-context entry point** for starting a fresh review. Your job: parse the scope +
-instructions + round limits, refuse if a session already exists, otherwise mint the run, dispatch
+instructions + setting overrides, refuse if a session already exists, otherwise mint the run, dispatch
 the `panel-review:panel-review-referee` agent, and validate the durable report it writes. The report
 file is the only verdict-delivery surface; never copy its body into this conversation. You do **not**
 run the review yourself. Run everything from the repo root.
@@ -21,11 +21,11 @@ ROOT="${CLAUDE_PLUGIN_ROOT}"; ROOT="${ROOT%/}"   # strip trailing slash so $SC h
 SC="$ROOT/scripts"
 ```
 
-## Step 1 — parse `$ARGUMENTS` (instructions, profile, round limits, then scope)
+## Step 1 — parse `$ARGUMENTS` (instructions, profile, settings, then scope)
 
 The harness does **not** parse flags; you get the raw `$ARGUMENTS` string. Parse it yourself:
 
-0. **`--instructions` (explicit form) — extract this BEFORE round limits, `--debate-low`, and
+0. **`--instructions` (explicit form) — extract this BEFORE settings, `--debate-low`, and
    scope.** Before extracting it, reject a `--review-profile` token after `--instructions` with
    `--review-profile must appear before --instructions.` Otherwise it must be processed first
    because everything after it is literal: if the token
@@ -36,14 +36,17 @@ The harness does **not** parse flags; you get the raw `$ARGUMENTS` string. Parse
    that text. The special value `--instructions auto` sets `INSTR=auto` (referee generates context from
    branch / commit messages / `git status`). If `--instructions` is present but the text is empty, stop
    with `--instructions needs text (or 'auto').` If `--instructions` is absent, leave `INSTR` unset for now.
-0b. **`--review-profile <path>`.** Accept at most one occurrence in the remaining arguments, set
-   `PROFILE` to its path, and remove both tokens. Reject a missing path or duplicate flag clearly.
-   The path may be relative to the current repository or begin with `~`; `init_run` resolves it and
-   owns regular-file, non-empty UTF-8, and 64 KiB validation. If absent, leave `PROFILE` empty so
-   `init_run` snapshots panel-review's built-in generic profile.
-1. **Round limits.** Defaults `issue-rounds=2`, `max-rounds=4`. Apply `--issue-rounds N` /
-   `--max-rounds N` if present, then validate the **resolved** values: each a positive integer and
-   `issue-rounds ≤ max-rounds`. Otherwise stop with a one-line error.
+0b. **`--review-profile <selector>`.** Accept at most one occurrence in the remaining arguments,
+   set `PROFILE` to its value, and remove both tokens. Reject a missing value or duplicate flag.
+   `init_run` resolves a direct path, configured name, or `builtin:generic`, then validates and
+   snapshots the selected profile. If the flag is absent, `init_run` uses the configured default or
+   `builtin:generic`.
+1. **Execution settings.** Record any `--issue-rounds N`, `--max-rounds N`, and
+   `--seat-timeout N` options without filling missing values here. `init_run` merges them with
+   `config.json` and built-in defaults, validates the effective values, and saves them in the
+   manifest. Set `ISS_OVERRIDE`, `MAX_OVERRIDE`, and `TIMEOUT_OVERRIDE` only for flags the user
+   supplied, then remove each flag and value from the remaining arguments. A missing value is an
+   error.
 1b. **`--debate-low`** (boolean, default off). If present, set `DEBATE_LOW=true` and remove it from
    the string; else `DEBATE_LOW=false`. It tells the agent to debate even when Round 0 finds only
    low-severity items (skip the Round-0 severity gate).
@@ -60,7 +63,7 @@ The harness does **not** parse flags; you get the raw `$ARGUMENTS` string. Parse
 
    Positionality / precedence:
    - A **diff scope** (`--base`/`--uncommitted`/`--commit`) + trailing free text → that text is the
-     instructions. Put it **after** the scope and any `--issue-rounds`/`--max-rounds` flags. It must
+     instructions. Put it **after** the scope and setting flags. It must
      **not** contain `--`-looking tokens (they'd be parsed as flags) — if it needs to, use the
      explicit `--instructions … ` form instead.
    - If `INSTR` was already set by `--instructions` (step 0) **and** non-flag free text also remains,
@@ -71,7 +74,7 @@ The harness does **not** parse flags; you get the raw `$ARGUMENTS` string. Parse
 
 3. If **no scope flag was given AND** nothing remains after removing the flags → print exactly:
    ```
-   Specify a scope: --base <branch> | --uncommitted | --commit <SHA> | <topic>  [--review-profile <path>] [--issue-rounds N] [--max-rounds N]  [<focus text> | --instructions <text|auto>]
+   Specify a scope: --base <branch> | --uncommitted | --commit <SHA> | <topic>  [--review-profile <selector>] [--issue-rounds N] [--max-rounds N] [--seat-timeout N]  [<focus text> | --instructions <text|auto>]
    ```
    and stop. (`--uncommitted` legitimately leaves no positional text — that is a valid scope, not
    an error. Never guess a base branch.)
@@ -169,9 +172,16 @@ ids=(); [ -d "$base" ] && for d in "$base"/*/; do [ -f "$d/.panel-run" ] && ids+
 ## Step 4 — mint the run and dispatch
 
 ```bash
+SETTING_ARGS=()
+[ -z "${ISS_OVERRIDE:-}" ] || SETTING_ARGS+=(--issue-rounds "$ISS_OVERRIDE")
+[ -z "${MAX_OVERRIDE:-}" ] || SETTING_ARGS+=(--max-rounds "$MAX_OVERRIDE")
+[ -z "${TIMEOUT_OVERRIDE:-}" ] || SETTING_ARGS+=(--seat-timeout "$TIMEOUT_OVERRIDE")
 PROFILE_ARGS=()
-[ -z "$PROFILE" ] || PROFILE_ARGS=(--review-profile "$PROFILE")
-ID="$("$SC/init_run" --workdir "$PWD" --scope "$scope" --issue-rounds "$ISS" --max-rounds "$MAX" --diff-hash "$DH" --instructions "$INSTR" "${PROFILE_ARGS[@]}")"
+[ -z "$PROFILE" ] || PROFILE_ARGS+=(--review-profile "$PROFILE")
+ID="$("$SC/init_run" --workdir "$PWD" --scope "$scope" --diff-hash "$DH" --instructions "$INSTR" "${SETTING_ARGS[@]}" "${PROFILE_ARGS[@]}")"
+RUN_SETTINGS="$("$SC/user_config.py" read-settings --id "$ID")"
+ISS="$(jq -r '.limits.issue_rounds' <<<"$RUN_SETTINGS")"
+MAX="$(jq -r '.limits.max_rounds' <<<"$RUN_SETTINGS")"
 EPOCH=0
 ```
 

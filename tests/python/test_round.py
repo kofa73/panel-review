@@ -89,7 +89,7 @@ class RoundTest(unittest.TestCase):
             "id": self.run_id,
             "workdir": str(self.workdir),
             "scope": "uncommitted",
-            "limits": {"issue_rounds": 2, "max_rounds": 4},
+            "limits": {"issue_rounds": 2, "max_rounds": 4, "seat_timeout_seconds": 901},
             "diff_hash": hashlib.sha256(diff).hexdigest(),
             "divergence_snapshot": divergence_snapshot,
             "instructions": "",
@@ -181,6 +181,7 @@ class RoundTest(unittest.TestCase):
         prepared = self.prepare_round0()
 
         self.assertEqual(prepared["status"], "prepared")
+        self.assertEqual(prepared["seat_timeout_seconds"], 901)
         common = Path(prepared["prompt"]).read_text(encoding="utf-8")
         claude = Path(prepared["claude_prompt"]).read_text(encoding="utf-8")
         self.assertNotIn("CLAUDE_SEAT_RAW_WRITTEN", common)
@@ -188,6 +189,7 @@ class RoundTest(unittest.TestCase):
         self.assertIn(str(self.run_dir / "raw" / "round0.claude.txt"), claude)
         barrier = Path(prepared["command"]).read_text(encoding="utf-8")
         self.assertIn("--seat codex", barrier)
+        self.assertIn("--seat-timeout 901", barrier)
         self.assertNotIn("--seat claude", barrier)
         self.assertTrue((self.run_dir / "guard" / "manifest.sha256").is_file())
         self.assertIn(str(self.run_dir / "review-profile.md"), common)
@@ -226,7 +228,11 @@ class RoundTest(unittest.TestCase):
         prepared = self.run_round("prepare-debate", self.run_id, "claude", "codex")
 
         self.assertEqual(prepared.returncode, 0, prepared.stderr)
-        prompt = Path(json.loads(prepared.stdout)["prompt"]).read_text(encoding="utf-8")
+        summary = json.loads(prepared.stdout)
+        prompt = Path(summary["prompt"]).read_text(encoding="utf-8")
+        self.assertEqual(summary["barriers"][0]["seat_timeout_seconds"], 901)
+        barrier = Path(summary["barriers"][0]["command"]).read_text(encoding="utf-8")
+        self.assertIn("--seat-timeout 901", barrier)
         self.assertIn(str(self.run_dir / "review-profile.md"), prompt)
         self.assertIn(hashlib.sha256(self.profile).hexdigest(), prompt)
         self.assertNotIn(self.profile.decode(), prompt)

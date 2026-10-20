@@ -48,8 +48,11 @@ jq -e . "$idx" >/dev/null 2>&1 || stale
 
 m_scope=$(jq -r '.scope' "$man" 2>/dev/null) || stale
 m_instr=$(jq -r '.instructions // ""' "$man" 2>/dev/null) || stale
-m_iss=$(jq -r '.limits.issue_rounds' "$man" 2>/dev/null) || stale
-m_mx=$(jq -r '.limits.max_rounds' "$man" 2>/dev/null) || stale
+settings="$("$here/user_config.py" read-settings --id "$id" 2>/dev/null)" || stale
+m_iss=$(jq -r '.limits.issue_rounds' <<<"$settings") || stale
+m_mx=$(jq -r '.limits.max_rounds' <<<"$settings") || stale
+m_timeout=$(jq -r '.limits.seat_timeout_seconds' <<<"$settings") || stale
+m_profile_selector=$(jq -r '.review_profile_selector' <<<"$settings") || stale
 m_dh=$(jq -r '.diff_hash' "$man" 2>/dev/null) || stale
 m_created=$(jq -r '.created // ""' "$man" 2>/dev/null) || stale
 m_profile_path=$(jq -r '.review_profile.source_path // ""' "$man" 2>/dev/null) || stale
@@ -100,11 +103,13 @@ if [ -z "$state" ]; then
 fi
 
 jq -n --arg id "$id" --arg state "$state" --arg scope "$m_scope" --arg instr "$m_instr" \
-      --argjson iss "$m_iss" --argjson mx "$m_mx" --arg created "$m_created" \
+      --argjson iss "$m_iss" --argjson mx "$m_mx" --argjson timeout "$m_timeout" \
+      --arg profile_selector "$m_profile_selector" --arg created "$m_created" \
       --arg profile_path "$m_profile_path" --arg profile_hash "$m_profile_hash" \
       --argjson profile_size "$m_profile_size" \
       --slurpfile divergence "$divergence_file" \
       --argjson counts "$counts" \
   '{id:$id, state:$state, scope:$scope, instructions:$instr,
-    review_profile:{source_path:$profile_path, sha256:$profile_hash, size:$profile_size},
-    issue_rounds:$iss, max_rounds:$mx, created:$created, divergence:$divergence[0]} + $counts'
+    review_profile:{selector:$profile_selector, source_path:$profile_path, sha256:$profile_hash, size:$profile_size},
+    issue_rounds:$iss, max_rounds:$mx, seat_timeout_seconds:$timeout,
+    created:$created, divergence:$divergence[0]} + $counts'

@@ -30,11 +30,6 @@ def panel_require_id(value):
         raise SystemExit(2)
 
 
-def panel_keep_tmp():
-    """Keep diagnostic state only for the explicit, documented opt-in value."""
-    return os.environ.get("PANEL_REVIEW_KEEP_TMP") == "true"
-
-
 def _write_temp(directory, data):
     fd, path = tempfile.mkstemp(prefix=".panel.", dir=directory)
     try:

@@ -57,8 +57,9 @@
 #   (~34m worst case across its two model attempts); run_codex does NOT, so a
 #   wedged Codex could otherwise hold the whole panel hostage. The default backstop
 #   is generous on purpose — above run_agy's legitimate worst case — so it only
-#   fires on a true hang, never guillotines a slow-but-progressing pass. Lower it
-#   (flag or PANEL_REVIEW_SEAT_TIMEOUT) for a tighter per-seat cap.
+#   fires on a true hang, never guillotines a slow-but-progressing pass. Run
+#   orchestration passes the saved manifest value explicitly; this standalone
+#   default does not read inherited environment state.
 #
 # Exit: 0 once every seat has finished (engaged, down, malformed, or timed out —
 #   none of which is an error here; the referee decides what a non-0 status
@@ -77,7 +78,7 @@ USAGE="usage: await_seats --id <id> --tag <findings|new_findings|stances> --prom
 case "${1-}" in -h|--help|help) echo "$USAGE"; exit 0 ;; esac
 
 id=""; tag=""; prompt=""; done_file=""
-seat_timeout="${PANEL_REVIEW_SEAT_TIMEOUT:-$DEFAULT_SEAT_TIMEOUT}"
+seat_timeout="$DEFAULT_SEAT_TIMEOUT"
 
 # Per-seat blocks, accumulated as parallel arrays indexed by seat order.
 seats=(); raws=(); parseds=(); statuses=(); labels=()

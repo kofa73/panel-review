@@ -35,6 +35,8 @@ summary does not itemize the removed runs.
 - Only `/tmp/<id>/` state and the in-tree `.panel-review/` go. The durable verdict copy at the
   sibling path `/tmp/<id>.md` (if one was ever written) is deliberately left untouched — discard
   abandons the *session*, not a verdict the human may already have seen and want to keep.
+- `discard` reads `cleanup.keep_tmp` from the current user config. An invalid config stops the
+  command before it deletes any marker or `/tmp` state.
 - Manual alternative, if you'd rather not clear everything: remove a specific `.panel-review/<ID>/`
   marker dir **and** its matching `/tmp/<ID>/` state dir yourself — `panel-review:status` lists the
   paths.

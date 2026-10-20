@@ -234,8 +234,9 @@ panel-review:start --uncommitted                  # review staged + unstaged + u
 panel-review:start --commit <SHA>                 # review a single commit
 panel-review:start "<topic>"                      # review a free-text topic or question (no diff)
 panel-review:start --uncommitted --issue-rounds 3 --max-rounds 5   # override the loop limits
+panel-review:start --uncommitted --seat-timeout 1800              # override the CLI-seat timeout
 panel-review:start --uncommitted --debate-low                      # debate even an all-low set
-panel-review:start --base main --review-profile /path/domain-review.md  # replace generic priorities
+panel-review:start --base main --review-profile domain-review      # select a configured profile
 panel-review:start --uncommitted focus on the new locking           # steer the seats (trailing text)
 panel-review:start --base main --instructions auto                  # let the referee derive context
 panel-review:resume                               # pick up an interrupted run
@@ -244,7 +245,7 @@ panel-review:result <ID>                          # retrieve a validated finishe
 panel-review:discard                              # delete the saved review (the reset)
 ```
 
-Only `panel-review:start` takes a scope, review-profile path, or instructions — the run remembers
+Only `panel-review:start` takes a scope, review-profile selector, or instructions — the run remembers
 them, and `panel-review:resume`/`panel-review:continue` reuse the saved profile snapshot and read the
 other values from the manifest rather than asking you to retype them.
 
@@ -298,25 +299,77 @@ Notes:
 
 Every run uses one review profile: a reusable investigation method containing priorities, domain
 invariants, execution variants, false-positive filters, and severity guidance. With no flag,
-panel-review uses its built-in generic software profile, preserving the existing review behavior.
-Supply a project-specific profile explicitly when appropriate:
+panel-review uses the configured default profile or its built-in generic software profile.
+`--review-profile` accepts a configured name, a direct path, or the reserved selector
+`builtin:generic`:
 
 ```
 panel-review:start --base main \
-  --review-profile /home/developer/.claude/skills/darktable-review/references/review-profile.md
+  --review-profile /home/developer/.config/panel-review/profiles/domain-review.md
+panel-review:start --base main --review-profile domain-review
+panel-review:start --base main --review-profile builtin:generic
 ```
 
-The source must be a readable regular, non-empty UTF-8 file no larger than 64 KiB. `start` resolves
-the path and snapshots the exact bytes into `/tmp/<ID>/review-profile.md`; the manifest records the
-resolved source path, byte size, and SHA-256. Every seat reads that one saved snapshot in Round 0 and
-debate. Editing, moving, or deleting the source afterward cannot alter the run, and
-`resume`/`continue` never reload it.
+Panel-review classifies selectors by syntax. A value beginning with `/`, `./`, `../`, or `~/`, or
+containing `/`, is a path. A bare value is a configured name. The reserved selector
+`builtin:generic` always selects the built-in profile. The source must be a readable regular,
+non-empty UTF-8 file no larger than 64 KiB. `start` resolves the selector and snapshots the exact
+bytes into `/tmp/<ID>/review-profile.md`; the manifest records the selector, resolved source path,
+byte size, and SHA-256. Every seat reads that one saved snapshot in Round 0 and debate. Editing,
+moving, or deleting the source afterward cannot alter the run, and `resume`/`continue` never reload
+it.
 
 The profile changes investigation priorities; it cannot redefine panel-owned scope, roles,
 read-only rules, output blocks, finding fields, issue lifecycle, or consensus semantics. An external
 profile replaces the built-in generic priority catalogue rather than being appended to it.
 `--review-profile` must appear before `--instructions`, because `--instructions` consumes all
 remaining text.
+
+### User configuration
+
+Panel-review reads user defaults from
+`${XDG_CONFIG_HOME:-$HOME/.config}/panel-review/config.json`. A missing file keeps the built-in
+defaults: `builtin:generic`, `issue_rounds=2`, `max_rounds=4`, `seat_timeout_seconds=2400`, and
+`cleanup.keep_tmp=false`. The shared plugin ships no profile registrations or project-specific
+defaults.
+
+The version 1 config has these optional sections and fields:
+
+```json
+{
+  "version": 1,
+  "profiles": {},
+  "defaults": {
+    "review_profile": "builtin:generic",
+    "issue_rounds": 2,
+    "max_rounds": 4,
+    "seat_timeout_seconds": 2400
+  },
+  "cleanup": {
+    "keep_tmp": false
+  }
+}
+```
+
+Each `profiles` value must be a full absolute source path. Panel-review validates the selected file
+with the review-profile size, regular-file, non-empty, and UTF-8 rules above. It rejects malformed
+JSON, unsupported versions, unknown keys, wrong types, and invalid values before creating a run
+marker. Set `defaults.review_profile` to a configured name or selector. An explicit
+`--review-profile` takes precedence, and `builtin:generic` bypasses any configured default.
+
+For a new run, each execution setting uses this precedence: command option, config default, then
+built-in default. The manifest saves the effective profile selector, round limits, and seat timeout.
+`resume` and `continue` ignore config defaults. Their explicit `--issue-rounds`, `--max-rounds`, and
+`--seat-timeout` options update the saved manifest before dispatch. A config change affects new runs
+only. Invalid overrides stop before dispatch, and `continue` does not reopen the run. The CLI
+barrier's two-hour platform limit currently caps `seat_timeout_seconds` at 7110.
+
+`cleanup` and `discard` read the current `cleanup.keep_tmp` value when they run. A missing config
+uses `false`; an invalid config stops either command before it deletes workspace or `/tmp` state.
+When true, cleanup removes the marker and cards but keeps `/tmp/<ID>/` for diagnostics. The durable
+verdict at `/tmp/<ID>.md` survives either policy. `PANEL_REVIEW_KEEP_TMP` and
+`PANEL_REVIEW_SEAT_TIMEOUT` are rejected with migration guidance; use `cleanup.keep_tmp`, config
+defaults, or `--seat-timeout` instead.
 
 Four more behaviors worth knowing before you run it:
 
@@ -349,29 +402,17 @@ Four more behaviors worth knowing before you run it:
   valid artifact exists, start a fresh conversation (normally `/clear`) and invoke
   `panel-review:resume`. Treat these failures as orchestration failures, not a down-seat pass.
 
-The loop is bounded by a per-issue counter (`--issue-rounds`, default 2) and a global ceiling
-(`--max-rounds`, default 4), so it always terminates.
+The loop is bounded by `issue_rounds` and `max_rounds`. New runs use config defaults or the built-in
+values of 2 and 4. Explicit command options override them for that run.
 
-### Slow seats and timeouts (optional)
+### Seat timeouts
 
-**You normally set nothing.** `await_seats` allows each CLI seat up to 2400 s (40 min) by default
-(`PANEL_REVIEW_SEAT_TIMEOUT`). The barrier waits for up to 26 × 100 s (about 43 min), and its
-detached Bash call has an explicit `timeout` of 2700000 ms (45 min). In unattended Claude Code
-sessions (`claude -p`, Agent SDK, CI, or cloud), background commands default to 30 min, or 10 min
-for a text-prompt `-p` run; the explicit 45-minute timeout overrides that default and is below the
-two-hour maximum. Terminal CLI sessions have no Claude Code background-command time limit.
-
-At these settings, neither `BASH_DEFAULT_TIMEOUT_MS` nor `BASH_MAX_TIMEOUT_MS` changes the barrier
-budget: its per-command timeout is explicit and below the two-hour maximum. Neither changes the
-per-seat timeout or the barrier's retry count. In unattended sessions only, set
-`BASH_MAX_TIMEOUT_MS` if you need to allow a background timeout longer than two hours.
-
-If you deliberately allow seats to run **longer than 40 min**, raise `PANEL_REVIEW_SEAT_TIMEOUT`,
-the explicit background `timeout` in [step 1 of the CLI barrier](agents/panel-review-cli-barrier.md),
-and its retry cap in step 2 together. Keep the retry budget longer than the per-seat cap and the
-background timeout longer than the retry budget. In unattended sessions, a background timeout
-cannot exceed two hours unless you raise Claude Code's maximum. Otherwise a slow seat is abandoned
-mid-run and the review degrades to the seats that did finish.
+`seat_timeout_seconds` limits each CLI seat's wall time. It defaults to 2400 seconds and can be set
+in `defaults.seat_timeout_seconds` or overridden per run with `--seat-timeout`. `round` passes the
+saved value to every Round 0 and debate barrier, including retries and continuation cycles. The
+barrier derives its wait budget from the same value, so the outer wait allows the seat timeout and
+its shutdown grace to finish. The timeout applies to Codex and Gemini; Claude runs as a separate
+subagent.
 
 ---
 
@@ -385,10 +426,10 @@ mid-run and the review degrades to the seats that did finish.
 
 | File | Kind | What it is | Invoked by |
 |------|------|------------|------------|
-| `skills/start/SKILL.md` | skill | Parses scope + review profile + instructions + limits, refuses if a session already exists, mints the run, and spawns the referee; a stale run is retained for manual recovery or explicit discard. | you, via `panel-review:start` |
+| `skills/start/SKILL.md` | skill | Parses scope + review profile + instructions + setting overrides, refuses if a session already exists, mints the run, and spawns the referee; a stale run is retained for manual recovery or explicit discard. | you, via `panel-review:start` |
 | `skills/status/SKILL.md` | skill | **Read-only.** Lists the saved session(s) + prereqs and reports missing or invalid run state as stale. | you, via `panel-review:status` (also model-invocable) |
-| `skills/resume/SKILL.md` | skill | Picks up an interrupted run (limit overrides only; scope/instructions adopted from the manifest); stale state is retained for manual recovery or explicit discard. | you, via `panel-review:resume` |
-| `skills/continue/SKILL.md` | skill | Re-debates a finished run's `unresolved`/`contested` leftovers; stale state is retained for manual recovery or explicit discard. | you, via `panel-review:continue` |
+| `skills/resume/SKILL.md` | skill | Picks up an interrupted run (execution-setting overrides only; scope/instructions adopted from the manifest); stale state is retained for manual recovery or explicit discard. | you, via `panel-review:resume` |
+| `skills/continue/SKILL.md` | skill | Re-debates a finished run's `unresolved`/`contested` leftovers and accepts saved-setting overrides; stale state is retained for manual recovery or explicit discard. | you, via `panel-review:continue` |
 | `skills/result/SKILL.md` | skill | **Read-only.** Validates and retrieves a finished durable verdict by exact artifact ID; never resumes or re-runs seats. | you, via `panel-review:result <ID>` (also model-invocable) |
 | `skills/discard/SKILL.md` | skill | Deletes all saved sessions for this workdir (the reset). | you, via `panel-review:discard` |
 | `skills/panel-review-for-agent/SKILL.md` | skill | **The referee bootstrap and return contract.** Preloaded into the referee agent (`user-invocable: false`); validates its task, exposes narrow phase loading, and owns fixed referee returns. Hidden from the `/` menu. | the referee agent (preloaded) |
@@ -406,9 +447,9 @@ read-only and left model-invocable.
 ```
 You: panel-review:start --commit abc123
            │  (main conversation)
-start      ── parse scope (commit=abc123) + profile + round limits; hash the diff
+start      ── parse scope (commit=abc123) + profile + setting overrides; hash the diff
    (skill)  ── refuse-if-session-exists precondition (state-aware message if one does)
-           ── init_run (fresh) → mints a run id; spawn the referee agent with mode/id/scope/limits
+           ── init_run (fresh) → resolves config, mints a run id, and saves effective settings; spawn the referee with mode/id/scope
            │  (separate context)
 referee    ── Round 0: assemble one blind prompt, dispatch seats, retry actual down responses once
   (agent)  ── merge findings into issues (judgment); project blind cards
@@ -422,7 +463,7 @@ start      ── validates the artifact; reports only `/tmp/<ID>.md` + minimal 
 
 An interrupted or finished-with-leftovers session is picked up the same way via
 `panel-review:resume`/`panel-review:continue` instead of `start`'s precondition+`init_run` step —
-they adopt scope/limits/instructions from the manifest, reuse the saved profile, and run `resume_check`
+they adopt scope/settings/instructions from the manifest, reuse the saved profile, and run `resume_check`
 (`fresh | resume | continuable | stale | diverged | ambiguous`) to decide whether to act or redirect
 you to the right command.
 
@@ -576,7 +617,7 @@ derived, regenerable cache; state is never inferred from them.
 | `.panel-review/<ID>/.panel-run` | the run-marker file, published last after canonical `/tmp/<ID>/` state is in place |
 | `.panel-review/<ID>/` (the dir) | the per-worktree marker / lock — its name carries `<ID>`; only directories containing `.panel-run` count as published runs |
 | `/tmp/<ID>/work/<seat-token>/` | seat scratch — each seat's own throwaway scripts and temp files, in a subdir it names itself. Deliberately outside the repository under review, so no seat's repository-wide search can return another seat's work as a hit |
-| `/tmp/<ID>/manifest.json` | scope, limits, diff hash, and review-profile source path/size/SHA-256 |
+| `/tmp/<ID>/manifest.json` | scope, effective limits and timeout, diff hash, and review-profile selector plus source path/size/SHA-256 |
 | `/tmp/<ID>/review-profile.md` | exact saved profile bytes used by every seat and every phase; the original source path is provenance only |
 | `/tmp/<ID>/round0.panel.json` | the configured panel frozen for the blind pass; current preflight filters which of these seats may be retried but never changes this set **Read back on resume and verdict synthesis** (referee only) |
 | `/tmp/<ID>/index.json` | the **issue index** — the authoritative record of every issue: its state (e.g. `accepted`), flags, counters, and evidence (all defined under [How an issue moves](#how-an-issue-moves-transitions)); cards are rendered from it and the verdict is read off it (referee only) |
@@ -585,7 +626,7 @@ derived, regenerable cache; state is never inferred from them.
 | `/tmp/<ID>/round0.attempts.json` | deterministic history of prepared Round-0 attempts (`initial`, the single same-invocation `retry`, and later `resume` attempts), including the available and dispatched seats; `round verdict-input` combines it with final Round-0 statuses for Process notes **Read back on resume and verdict synthesis** (referee only) |
 | `/tmp/<ID>/codex-model.txt` | the model and reasoning effort the Codex seat **actually bound**, as Codex reported them on its own config summary — written by `run_codex` (the barrier supplies the path), surfaced by `round verdict-input` as `seat_models.codex`, and stated in the verdict's Process notes. The profile pin is only what was asked for; a reviewed repository's own `.codex/config.toml` outranks it (referee only) |
 | `/tmp/<ID>/agy-model.txt` | the label agy logged as **bound** (`model=`) on the last successful Gemini pass, next to the pin that pass requested (`requested=`) — written by `run_agy` (the barrier supplies the path), surfaced by `round verdict-input` as `seat_models.gemini`, and stated in the verdict's Process notes. Best effort: it reads an internal agy log line, so nothing depends on it (referee only) |
-| `/tmp/<ID>/agy-logs/` | agy's own CLI log for each Gemini attempt (`run_agy` passes `--log-file` here when agy offers it). agy then writes nothing to its default log directory, so this is where a failed Gemini pass is diagnosed. `run_agy` reads the current attempt's log once, right after it succeeds, to write `agy-model.txt`; after that the logs are **for inspection only — never read back by the process**, and are removed with the run directory unless `PANEL_REVIEW_KEEP_TMP=true` |
+| `/tmp/<ID>/agy-logs/` | agy's own CLI log for each Gemini attempt (`run_agy` passes `--log-file` here when agy offers it). agy then writes nothing to its default log directory, so this is where a failed Gemini pass is diagnosed. `run_agy` reads the current attempt's log once, right after it succeeds, to write `agy-model.txt`; after that the logs are **for inspection only — never read back by the process**, and are removed with the run directory unless `cleanup.keep_tmp` is true |
 | `/tmp/<ID>/origins/` | who raised each point, its original wording, and the per-round stances — the data the blind cards omit; `round0.origins.txt` records post-drop Round-0 raisers, `epoch-<epoch>.round-<N>.origins.txt` records debate-born issues' same-pass raisers and original finding text, and `independence.round0.txt` records dropped co-raisers and their text evidence; the birth-pass record supplies "Flagged by", while only Round-0 origins supply independent Round-0 support; **read back** by the referee (referee only) |
 | `/tmp/<ID>/audit/` | `round-<N>.md` — a human-readable trail of the issue-field changes applied in each debate round (state, flag, severity/claim/location revisions, evidence, new issues), written mechanically by `index commit-sweep`; **for inspection only — never read back by the process** |
 | `/tmp/<ID>/epochs/epoch-<n>/` | a snapshot of a finished debate cycle, taken by `reopen` when `panel-review:continue` starts the next cycle. Because per-round artifacts are named `round<N>`/`round-<N>` with **no epoch component**, the new cycle's round 1 overwrites the previous cycle's round 1 in place; this archive preserves the prior cycle's raws/prompts/sweeps/audit/index/verdict. **For inspection only — never read back by the process** |
@@ -599,10 +640,11 @@ resume, or continue finds missing or invalid run state, it leaves the marker and
 `/tmp/<ID>/` files intact for manual recovery. Use `panel-review:discard` only to abandon and remove
 the stale run.
 
-Setting **`PANEL_REVIEW_KEEP_TMP=true`** makes both `cleanup` and `discard` keep `/tmp/<ID>/` (the
-manifest, index, sweeps, raw seat output, audit trail, and the seats' scratch) for post-mortem inspection while still
-removing the workspace state (the cards, the marker, and the `.git/info/exclude` line). The durable
-verdict at `/tmp/<ID>.md` survives regardless.
+Setting **`cleanup.keep_tmp=true`** makes `cleanup` and `discard` keep `/tmp/<ID>/` (the manifest,
+index, sweeps, raw seat output, audit trail, and seat scratch) for post-mortem inspection while they
+remove the workspace state (the cards, the marker, and the `.git/info/exclude` line). An invalid
+config stops either action before it deletes state. The durable verdict at `/tmp/<ID>.md` survives
+regardless.
 
 ### The durable verdict file (`/tmp/<ID>.md`)
 
@@ -613,7 +655,7 @@ produced** (the low-severity gate, a finished-with-leftovers run, or a final fin
 only surface that carries the report body; a `continue` or a debated gate **overwrites** the same path
 (the prior copy rotates to `/tmp/<ID>.md.bak`, and `continue` additionally snapshots it into that
 cycle's `/tmp/<ID>/epochs/epoch-<n>/`). The file is self-contained: a YAML frontmatter header
-(`id`, `run_epoch`, `status`, `scope`, `instructions`, review-profile path/hash/size, `limits`, `seats`, `rounds`,
+(`id`, `run_epoch`, `status`, `scope`, `instructions`, review-profile selector/path/hash/size, `limits`, `seat_timeout_seconds`, `seats`, `rounds`,
 `created`/`finished`, `diff_hash`, `index_hash`)
 followed by the verdict markdown verbatim — the full diff is not embedded (it is large and
 reproducible from the scope; `diff_hash` is the reference). Writing it is required for delivery: if
@@ -646,7 +688,7 @@ epoch. Only a validated finished artifact or canonical low-only snapshot produce
 existence alone is not treated as completion. The report body never passes through the main
 conversation. If a hard session/quota limit leaves no main-conversation turn for that check,
 reset the quota and run `panel-review:result <ID>`. This read-only command validates `/tmp/<ID>.md`
-and prints the recorded review-profile path/hash followed by the verdict body, without depending on
+and prints the profile selector, source path/hash/size, round limits, seat timeout, and verdict body, without depending on
 the normally removed workspace marker or re-running any seat. Legacy artifacts without profile
 metadata remain readable and print only their body.
 
@@ -660,8 +702,9 @@ the Round-0 low-severity gate). Push those issues further with:
 - `panel-review:continue contested` — only contested
 
 `continue` takes **no scope, review profile, or instructions** — it adopts the stored values and
-saved profile, along with the round limits, from the finished run (passing any of them is a hard error; `panel-review:status` shows
-what's stored, and `--issue-rounds`/`--max-rounds` may still be overridden). It re-resolves the diff:
+saved profile from the finished run (passing any of them is a hard error; `panel-review:status` shows
+what's stored). It may override `--issue-rounds`, `--max-rounds`, and `--seat-timeout`; each explicit
+override is saved before dispatch. It re-resolves the diff:
 if the code under review changed since the snapshot (**diverged**), it refuses to continue. For an
 uncommitted scope, use the reported paths to identify stray untracked files. Remove a stray file or
 add it to `.git/info/exclude`, then retry. The saved run proceeds only if its resolved diff hash

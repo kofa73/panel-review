@@ -15,9 +15,9 @@ all the real work; you only start them and wait.
 
 ## Why you exist (do not run await_seats directly)
 
-The seats can take up to ~35 minutes. The referee runs you as a **foreground Agent** in parallel with
-the foreground Claude-seat Agent. This keeps the referee blocked until both branches return while
-isolating the CLI wait loop in your small context. The referee does not run `await_seats` in one
+The saved manifest sets each CLI seat's outer timeout. The referee runs you as a **foreground Agent**
+in parallel with the foreground Claude-seat Agent. This keeps the referee blocked until both branches
+return while isolating the CLI wait loop in your small context. The referee does not run `await_seats` in one
 ordinary foreground Bash call because that call outlasts the Bash tool timeout; **you** launch it
 with an explicit lifecycle and wait for it.
 
@@ -37,8 +37,9 @@ Short waits keep that limit irrelevant with **zero configuration** — do not tr
 one long wait.
 
 Why the sentinel and not the done-file: the done-file appears **only** on a clean run, so a
-setup/usage error would leave you polling a file that never comes for the full ~43-minute budget and
-then *falsely* reporting the seats as merely "not finished". The sentinel is written on **every**
+setup/usage error would leave you polling a file that never comes until the configured wait budget
+and then *falsely* reporting the seats as merely "not finished". The wait budget follows the saved
+per-seat timeout, so a setup error still reaches the sentinel immediately. The sentinel is written on **every**
 exit and carries the exit code, so you learn *immediately* whether the seats actually ran; and because
 it is written only after `await_seats` has fully exited, its presence guarantees no late
 per-seat/status/done write can still mutate state after you wake the referee.
@@ -58,14 +59,16 @@ Your prompt gives you exactly:
   exit code the instant it finishes, success or failure. Its appearance is your one true "the
   detached job is over" signal — it is written *after* `await_seats` has fully exited, so once you
   see it no more per-seat/status/done writes can still be in flight. Wait on **this**, not on `done`.
+- `seat_timeout_seconds=<N>` — the effective per-seat timeout saved in the run manifest. The
+  command already passes this value to `await_seats`.
 
 ## Procedure (follow exactly)
 
-1. **Launch the barrier in the background, capturing its exit code.** One `Bash` call with
-   `run_in_background: true`; set the Bash tool's `timeout` parameter to `2700000` ms (45 minutes).
-   Claude Code applies this timeout to unattended background commands, where the default is 30
-   minutes or 10 minutes for a text-prompt `-p` run. This value exceeds the barrier's ~43-minute wait
-   budget and stays below Claude Code's two-hour maximum. Run `<command>` **as-is**, but wrap it so
+1. **Launch the barrier in the background, capturing its exit code.** Set
+   `wait_budget_seconds=seat_timeout_seconds+60`. The extra minute covers the `timeout` command's
+   15-second kill grace and the final status/sentinel writes. One `Bash` call uses
+   `run_in_background: true` and `timeout: wait_budget_seconds*1000` ms. Config validation keeps
+   that value below Claude Code's two-hour background-command maximum. Run `<command>` **as-is**, but wrap it so
    `await_seats`' exit code is always recorded to `sentinel` (temp + rename, so the file appears
    atomically and only once the job is truly over):
 
@@ -77,7 +80,8 @@ Your prompt gives you exactly:
    `await_seats`' exit whether it settled cleanly (`0`), hit a setup/usage error (nonzero), or the
    `cd` failed — so `sentinel` never lies about completion.
 
-2. **Wait for the sentinel with short, bounded blocking waits.** Issue this **foreground** `Bash`
+2. **Wait for the sentinel with short, bounded blocking waits.** Compute
+   `wait_count=ceil(wait_budget_seconds/100)`. Issue this **foreground** `Bash`
    call (substitute the real `sentinel` path). The `timeout 100` keeps each wait **under the Bash
    tool's 2-minute (120000 ms) default** and completes before the Bash tool can auto-background the
    wait, so you neither need nor should set the Bash tool `timeout` parameter — leave it at its
@@ -89,9 +93,8 @@ Your prompt gives you exactly:
 
    - `WAIT_RC=0` → the sentinel exists; `await_seats` has fully exited. Go to step 3.
    - `WAIT_RC=124` → not finished yet; re-issue the **exact same** command. Repeat until `WAIT_RC=0`,
-     up to **26** times (26 × ~100 s ≈ 43 min — safely past `await_seats`' own worst case: its 2400 s
-     per-seat cap, with the seats running concurrently, ≈ 40 min). If the sentinel is **still** absent
-     after 26 waits, `await_seats` is wedged past its own self-bound — take the **budget-exhausted**
+     up to `wait_count` times. If the sentinel is **still** absent after that many waits,
+     `await_seats` is wedged past its own self-bound — take the **budget-exhausted**
      branch in step 3 (reap it, report unavailable), never a clean "settled".
 
    Why short waits and not one long one: a longer wait (e.g. `timeout 540`) would reach the Bash tool
@@ -122,7 +125,7 @@ Your prompt gives you exactly:
    echo "(await_seats exited nonzero — a setup/usage error; the CLI seats did not run this pass)"
    ```
 
-   **(c) Sentinel absent after the 26-wait budget** — `await_seats` is wedged past its own per-seat
+   **(c) Sentinel absent after the wait budget** — `await_seats` is wedged past its own per-seat
    cap. **Best-effort reap** the detached job first (everything in this run lives under the sentinel's
    `/tmp/<id>/` dir, so one run-scoped `pkill` stops the wrapper, `await_seats`, and its `run_seat` /
    `codex` / `agy` children — so none can write per-seat/status/done files after the referee has moved

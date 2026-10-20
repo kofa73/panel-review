@@ -23,20 +23,22 @@ while [ "$#" -gt 0 ]; do
 done
 [ -n "$workdir" ] || { echo "discard: need --workdir" >&2; exit 2; }
 
+# Validate the whole config before deleting marker or /tmp state.
+policy="$("$here/user_config.py" cleanup-policy)"
+keep_tmp="$(jq -r '.keep_tmp' <<<"$policy")"
+keep_tmp_flag=0
+if [ "$keep_tmp" = true ]; then keep_tmp_flag=1; fi
+
 base="$workdir/.panel-review"
 if [ ! -d "$base" ]; then
   echo "Nothing to discard — no .panel-review/ here."
   exit 0
 fi
 
-# PANEL_REVIEW_KEEP_TMP=true preserves each run's /tmp/<id> diagnostic dir while
-# still clearing all workspace markers below.
-keep_tmp=0; panel_keep_tmp && keep_tmp=1
-
 for d in "$base"/*/; do
   [ -d "$d" ] || continue
   name="$(basename "$d")"
-  if panel_valid_id "$name" && [ "$keep_tmp" -eq 0 ] && [ -d "/tmp/$name" ]; then
+  if panel_valid_id "$name" && [ "$keep_tmp_flag" -eq 0 ] && [ -d "/tmp/$name" ]; then
     rm -rf -- "/tmp/$name"
   fi
 done

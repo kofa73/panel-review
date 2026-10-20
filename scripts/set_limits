@@ -1,33 +1,35 @@
 #!/usr/bin/env bash
-# set_limits — write a limit override back into an existing run's manifest.
-# Used by `panel-review:resume`/`panel-review:continue` when the user passes
-# --issue-rounds/--max-rounds: limits only bound the debate loop, they don't
-# invalidate any cached Round-0/debate output, so overriding them mid-run is
-# safe (unlike scope/instructions, which are not overridable here).
+# set_limits — merge explicit execution-setting overrides into a saved run.
+# Used by `panel-review:resume`/`panel-review:continue`; it never reads user
+# defaults, so changing config.json cannot alter an existing run.
 #
-# Usage: set_limits --id ID --issue-rounds N --max-rounds N
-# Both values are required (the caller resolves "keep the stored value" by
-# reading the manifest first and passing it back unchanged if not overridden).
+# Usage: set_limits --id ID [--issue-rounds N] [--max-rounds N] [--seat-timeout N]
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"; . "$here/_panel_common.sh"
 
-id="" iss="" mx=""
+id="" iss="" mx="" timeout=""
+iss_seen=false mx_seen=false timeout_seen=false
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --id) id="$2"; shift 2;;
-    --issue-rounds) iss="$2"; shift 2;;
-    --max-rounds) mx="$2"; shift 2;;
+    --id) [ "$#" -ge 2 ] || { echo "set_limits: --id needs a value" >&2; exit 2; }; id="$2"; shift 2;;
+    --issue-rounds)
+      [ "$iss_seen" = false ] || { echo "set_limits: duplicate --issue-rounds" >&2; exit 2; }
+      [ "$#" -ge 2 ] || { echo "set_limits: --issue-rounds needs a value" >&2; exit 2; }
+      iss="$2"; iss_seen=true; shift 2;;
+    --max-rounds)
+      [ "$mx_seen" = false ] || { echo "set_limits: duplicate --max-rounds" >&2; exit 2; }
+      [ "$#" -ge 2 ] || { echo "set_limits: --max-rounds needs a value" >&2; exit 2; }
+      mx="$2"; mx_seen=true; shift 2;;
+    --seat-timeout)
+      [ "$timeout_seen" = false ] || { echo "set_limits: duplicate --seat-timeout" >&2; exit 2; }
+      [ "$#" -ge 2 ] || { echo "set_limits: --seat-timeout needs a value" >&2; exit 2; }
+      timeout="$2"; timeout_seen=true; shift 2;;
     *) echo "set_limits: unknown arg: $1" >&2; exit 2;;
   esac
 done
 panel_require_id "$id"
-case "$iss" in ''|*[!0-9]*) echo "set_limits: --issue-rounds must be a positive integer" >&2; exit 2;; esac
-case "$mx" in ''|*[!0-9]*) echo "set_limits: --max-rounds must be a positive integer" >&2; exit 2;; esac
-[ "$iss" -ge 1 ] && [ "$mx" -ge 1 ] && [ "$iss" -le "$mx" ] \
-  || { echo "set_limits: need issue-rounds >=1, max-rounds >=1, issue-rounds <= max-rounds" >&2; exit 2; }
-
-man="/tmp/$id/manifest.json"
-[ -s "$man" ] || { echo "set_limits: no manifest for $id" >&2; exit 1; }
-
-jq --argjson iss "$iss" --argjson mx "$mx" '.limits.issue_rounds=$iss | .limits.max_rounds=$mx' "$man" \
-  | panel_atomic_write "$man"
+args=(update-run --id "$id")
+[ "$iss_seen" = false ] || args+=(--issue-rounds "$iss")
+[ "$mx_seen" = false ] || args+=(--max-rounds "$mx")
+[ "$timeout_seen" = false ] || args+=(--seat-timeout "$timeout")
+"$here/user_config.py" "${args[@]}" >/dev/null
