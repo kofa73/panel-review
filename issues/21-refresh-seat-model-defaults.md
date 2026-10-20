@@ -16,7 +16,7 @@ but both are the value a *new* installation gets, and neither reflects what is n
 | Where | Pinned | Status on the current CLI |
 |---|---|---|
 | ~~`scripts/run_agy` `PRIMARY_MODEL` / `FALLBACK_MODEL`~~ | ~~`Gemini 3.1 Pro (High)` / `Gemini 3.5 Flash (High)`~~ | **Resolved 2026-08-15**, **revised 2026-08-22** — see "agy decision" below for the order in force |
-| `assets/default-panel-review.config.toml` | `model = "gpt-5.5"`, `model_reasoning_effort = "xhigh"` | 5.6-family models are current here; the effort enum now also has `max` and `ultra` above `xhigh` |
+| `assets/default-panel-review.config.toml` | `model = "gpt-5.5"`, `model_reasoning_effort = "xhigh"` | On codex-cli 0.163.0, a short profile probe bound `gpt-6-luna` / `medium` from the installed profile, which is marked as a temporary test setting. The fresh-install default still needs an owner choice. |
 
 Model selection is a quality and cost decision for the panel owner, so this issue records the facts
 and leaves the values to the user.
@@ -43,9 +43,23 @@ the asset affects new installations exclusively and cannot disturb a tuned profi
 
 1. ~~**agy fallback.**~~ **Decided 2026-08-15** — see "agy decision" below.
 2. ~~**agy primary.**~~ **Decided 2026-08-15** — see "agy decision" below.
-3. **Codex model and effort in the shipped asset.** Which 5.6-family id and which effort ship as the
-   default for a fresh install? Recommended: match what is already proven on this machine
-   (`gpt-5.6-sol`, `max`), since that is the configuration the panel has actually been running.
+3. **Codex model and effort in the shipped asset.** Which model and effort ship as the default for a
+   fresh install? Recommended: use the last recorded non-test panel choice (`gpt-5.6-sol`, `high`).
+   Adopt a GPT-6 pair only after a real review on that exact model and effort.
+
+## Open questions for the owner
+
+Which model and effort should a fresh install use?
+
+- Keep the current asset values, `gpt-5.5` / `xhigh`.
+- Use `gpt-5.6-sol` / `high` (recommended), the last recorded non-test panel choice.
+- Choose a GPT-6 model and effort after a real review on that exact pair.
+
+The installed `~/.codex/panel-review.config.toml` currently says `gpt-6-luna` / `medium` and marks
+that pair as a temporary test setting. A short `codex exec --profile panel-review` on codex-cli
+0.163.0 bound those values. That confirms the pair binds from the current profile, not that it reviews
+well or should be the fresh-install default. `run_codex` copies the asset only when the profile file
+does not exist, so changing the asset leaves existing profiles alone.
 
 ## Expected behavior
 
@@ -163,3 +177,12 @@ supersedes this issue's Gemini half.
 `gpt-5.6-sol`, which this machine's `~/.codex/panel-review.config.toml` runs at `high`, is still
 listed, so nothing is broken. The shipped asset still says `gpt-5.5`/`xhigh`. The 2026-09-05 advice
 still applies: adopt a newer model only after a real review run on it.
+
+### 2026-10-20 — the installed Codex profile is a temporary test setting
+
+`codex --version` reports codex-cli 0.163.0. A short `codex exec --profile panel-review` reported
+`gpt-6-luna` / `medium`, matching the installed profile's explicit temporary-test comment. This
+confirms that this CLI can bind that pair from the profile. It provides no model-quality evidence.
+The last recorded non-test panel profile remains `gpt-5.6-sol` / `high` from the 2026-10-19 note
+above. No shipped or installed profile was changed. The owner still needs to choose the fresh-install
+values, and any GPT-6 choice needs a real review on that exact pair.
