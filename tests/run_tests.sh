@@ -71,6 +71,19 @@ if [ "$1" = login ] && [ "$2" = status ]; then
 fi
 EOF
 chmod +x "$mockbin/codex"
+# preflight reads `agy models` to check the Gemini seat's pins (issue 63). Mock it so the
+# suite never calls the network: it prints $AGY_LISTING_FILE (empty = listing unreadable),
+# and fails when AGY_MODELS_FAIL=1.
+cat > "$mockbin/agy" <<'EOF'
+#!/bin/sh
+if [ "$1" = models ]; then
+  [ "${AGY_MODELS_FAIL:-0}" = 1 ] && exit 1
+  [ -n "${AGY_LISTING_FILE:-}" ] && cat "$AGY_LISTING_FILE"
+  exit 0
+fi
+exit 0
+EOF
+chmod +x "$mockbin/agy"
 # CLAUDE_CODE_FORK_SUBAGENT=0 is a hard prerequisite (issue 25), and the suite must be
 # runnable from any session, so set it explicitly here rather than inheriting it.
 pf="$(CLAUDE_CODE_FORK_SUBAGENT=0 CLAUDE_CONFIG_DIR="$empty_claude_config" CODEX_LOG="$TMP/codex.log" PATH="$mockbin:$PATH" "$SC/preflight" 2>&1)"; assert_exit "preflight succeeds with mocked Codex" 0 "$?"
@@ -160,12 +173,12 @@ assert_file_contains "layer report shows its values"     'model = repo-model   m
 assert_file_contains "layer report shows the pin"        'panel-review pins model = pinned-model   model_reasoning_effort = pinned-effort' "$TMP/preflight-layer.out"
 # A `model` under a [table] is a different key; reading it would report a phantom override.
 assert_file_not_contains "table-scoped model is not read" 'must-not-be-read' "$TMP/preflight-layer.out"
-# The seat-detection tail must stay parseable, with the new line ahead of it. The
-# Gemini value is whatever the host has, so match its shape, not its answer.
-tail3="$(tail -n3 "$TMP/preflight-layer.out" | tr '\n' ' ')"
-case "$tail3" in
-  'CODEX_MODEL_LAYER: yes CODEX: yes GEMINI: '*) ok "tail order stays CODEX_MODEL_LAYER, CODEX, GEMINI";;
-  *) bad "tail order stays CODEX_MODEL_LAYER, CODEX, GEMINI" "got [$tail3]";;
+# The seat-detection tail must stay parseable, with the newer lines ahead of it. The
+# mocked agy prints no listing here, so its pin check reads "unknown".
+tail4="$(tail -n4 "$TMP/preflight-layer.out" | tr '\n' ' ')"
+case "$tail4" in
+  'GEMINI_PIN_UNLISTED: unknown CODEX_MODEL_LAYER: yes CODEX: yes GEMINI: yes ') ok "tail order stays GEMINI_PIN_UNLISTED, CODEX_MODEL_LAYER, CODEX, GEMINI";;
+  *) bad "tail order stays GEMINI_PIN_UNLISTED, CODEX_MODEL_LAYER, CODEX, GEMINI" "got [$tail4]";;
 esac
 
 clean_repo="$TMP/codex-clean-repo"; mkdir -p "$clean_repo"
@@ -178,6 +191,43 @@ git -C "$clean_repo" init -q
 assert_exit "no Codex layer -> preflight succeeds" 0 "$rc"
 assert_file_contains "no layer -> machine line says no" 'CODEX_MODEL_LAYER: no' "$TMP/preflight-nolayer.out"
 assert_file_not_contains "no layer -> no warning block" 'above the panel-review profile' "$TMP/preflight-nolayer.out"
+
+section "preflight — a Gemini seat pin agy no longer lists (issue 63)"
+# agy 1.4.2 dropped both pinned labels; an unlisted label hard-errors on 1.1.13/1.4.2 and
+# ran the settings.json default silently on 1.1.10. preflight reads `agy models` (no
+# quota) and REPORTS a pin that is missing, never blocks. Pins are read from run_agy so a
+# model bump needs no test edit.
+pf_pin() { sed -n "s/^$1=\"\(.*\)\"$/\1/p" "$SC/run_agy"; }
+pf_primary="$(pf_pin PRIMARY_MODEL)"; pf_fallback="$(pf_pin FALLBACK_MODEL)"
+run_pf_listing() { # $1 = listing file ("" = none), $2 = output file, rest = extra env
+  local listing="$1" out="$2"; shift 2
+  env CLAUDE_CODE_FORK_SUBAGENT=0 CLAUDE_CONFIG_DIR="$empty_claude_config" CODEX_LOG="$TMP/codex-pin.log" \
+    AGY_LISTING_FILE="$listing" PATH="$mockbin:$PATH" "$@" "$SC/preflight" > "$out" 2>&1
+}
+printf 'gemini-x-high\t%s\ngemini-y-high\t%s\nclaude-z\tClaude Z (High)\n' "$pf_primary" "$pf_fallback" > "$TMP/agy-listing.both"
+run_pf_listing "$TMP/agy-listing.both" "$TMP/preflight-pins-ok.out"; rc=$?
+assert_exit "listed pins -> preflight succeeds" 0 "$rc"
+assert_file_contains "listed pins -> machine line says no" 'GEMINI_PIN_UNLISTED: no' "$TMP/preflight-pins-ok.out"
+assert_file_not_contains "listed pins -> no warning block" 'does not list the Gemini seat' "$TMP/preflight-pins-ok.out"
+assert_file_not_contains "listed pins -> no unchecked note" 'were not checked' "$TMP/preflight-pins-ok.out"
+
+# A label that only EXTENDS the pin must not count as listing it.
+printf 'gemini-x-highest\t%s-extra\ngemini-y-high\t%s\ngemini-n-new\tGemini 9 New (High)\nclaude-z\tClaude Z (High)\n' "$pf_primary" "$pf_fallback" > "$TMP/agy-listing.noprimary"
+run_pf_listing "$TMP/agy-listing.noprimary" "$TMP/preflight-pins-missing.out"; rc=$?
+assert_exit "an unlisted pin is a warning, not a hard failure" 0 "$rc"
+assert_file_contains "unlisted pin -> machine line says yes" 'GEMINI_PIN_UNLISTED: yes' "$TMP/preflight-pins-missing.out"
+assert_file_contains "unlisted pin -> names the pin and its value" "PRIMARY_MODEL = \"$pf_primary\"" "$TMP/preflight-pins-missing.out"
+assert_file_not_contains "unlisted pin -> the listed pin is not named" 'FALLBACK_MODEL =' "$TMP/preflight-pins-missing.out"
+assert_file_contains "unlisted pin -> shows the Gemini models on offer" 'Gemini 9 New (High)' "$TMP/preflight-pins-missing.out"
+assert_file_not_contains "unlisted pin -> never offers a non-Gemini model" 'Claude Z' "$TMP/preflight-pins-missing.out"
+
+printf 'gemini-x-high\ngemini-y-high\n' > "$TMP/agy-listing.slugs"
+run_pf_listing "$TMP/agy-listing.slugs" "$TMP/preflight-pins-slugs.out"
+assert_file_contains "slug-only listing -> unknown, not missing" 'GEMINI_PIN_UNLISTED: unknown' "$TMP/preflight-pins-slugs.out"
+assert_file_not_contains "slug-only listing -> no false warning" 'does not list the Gemini seat' "$TMP/preflight-pins-slugs.out"
+run_pf_listing "$TMP/agy-listing.both" "$TMP/preflight-pins-fail.out" AGY_MODELS_FAIL=1; rc=$?
+assert_exit "failed agy models -> preflight still succeeds" 0 "$rc"
+assert_file_contains "failed agy models -> unknown" 'GEMINI_PIN_UNLISTED: unknown' "$TMP/preflight-pins-fail.out"
 
 section "run_codex — human output mode records the model that actually bound (issue 47)"
 # `-o` yields the final message in BOTH output modes, so --json is not needed for it
@@ -695,6 +745,23 @@ assert_eq "codex still engages" '0' "$(cat "$TMP/await.st.codex.rec")"
 assert_file_contains "barrier records the bound model under the run"  'model=barrier-model'   "/tmp/$rec_id/codex-model.txt"
 assert_file_contains "barrier records the bound effort under the run" 'effort=barrier-effort' "/tmp/$rec_id/codex-model.txt"
 
+cat > "$rec_mockbin/agy" <<'EOF'
+#!/usr/bin/env bash
+if [ "${1:-}" = --help ]; then echo "  --log-file   Override CLI log file path" >&2; exit 0; fi
+log=""; prev=""; for a in "$@"; do [ "$prev" = --log-file ] && log="$a"; prev="$a"; done
+cat >/dev/null
+[ -n "$log" ] && printf 'Propagating selected model override to backend: label="Gemini Barrier (High)"\n' >> "$log"
+printf '```findings\n%s\n```\n' '{"claim":"g","location":"a.c:1","category":"correctness","severity":"high","points":[{"assertion":"x","location":"a.c:1"}]}'
+EOF
+chmod +x "$rec_mockbin/agy"
+PATH="$rec_mockbin:$PATH" HOME="$TMP/awaitrechome" \
+  "$SC/await_seats" --id "$rec_id" --tag findings --prompt "$TMP/await.prompt" --seat-timeout 0 \
+    --seat gemini --raw "$TMP/await.raw/g.rec.txt" --parsed "$TMP/await.f.gemini.rec.json" \
+    --status "$TMP/await.st.gemini.rec" --done "$TMP/await.done.rec.g" >/dev/null 2>&1
+assert_exit "barrier exits 0 with the Gemini model record wired" 0 "$?"
+assert_eq "gemini still engages" '0' "$(cat "$TMP/await.st.gemini.rec")"
+assert_file_contains "barrier records the Gemini bound label under the run" 'model=Gemini Barrier (High)' "/tmp/$rec_id/agy-model.txt"
+
 section "protocol wording — the barrier's wait signal is the sentinel, never --done"
 # The behavioral invariant above (no done-file on a setup error) is WHY the barrier must wait on the
 # exit-code sentinel, not on --done (a RESULT file that appears only on a clean exit). But the debate
@@ -785,6 +852,64 @@ section "run_agy — both models time out -> seat fails (exit 1)"
 run_agy_t always_timeout p3; assert_exit "both fail -> exit 1" 1 "$?"
 assert_eq "both attempts dispatched" '2' "$(cat "$TMP/agy.count.p3")"
 assert_file_contains "reports both-model failure" 'both primary' "$TMP/agy.err.p3"
+
+section "run_agy — records the label agy logged as bound (issue 63)"
+# With AGY_SEAT_MODEL_FILE set, run_agy probes `agy --help` (agy prints it to stderr) for
+# --log-file, gives each attempt its own log, and after a SUCCESSFUL attempt writes the
+# propagated label. The mock fails its first call when asked, and then logs the
+# settings.json default exactly as agy 1.4.2 does for a rejected label: that line must
+# not reach the record.
+agyrec_bin="$TMP/agyrecbin"; mkdir -p "$agyrec_bin"
+cat > "$agyrec_bin/agy" <<'EOF'
+#!/usr/bin/env bash
+if [ "${1:-}" = --help ]; then
+  echo "Usage of agy:" >&2
+  [ "${AGY_HAS_LOG_FILE:-1}" = 1 ] && echo "  --log-file                      Override CLI log file path" >&2
+  exit 0
+fi
+printf '%s\n' "$*" >> "$AGY_ARGV"
+cat >/dev/null
+n=0; [ -f "$AGY_COUNT" ] && n="$(cat "$AGY_COUNT")"; n=$((n+1)); echo "$n" > "$AGY_COUNT"
+model=""; log=""; prev=""
+for a in "$@"; do
+  [ "$prev" = --model ] && model="$a"; [ "$prev" = --log-file ] && log="$a"; prev="$a"
+done
+if [ "${AGY_FAIL_FIRST:-0}" = 1 ] && { [ "$n" -eq 1 ] || [ "${AGY_FAIL_ALL:-0}" = 1 ]; }; then
+  [ -n "$log" ] && printf 'I1020 model_config_manager.go:340] Propagating selected model override to backend: label="Settings Default (High)"\n' >> "$log"
+  echo "error: invalid model selection" >&2
+  exit 1
+fi
+[ -n "$log" ] && printf 'I1020 model_config_manager.go:340] Propagating selected model override to backend: label="%s"\n' "$model" "$model" >> "$log"
+printf 'OK\n'
+EOF
+chmod +x "$agyrec_bin/agy"
+run_agy_rec() { # $1 = tag, rest = extra env
+  local tag="$1"; shift
+  env AGY_ARGV="$TMP/agyrec.argv.$tag" AGY_COUNT="$TMP/agyrec.count.$tag" \
+    AGY_SEAT_MODEL_FILE="$TMP/agyrec.$tag/agy-model.txt" PATH="$agyrec_bin:$PATH" "$@" \
+    timeout 30 "$SC/run_agy" < "$TMP/agy.in" > "$TMP/agyrec.out.$tag" 2>/dev/null
+}
+run_agy_rec r1; assert_exit "recording run succeeds" 0 "$?"
+assert_file_contains "the attempt logs beside the record" "--log-file $TMP/agyrec.r1/agy-logs/" "$TMP/agyrec.argv.r1"
+assert_eq "the attempt's log is kept for diagnostics" '1' "$(find "$TMP/agyrec.r1/agy-logs" -type f | wc -l | tr -d ' ')"
+assert_eq "primary success -> records the bound label" "model=$PRIMARY_PIN" "$(sed -n 1p "$TMP/agyrec.r1/agy-model.txt")"
+assert_eq "primary success -> records what was requested" "requested=$PRIMARY_PIN" "$(sed -n 2p "$TMP/agyrec.r1/agy-model.txt")"
+run_agy_rec r2 AGY_FAIL_FIRST=1; assert_exit "fallback recovers while recording" 0 "$?"
+assert_eq "fallback success -> records the fallback label" "model=$FALLBACK_PIN" "$(sed -n 1p "$TMP/agyrec.r2/agy-model.txt")"
+assert_file_not_contains "a failed attempt's propagation line is not recorded" 'Settings Default' "$TMP/agyrec.r2/agy-model.txt"
+assert_eq "each attempt gets its own log" '2' "$(find "$TMP/agyrec.r2/agy-logs" -type f | wc -l | tr -d ' ')"
+# Both attempts fail: neither failed attempt's log (which names the settings.json
+# default) may create a record.
+run_agy_rec r4 AGY_FAIL_FIRST=1 AGY_FAIL_ALL=1; assert_exit "both attempts fail while recording -> exit 1" 1 "$?"
+if [ -e "$TMP/agyrec.r4/agy-model.txt" ]; then bad "failed attempts never create a record"; else ok "failed attempts never create a record"; fi
+assert_eq "both failed attempts still kept their logs" '2' "$(find "$TMP/agyrec.r4/agy-logs" -type f | wc -l | tr -d ' ')"
+# A record from an earlier pass must not survive a successful pass that recorded nothing,
+# or the verdict would name an older pass's model.
+mkdir -p "$TMP/agyrec.r3"; printf 'model=Stale Earlier Pass\nrequested=x\n' > "$TMP/agyrec.r3/agy-model.txt"
+run_agy_rec r3 AGY_HAS_LOG_FILE=0; assert_exit "agy without --log-file still runs" 0 "$?"
+assert_file_not_contains "agy without --log-file -> flag not passed" '--log-file' "$TMP/agyrec.argv.r3"
+if [ -e "$TMP/agyrec.r3/agy-model.txt" ]; then bad "agy without --log-file -> an older record is removed"; else ok "agy without --log-file -> an older record is removed"; fi
+assert_file_contains "agy without --log-file -> output still relayed" 'OK' "$TMP/agyrec.out.r3"
 
 # ---------------------------------------------------------------------------
 section "resolve_instructions — verbatim / none resolved, auto -> sentinel"

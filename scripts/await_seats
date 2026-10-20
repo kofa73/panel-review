@@ -138,6 +138,9 @@ run_one() {
   # is how the verdict states what reviewed the code instead of what we asked for.
   # This runs in the per-seat background subshell, so the export is seat-local.
   [ "$seat" = codex ] && export CODEX_SEAT_MODEL_FILE="/tmp/$id/codex-model.txt"
+  # Same for the Gemini seat (issue 63): agy has silently run a model other than the
+  # pinned one before (agy 1.1.10), so run_agy records the label agy logged as bound.
+  [ "$seat" = gemini ] && export AGY_SEAT_MODEL_FILE="/tmp/$id/agy-model.txt"
 
   local out rc
   set +e

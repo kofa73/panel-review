@@ -59,6 +59,20 @@
 #    `tests/live/agy_model_binding.sh` — it proves through agy's own logs that the
 #    pins bind (and `--model "<candidate>"` checks a label before you adopt it).
 #    Never use agy's Claude/GPT-OSS entries: the Gemini seat must be a Gemini model.
+#  - RECORD WHAT BOUND (optional; issue 63, the agy half of issue 47). With
+#    AGY_SEAT_MODEL_FILE=/path set (await_seats sets /tmp/<ID>/agy-model.txt), each
+#    attempt gets its own `--log-file` in agy-logs/ beside it (kept, see below), and
+#    after a SUCCESSFUL attempt the labels agy logged as `Propagating selected model
+#    override to backend: label="…"` are written there as `model=` next to
+#    `requested=` (the pin that attempt asked for), so the verdict can say which Gemini
+#    model reviewed the code. The file always describes the LAST successful pass: a
+#    success with no recognized line removes an older record. Only a successful attempt is
+#    read, on purpose: measured on agy 1.4.2, a REJECTED label still logs a propagation
+#    line naming the settings.json default before the startup error, so a failed
+#    attempt's log names a model that never ran. The log line is internal, not an
+#    interface, so nothing depends on this record: an agy without `--log-file` (it is
+#    probed in `agy --help`, which agy prints to stderr), or a log with no recognized
+#    line, costs only the record, never the attempt.
 #  - "Error: timed out waiting for response" IS --print-timeout firing. agy prints
 #    that line and exits 0 (a clean exit, NOT a hang), leaving truncated output with
 #    no findings block. attempt() therefore treats output that ENDS with that line
@@ -75,6 +89,7 @@ PRIMARY_MODEL="Gemini 3.1 Pro (High)"
 FALLBACK_MODEL="Gemini 3.7 Flash (High)"
 PRINT_TIMEOUT="15m"
 WALL_TIMEOUT=1020   # seconds, hard outer bound per attempt (>= PRINT_TIMEOUT 15m + startup slack)
+MODEL_FILE="${AGY_SEAT_MODEL_FILE:-}"
 
 command -v agy >/dev/null 2>&1 || { echo "run_agy: agy CLI not found" >&2; exit 127; }
 
@@ -92,6 +107,27 @@ promptfile="$(mktemp /tmp/agy_prompt.XXXXXX)"
 outfile="$(mktemp /tmp/agy_out.XXXXXX)"
 trap 'rm -f "$promptfile" "$outfile"' EXIT
 
+# Only probe for --log-file when a record was asked for: an agy that predates the flag
+# would hard-error on it, and passing it blindly would take the seat down to gain a
+# record nothing depends on. Captured into a variable before matching, so an early
+# grep exit cannot SIGPIPE agy under pipefail.
+# The logs are KEPT, in agy-logs/ next to the record (/tmp/<ID>/agy-logs/ under the
+# barrier): with --log-file agy writes nothing to its default log directory, so deleting
+# them would lose the only diagnostics of a failed Gemini pass. They go with the run
+# directory at cleanup, like the raw seat output.
+log_dir=""
+if [ -n "$MODEL_FILE" ]; then
+  # Bounded: the probe sits outside both attempts' timeouts, so a hang here would
+  # otherwise keep either model from ever being dispatched.
+  agy_help="$(timeout 15 agy --help 2>&1 || true)"
+  case "$agy_help" in
+    *--log-file*)
+      log_dir="$(dirname "$MODEL_FILE")/agy-logs"
+      mkdir -p "$log_dir" 2>/dev/null || log_dir="" ;;
+  esac
+fi
+logfile=""
+
 if [ "$#" -ge 1 ]; then
   printf '%s' "$1" > "$promptfile"
 else
@@ -106,7 +142,13 @@ fi
 # is a clean exit-0 with truncated, block-less output — see agy_ended_with_timeout).
 attempt() {
   local model="$1" rc
+  local log_args=()
   : > "$outfile"
+  logfile=""
+  if [ -n "$log_dir" ]; then
+    logfile="$(mktemp "$log_dir/$(date -u +%Y%m%dT%H%M%SZ).XXXXXX" 2>/dev/null)" || logfile=""
+    [ -n "$logfile" ] && log_args=(--log-file "$logfile")
+  fi
   # NO bare `--print`: agy's --print TAKES THE PROMPT AS ITS ARGUMENT, so a bare
   # `--print` with the prompt on stdin swallows the following flag (--model) and
   # desyncs parsing — --model AND --print-timeout get dropped and agy silently
@@ -117,6 +159,7 @@ attempt() {
        --print-timeout="$PRINT_TIMEOUT" \
        --model "$model" \
        --dangerously-skip-permissions \
+       ${log_args[@]+"${log_args[@]}"} \
        < "$promptfile" > "$outfile"; then rc=0; else rc=$?; fi
   # A fired --print-timeout makes agy print its error line and exit 0 (a clean
   # exit, not a hang). Treat that truncated output as a failure so the fallback
@@ -126,7 +169,27 @@ attempt() {
   return "$rc"
 }
 
+# Write the labels agy logged as bound for the attempt that just SUCCEEDED (see the
+# header: a failed attempt's log can name a model that never ran). Several distinct
+# labels are recorded comma-joined rather than guessed between. When nothing is
+# recognized, an older pass's record is removed rather than left to describe this one.
+# Best effort only: never changes the seat's exit code.
+record_bound_model() {
+  local requested="$1" bound=""
+  [ -n "$MODEL_FILE" ] || return 0
+  if [ -n "$logfile" ]; then
+    bound="$(grep -h 'Propagating selected model override to backend: label="' "$logfile" 2>/dev/null \
+      | sed -n 's/.*label="\([^"]*\)".*/\1/p' | awk '!seen[$0]++' | paste -sd, - | sed 's/,/, /g')" || bound=""
+  fi
+  if [ -z "$bound" ]; then rm -f "$MODEL_FILE" 2>/dev/null || true; return 0; fi
+  mkdir -p "$(dirname "$MODEL_FILE")" 2>/dev/null || return 0
+  printf 'model=%s\nrequested=%s\n' "$bound" "$requested" > "$MODEL_FILE.tmp.$$" 2>/dev/null \
+    && mv -f "$MODEL_FILE.tmp.$$" "$MODEL_FILE" 2>/dev/null || true
+  return 0
+}
+
 if attempt "$PRIMARY_MODEL"; then
+  record_bound_model "$PRIMARY_MODEL"
   cat "$outfile"
   exit 0
 fi
@@ -134,6 +197,7 @@ fi
 echo "run_agy: primary model ('$PRIMARY_MODEL') failed (timeout/error); retrying with fallback ('$FALLBACK_MODEL')" >&2
 
 if attempt "$FALLBACK_MODEL"; then
+  record_bound_model "$FALLBACK_MODEL"
   cat "$outfile"
   exit 0
 fi

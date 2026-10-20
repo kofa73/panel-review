@@ -10,18 +10,18 @@
 #   tests/live/agy_model_binding.sh                     # check run_agy's two pins
 #   tests/live/agy_model_binding.sh --model "Gemini 3.7 Flash (Medium)" [--model …]
 #                                                       # check candidate labels instead
-#   tests/live/agy_model_binding.sh --negative-control  # also prove a bad pin fails SILENTLY
+#   tests/live/agy_model_binding.sh --negative-control  # also show how this agy treats a bad pin
 #   PANEL_REVIEW_LIVE=1 tests/run_tests.sh              # run it as part of the suite
 #
 # Exit: 0 all checks passed · 1 a check failed · 3 skipped (agy not installed)
 #
-# WHY this exists (see issues/20-agy-model-pin-contract.md):
-#   agy never errors on an unrecognized --model. It silently runs whatever
-#   ~/.gemini/antigravity-cli/settings.json has as `model` — a per-user value the
-#   plugin cannot see. So a pin that stops existing (label retired or renamed at a
-#   version bump) downgrades a review seat with NO visible failure: agy exits 0 and
-#   prints a complete review from the wrong model. The offline suite can only check
-#   the pin's SHAPE; proving the pin BINDS needs a real call, which is this script.
+# WHY this exists (see issues/20-agy-model-pin-contract.md and issues/63):
+#   How agy treats an unrecognized --model depends on the version. agy 1.1.10 silently
+#   ran whatever ~/.gemini/antigravity-cli/settings.json has as `model` — a per-user
+#   value the plugin cannot see — so a retired pin downgraded the seat with NO visible
+#   failure. agy 1.1.13 and 1.4.2 hard-error at startup instead, so a retired pin takes
+#   that attempt down. The offline suite can only check the pin's SHAPE; proving the pin
+#   BINDS needs a real call, which is this script.
 #
 #   Effort needs no separate check: agy encodes it in the label ("… (High)"), and
 #   these checks compare the whole propagated label, effort included.
@@ -32,6 +32,9 @@
 # not a documented interface — which is exactly why this lives in an on-demand test
 # instead of inside run_agy, where a format change would break every review. Here, a
 # missing line fails loudly as "the check is stale", never silently as "pin is fine".
+# The exit code is checked BEFORE the logged label, on purpose: measured on agy 1.4.2, a
+# REJECTED label still logs a propagation line naming the settings.json default before
+# the startup error, so a failed call's log names a model that never ran.
 set -uo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -130,7 +133,7 @@ if agy models > "$TMP/models" 2>"$TMP/models.err"; then
     if cut -f2- "$TMP/models" | grep -Fxq -- "$pin"; then
       ok "agy models lists '$pin'"
     else
-      bad "agy models lists '$pin'" "not offered by this agy version — the pin will fall back silently"
+      bad "agy models lists '$pin'" "not offered by this agy version — the attempt will fail or run another model"
     fi
   done
 else
@@ -151,11 +154,11 @@ else
 fi
 
 if [ "$negative_control" = 1 ]; then
-  section "negative control — an unknown label fails silently, it does not error"
+  section "negative control — what this agy does with an unknown label"
   got="$(dispatch "$BOGUS_LABEL")"; rc=$?
   if [ "$rc" -ne 0 ]; then
-    note "agy exited $rc for '$BOGUS_LABEL' — this version REJECTS unknown models, which is
-        better than the silent fallback the pin contract assumes. Worth recording in issue 20."
+    note "agy exited $rc for '$BOGUS_LABEL' — this version REJECTS unknown models (as 1.1.13
+        and 1.4.2 did), so a retired pin takes its attempt down rather than running another model."
   elif [ -n "$got" ] && [ "$got" != "$BOGUS_LABEL" ]; then
     note "confirmed: '$BOGUS_LABEL' silently ran [$(printf '%s' "$got" | tr '\n' ',')]
         (your settings.json default). This is the hazard the pins are checked against."

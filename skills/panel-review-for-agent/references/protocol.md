@@ -30,7 +30,7 @@ reference; grepping a script for its flags wastes a full source-read into your c
 ```bash
 # $ROOT/$SC/$PR are derived in the bootstrap (from the substituted plugin
 # root); re-derive them at the top of every Bash command as the bootstrap shows.
-"$SC/preflight"                              # env check; tail "CODEX_MODEL_LAYER: yes|no"/"CODEX: yes|no"/"GEMINI: yes|no"; exit 1 = core unusable (needs jq, git, work-tree, ≥1 peer). CODEX_MODEL_LAYER: yes = a repo/cwd/tree Codex config outranks our model pin; a warning `start` already asked about, never yours to act on
+"$SC/preflight"                              # env check; tail "GEMINI_PIN_UNLISTED: yes|no|unknown"/"CODEX_MODEL_LAYER: yes|no"/"CODEX: yes|no"/"GEMINI: yes|no"; exit 1 = core unusable (needs jq, git, work-tree, ≥1 peer). CODEX_MODEL_LAYER: yes = a repo/cwd/tree Codex config outranks our model pin; GEMINI_PIN_UNLISTED: yes = agy no longer lists a run_agy pin; both are warnings `start` already asked about, never yours to act on
 "$SC/resolve_instructions" --id <id>         # manifest.instructions -> verbatim/none text (exit 0) OR compose sentinel (exit 3 = auto, you compose)
 "$SC/assemble" TMPL KEY=file ...             # splice files into a template's {{KEY}} sentinels -> stdout
 "$SC/repo_guard" snapshot --id <id> --workdir <dir>          # record tracked-tree baseline (git stash create SHA + sha256 manifest)
@@ -805,6 +805,11 @@ surfacing origins only here. Severity → headings: `critical`/`high` → **Crit
   ("Codex seat: `gpt-5.6-luna`, effort `max`"). This is what Codex reported binding, not what the
   panel's profile asked for — a reviewed repository's own `.codex/config.toml` outranks the pin, so
   the record is the only place the verdict's provenance can be true
+- **Gemini seat model:** when `seat_models.gemini` is present, state its `model` verbatim ("Gemini
+  seat: `<model>`"). It is the label agy logged as bound on the last successful Gemini pass, and
+  `requested` is the pin that pass asked for (the fallback pin when the primary failed); earlier
+  passes are not recorded. When `model` differs from `requested`, say so: agy substituted a model.
+  Absent = no successful Gemini pass recorded one (an agy without `--log-file`, or an unrecognized log)
 - **guard violations:** if `/tmp/$id/origins/guard.round0.txt` or `guard.debate.txt` is non-empty, list
   each drifted tracked file **loudly** here ("⚠ a seat modified `<file>` during review; reverted from
   the start-of-review snapshot") — the review continued, but a seat broke the read-only contract

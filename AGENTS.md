@@ -177,8 +177,10 @@ workdir holds exactly one review; concurrent runs against the same workdir are u
   across agy versions — on 1.1.10 the *listed* slug `gemini-3.1-pro-high` bound Gemini 3.6 Flash
   (High) — and how a bad value fails changes too (1.1.10 silently ran the user's `settings.json`
   model; 1.1.13 hard-errors). `check_contracts` rejects a slug-shaped pin;
-  `tests/live/agy_model_binding.sh` proves on demand that a pin really binds. Measurements and
-  rationale: `run_agy`'s header and `issues/20-agy-model-pin-contract.md`.
+  `tests/live/agy_model_binding.sh` proves on demand that a pin really binds. Pins go stale when agy
+  retires a model (1.4.2 hard-errors on an unlisted label), so `preflight` reports a pin that
+  `agy models` no longer lists (`issues/63`). Measurements and rationale: `run_agy`'s header and
+  `issues/20-agy-model-pin-contract.md`.
 - **Seat engagement is per-round, not sticky.** Round 0 freezes its configured panel and exact blind
   prompt on first preparation, retries actual down responses once, and may retry a still-down seat
   again when a later `resume` reports it available; complete seat passes are never rerun. In debate,

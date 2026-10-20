@@ -518,6 +518,27 @@ class RoundTest(unittest.TestCase):
         self.assertEqual(round0["final_statuses"], {"claude": 0, "codex": 4})
         self.assertEqual(round0["engaged"], ["claude"])
 
+    def test_verdict_input_reports_both_cli_seat_model_records(self):
+        # run_codex and run_agy record what each CLI seat actually bound (issues 47, 63);
+        # verdict-input surfaces both, so Process notes can state real provenance.
+        self.prepare_round0()
+        (self.run_dir / "codex-model.txt").write_text(
+            "model=bound-codex\neffort=high\n", encoding="utf-8"
+        )
+        (self.run_dir / "agy-model.txt").write_text(
+            "model=Gemini Bound (High)\nrequested=Gemini Pin (High)\n", encoding="utf-8"
+        )
+
+        result = self.run_round("verdict-input", self.run_id)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        seat_models = json.loads(result.stdout)["seat_models"]
+        self.assertEqual(seat_models["codex"], {"model": "bound-codex", "effort": "high"})
+        self.assertEqual(
+            seat_models["gemini"],
+            {"model": "Gemini Bound (High)", "requested": "Gemini Pin (High)"},
+        )
+
     def test_debate_prepare_collect_commit_and_verdict_input(self):
         self.prepare_round0()
         self.install_open_index()

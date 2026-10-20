@@ -79,9 +79,10 @@ The harness does **not** parse flags; you get the raw `$ARGUMENTS` string. Parse
 ## Step 2 — prereqs + scope hash
 
 ```bash
-PF="$(mktemp /tmp/panel_preflight.XXXXXX)"                                       # keep the output: you must read two of its lines back
+PF="$(mktemp /tmp/panel_preflight.XXXXXX)"                                       # keep the output: you must read three of its lines back
 "$SC/preflight" > "$PF" 2>&1; PF_RC=$?
-cat "$PF"; grep -c '^CODEX_MODEL_LAYER: yes$' "$PF"; rm -f "$PF"                 # the count is 1 when a repo-local Codex config outranks the model pin
+cat "$PF"; grep -c '^CODEX_MODEL_LAYER: yes$' "$PF"                              # the count is 1 when a repo-local Codex config outranks the model pin
+grep -c '^GEMINI_PIN_UNLISTED: yes$' "$PF"; rm -f "$PF"                            # the count is 1 when agy no longer lists a Gemini seat pin
 [ "$PF_RC" -eq 0 ] || { echo "Core prerequisites missing (see above)."; exit 1; }   # preflight also prints CODEX: yes|no / GEMINI: yes|no
 # Resolve to a FILE and check the exit code separately — do NOT pipe resolve_diff
 # into diff_hash: a bad ref makes resolve_diff fail but diff_hash succeeds on the
@@ -109,6 +110,18 @@ or stop so you can move the file?*
 
 This is a question, never a refusal: reviewing a repository under its own configured model is a
 legitimate choice the user may have made deliberately. Only the silence was the defect.
+
+**If the `GEMINI_PIN_UNLISTED: yes` count was 1, ask before minting a run** (`AskUserQuestion`). agy
+no longer lists one or both models `run_agy` pins for the Gemini seat, so that attempt either fails at
+startup or (on older agy versions) silently runs another model; with both pins unlisted the Gemini
+seat is down on every pass. Show `preflight`'s WARNING block, then ask: *Run anyway, or stop so the
+pins in `scripts/run_agy` can be updated?*
+
+- **Proceed** → continue to Step 3. Down passes are recorded in Process notes as usual.
+- **Stop** → stop here without minting a run; nothing has been created yet.
+
+If both questions apply, ask both in one `AskUserQuestion` call. A `GEMINI_PIN_UNLISTED: unknown`
+(the listing could not be read) needs no question.
 
 ## Step 3 — refuse if a session already exists
 

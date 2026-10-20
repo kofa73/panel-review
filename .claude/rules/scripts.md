@@ -70,7 +70,9 @@ byte-exact.
   a request Codex can overrule — cwd/tree/repo config layers sit above the profile — so it also
   **records** the binding Codex reports for itself into `CODEX_SEAT_MODEL_FILE` (issue 47). Detection
   belongs to `preflight`, asking to `start`, recording here; none of the three overrides the user's
-  own `.codex/config.toml`.
+  own `.codex/config.toml`. `run_agy` likewise records the label agy logged as bound into
+  `AGY_SEAT_MODEL_FILE` after a successful attempt (issue 63; best effort, nothing depends on it),
+  and `preflight` reports a `run_agy` pin that `agy models` no longer lists.
 - `repo_guard` — protects the code under review. `snapshot` records the tracked tree (a
   `git stash create` SHA + sha256 manifest) at the start; `verify --restore` after each seat pass
   reverts and reports tracked-file drift. Guards tracked content only — leaves untracked scratch and

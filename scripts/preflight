@@ -7,10 +7,12 @@
 # peers, so the review only needs Claude + one of them.
 #
 # Exit 1 if the core is unusable; exit 0 otherwise. Prints human-readable
-# status. The final three lines are "CODEX_MODEL_LAYER: yes|no", "CODEX: yes|no"
-# and "GEMINI: yes|no" for scripted detection. CODEX_MODEL_LAYER reports a Codex
-# config layer above the panel-review profile that sets the seat's model — a
-# warning the caller must surface, never a hard failure.
+# status. The final four lines are "GEMINI_PIN_UNLISTED: yes|no|unknown",
+# "CODEX_MODEL_LAYER: yes|no", "CODEX: yes|no" and "GEMINI: yes|no" for scripted
+# detection. CODEX_MODEL_LAYER reports a Codex config layer above the panel-review
+# profile that sets the seat's model; GEMINI_PIN_UNLISTED reports a run_agy model
+# pin that `agy models` does not list. Both are warnings the caller must surface,
+# never hard failures.
 #
 # Single source of truth for both the skill and /panel-review's prereq report —
 # keep the checks here so the two can't drift. Writes no files (read-only):
@@ -189,6 +191,60 @@ if [ "$have_codex" = yes ]; then
     echo "         two runs comparable. Move or edit the file to review under the pin instead."
   fi
 fi
+# The Gemini seat's pins go stale when agy retires a model; it has happened three times
+# (issues/21 twice, issues/63), and each time a human reading `agy models` was the first
+# signal. An unlisted pin then fails one of two bad ways, depending on the agy version:
+# a startup error ("invalid model selection", measured on 1.1.13 and 1.4.2), so the
+# attempt fails and with both pins unlisted the seat is down on every pass; or a silent
+# run of the user's settings.json default (1.1.10). `agy models` costs no quota, so check
+# here, before a run. This targets an honest accident (a vendor retiring a model) and
+# only REPORTS: a stale pin is a fact for the human, and `start` asks.
+gemini_pin_unlisted=no
+if [ "$have_gemini" = yes ]; then
+  run_agy_file="$(cd "$(dirname "$0")" && pwd)/run_agy"
+  # Bounded, because a hung network call must not hang every start/status. Captured to a
+  # variable so nothing downstream can SIGPIPE agy.
+  agy_listing="$(timeout 30 agy models 2>/dev/null)" || agy_listing=""
+  # The listing is "<slug>\t<label>" (1.1.13 through 1.4.2). With no tab in it, the label
+  # column is not there to compare against (1.1.10 printed slugs only when piped), so say
+  # "unknown" rather than report every pin as missing.
+  # Matched with case/here-strings, not `printf | grep -q`: under pipefail an early grep
+  # exit can SIGPIPE printf and turn a match into a failure.
+  has_label_column=no
+  case "$agy_listing" in *$'\t'*) has_label_column=yes ;; esac
+  if [ "$has_label_column" = no ]; then
+    gemini_pin_unlisted=unknown
+    echo "NOTE: could not read the label column of 'agy models' — the Gemini seat's model pins were not checked."
+  else
+    agy_labels="$(cut -f2- <<<"$agy_listing")"
+    unlisted=()
+    for pin_name in PRIMARY_MODEL FALLBACK_MODEL; do
+      pin="$(sed -n "s/^$pin_name=\"\(.*\)\"$/\1/p" "$run_agy_file" | head -n1)"
+      # Exact whole-line match, so "… (High)" cannot pass on "… (Highest)".
+      grep -Fxq -- "$pin" <<<"$agy_labels" || unlisted+=("$pin_name|$pin")
+    done
+    if [ "${#unlisted[@]}" -gt 0 ]; then
+      gemini_pin_unlisted=yes
+      echo "WARNING: agy does not list the Gemini seat's pinned model(s):"
+      for entry in "${unlisted[@]}"; do
+        echo "             ${entry%%|*} = \"${entry#*|}\""
+      done
+      echo "         pinned in $run_agy_file"
+      echo "         Gemini models this agy offers:"
+      grep '^Gemini ' <<<"$agy_labels" | sed 's/^/             /' || true
+      if [ "${#unlisted[@]}" -eq 2 ]; then
+        echo "         Neither pin is listed: on agy versions that reject an unknown label the Gemini seat"
+        echo "         will be down on every pass; older versions ran the settings.json default silently."
+      else
+        echo "         The other pin is listed, so the seat can still run, but every pass that reaches the"
+        echo "         unlisted pin either fails that attempt or runs the settings.json default instead."
+      fi
+      echo "         To fix: copy a label (second column of 'agy models') into run_agy's pins and verify"
+      echo "         it binds with tests/live/agy_model_binding.sh."
+    fi
+  fi
+fi
+
 if [ "$have_codex" = no ] && [ "$have_gemini" = no ]; then
   echo "ERROR: no peer seat available — install the codex CLI (npm i -g @openai/codex) or agy (Gemini)."
   hard_fail=1
@@ -216,6 +272,7 @@ if [ "$have_gemini" = no ]; then
   echo "NOTE: agy CLI not found — Gemini seat unavailable (running without it)."
 fi
 
+echo "GEMINI_PIN_UNLISTED: $gemini_pin_unlisted"
 echo "CODEX_MODEL_LAYER: $codex_model_layer"
 echo "CODEX: $have_codex"
 echo "GEMINI: $have_gemini"

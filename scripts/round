@@ -904,16 +904,21 @@ def cmd_verdict_input(run_id):
     # reviewed repository's own .codex/config.toml above it, so the verdict must state the
     # observed binding rather than the asked-for one. Absent file = the seat never ran, or
     # ran before this record existed; the verdict simply says nothing then.
+    # The Gemini seat's record has the same shape (run_agy writes `model=` with the label agy
+    # logged as bound, next to `requested=`, the pin that pass asked for; issue 63). Both
+    # files hold the LAST successful pass, so a fallback attempt shows as model != primary.
     seat_models = {}
-    codex_model_file = directory / "codex-model.txt"
-    if codex_model_file.is_file():
+    for seat, filename in (("codex", "codex-model.txt"), ("gemini", "agy-model.txt")):
+        model_file = directory / filename
+        if not model_file.is_file():
+            continue
         observed = {}
-        for line in codex_model_file.read_text(encoding="utf-8").splitlines():
+        for line in model_file.read_text(encoding="utf-8").splitlines():
             key, separator, value = line.partition("=")
             if separator and value.strip():
                 observed[key.strip()] = value.strip()
         if observed:
-            seat_models["codex"] = observed
+            seat_models[seat] = observed
 
     round0 = None
     round0_panel = directory / "round0.panel.json"

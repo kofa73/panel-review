@@ -2,7 +2,7 @@
 
 Priority: 63
 
-Status: Pending
+Status: Pending — items 1, 3 and 4 done 2026-10-20; the new pins (item 2) are the owner's call
 
 Source: External CLI review, 2026-10-19 — installed agy **1.4.2**; previous review stopped at 1.1.27
 (2026-09-05). Measured with `agy models` (quota-free) on 2026-10-19.
@@ -88,3 +88,92 @@ the first signal was a human reading `agy models`.
   shows otherwise (`issues/20`).
 - Never pin agy's Claude or GPT-OSS entries. The Gemini seat must run a Gemini model.
 - Do not touch the print-timeout handling (`issues/59`) or add `/boost` (`issues/60`) here.
+
+## Progress (2026-10-20)
+
+### Item 1: what agy 1.4.2 does with an unlisted label
+
+Measured on agy **1.4.2** with one direct print-mode call, using `run_agy`'s invocation form plus a
+per-call `--log-file`, asking for the current primary pin `Gemini 3.1 Pro (High)`:
+
+- **Hard error, exit 1, no output on stdout.** stderr: `error: invalid model selection (--model
+  "Gemini 3.1 Pro (High)" --effort ""): model Gemini 3.1 Pro (High) is not recognized as a known
+  model or custom model in settings`, followed by the list of available labels. This is the same
+  behavior as 1.1.13. With both pins unlisted, `run_agy` fails both attempts, so the Gemini seat is
+  down on every pass.
+- **The log names a model that never ran.** Before the error, the log has `Failed to resolve model
+  flag Gemini 3.1 Pro (High)` followed by `Propagating selected model override to backend:
+  label="Gemini 3.8 Flash (High)"`, which is the `settings.json` default on this machine. A
+  propagation line is therefore proof of binding only for a call that succeeded.
+  `tests/live/agy_model_binding.sh` already checks the exit code before it reads the label. Its
+  header and negative-control wording now describe both behaviors, depending on the version.
+- **`--log-file` works on 1.4.2.** When it is given, agy writes the CLI log only to that file and
+  nothing to `~/.gemini/antigravity-cli/log/`. `agy --help` prints to stderr.
+
+The full live script (`--negative-control`, wrapper dispatch) was not run. Its listing check fails on
+both current pins, and the wrapper check would spend two failing attempts, so it gives no further
+information until new pins are chosen.
+
+### Item 2: candidate binding, partly measured
+
+- `Gemini 4 Argon (High)` **binds**. One direct call with `--model "Gemini 4 Argon (High)"`
+  exited 0, printed `OK`, and every propagation line in its log read `label="Gemini 4 Argon (High)"`.
+- `Gemini 3.8 Flash (High)` was **not** checked through `--model`. It appears in the log above only
+  as the `settings.json` default, which does not prove that the label binds.
+
+### Item 3: done
+
+`preflight` reads `agy models` (bounded by a 30 s `timeout`; no quota) and compares each `run_agy`
+pin with the label column, using an exact whole-line match. It prints a new tail line,
+`GEMINI_PIN_UNLISTED: yes|no|unknown`, ahead of `CODEX_MODEL_LAYER`. When a pin is unlisted, it
+also prints a WARNING block that names the pin and lists the Gemini labels on offer. `unknown`
+means the listing could not be read, or it had no label column (the slug-only listing of 1.1.10).
+The check never blocks. `start` asks *Run anyway, or stop?* when the line says `yes`, the same way it
+asks for `CODEX_MODEL_LAYER`. The protocol's preflight comment, the README, `.claude/rules/scripts.md`
+and `AGENTS.md` describe the new line.
+
+One deviation from the Verification wording: preflight's output is not byte-identical when both pins
+are listed. It gains the always-present `GEMINI_PIN_UNLISTED: no` line, the same way
+`CODEX_MODEL_LAYER: no` is always present. A fixed tail keeps scripted parsing simple. No WARNING or
+NOTE is printed in that case.
+
+### Item 4: done (optional item)
+
+`await_seats` exports `AGY_SEAT_MODEL_FILE=/tmp/<ID>/agy-model.txt` for the Gemini seat. With that
+variable set, `run_agy` checks `agy --help` for `--log-file`. If agy offers the flag, each attempt
+logs to its own file under `/tmp/<ID>/agy-logs/`. Those logs are kept, because agy then writes nothing
+to its default log directory. After a **successful** attempt only, `run_agy` writes `model=<logged
+label(s)>` and `requested=<pin>`. A successful attempt with no recognized line removes an older
+record, so the file always describes the last successful pass. `round verdict-input` returns this record as `seat_models.gemini`,
+and Process notes state it, including a substitution when `model` differs from `requested`. If agy
+lacks the flag or no line is recognized, only the record is lost.
+
+### Still to measure
+
+- `tests/live/agy_model_binding.sh` with the chosen pins, including the wrapper-dispatch check and
+  `--negative-control`.
+- How an exhausted Argon quota shows up in print mode (exit code, stderr). A quota error that exits
+  non-zero triggers the fallback. An exit 0 with an error message would not.
+- One real review with the Gemini seat engaged. Its `agy-model.txt` confirms the record in the field.
+
+## Open questions for the owner
+
+1. **Primary pin.** Options:
+   - **(a) `Gemini 4 Argon (High)`** (recommended). This is the strongest Gemini on offer, and it binds
+     on 1.4.2 (measured). Cost: it is quota-limited on your plan, and its price doubles after the
+     promotion. A failed attempt (quota or timeout) falls through to the fallback.
+   - (b) `Gemini 4 Argon (Medium)`. Same family, presumably cheaper per pass. Its quality is not
+     measured, and it is unclear whether it draws on the same quota.
+   - (c) `Gemini 3.8 Flash (High)`. Not recommended: you rated the Flash line unreliable (wrong
+     document references).
+2. **Fallback pin.** Options:
+   - **(a) `Gemini 3.8 Flash (High)`** (recommended, with reservations). It is the only other Gemini
+     family on offer, so an Argon quota exhaustion is unlikely to take it down too. It is a weak
+     reviewer by your assessment, but the debate rounds can reject its wrong claims. Its binding still
+     needs one check.
+   - (b) `Gemini 4 Argon (Medium)`. Higher expected quality, but it is the same family and probably
+     the same quota pool, so it is likely to fail when the primary fails for quota reasons.
+   - (c) No usable fallback: you prefer a down Gemini seat to a Flash review. This needs a code change,
+     because `run_agy` and `check_contracts` (`agy-model-pin-form`) require two distinct pins. Choose
+     this only if a Flash review does more harm than a two-seat panel.
+
