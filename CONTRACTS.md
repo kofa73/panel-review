@@ -15,6 +15,7 @@ or helper internals.
 | Review-profile validation, snapshot, metadata, and seat-facing reference | `scripts/stage_review_profile`, `scripts/init_run`, and `scripts/round` | command skills select only the source path; prompts consume the validated saved-profile reference |
 | Uncommitted-scope divergence snapshot and path diagnostics | `scripts/scope_diagnostics` | `scripts/init_run` records the baseline; `scripts/inspect_run`, `scripts/resume_check`, and `scripts/round` report current differences while retaining the hash gate |
 | CLI-seat execution and completion signal | `scripts/await_seats` and `agents/panel-review-cli-barrier.md` | `round` prepares the invocation and clears the previous signal, so the barrier's sentinel is absent when it starts; the protocol passes its paths and consumes `await_seats_rc` |
+| Referee-owned origin records | `scripts/write_card` | the protocol installs origin records atomically; card files go through `project_card` or `regen_cards` |
 | Verdict persistence and delivery classification | `scripts/write_verdict_artifact`, `scripts/read_verdict_artifact`, and `scripts/index delivery-status` | the protocol invokes persistence; command skills consume validated delivery text |
 | Claude-seat return statuses | `prompts/claude_delivery.tmpl` | the Claude-seat agent references the delivery contract; the hook validates `SubagentHandback` in auto mode and the final response in other modes |
 | Referee-to-command return statuses | `skills/panel-review-for-agent/SKILL.md` | the referee agent references this return contract; the hook validates `SubagentHandback` in auto mode and the final response in other modes; command skills validate the artifact independently |
@@ -22,6 +23,7 @@ or helper internals.
 | Agent identity, context isolation, and role limits | the corresponding file under `agents/` | prompts and protocol instructions do not redefine agent identity |
 | Public behavior and operator guidance | `README.md` | explanatory only; never used as machine validation |
 
-`scripts/check_contracts` verifies the machine-readable seat contract, rendered prompt variants, and
-the ownership rules whose earlier drift caused executable contradictions. Narrow source scans remain
-only for forbidden legacy wording that would redirect a model to an obsolete interface.
+`scripts/check_contracts` verifies the machine-readable seat contract, rendered prompt variants,
+Round-0 retry/resume call shapes, Claude-specific block ownership, command dispatch shapes, inline
+and fenced transaction ownership, status-stub boundaries, and model-pin form. Its checks cover
+structural and executable invariants.

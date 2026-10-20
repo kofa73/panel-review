@@ -78,6 +78,31 @@ Land issue 26's wording fix in the same change, not before it.
 - Deliberately break one structural invariant (remove `run_in_background: false` from a dispatch
   block) and confirm `check_contracts` still fails, naming it.
 
+## Work completed
+
+Removed the Markdown phrase-presence loops, prose slice/nearby-word heuristics, and the Markdown
+`assert_file_contains` block from `tests/run_tests.sh`. Kept parser-backed rendered-contract checks,
+template sentinels and block ownership, `CONTRACTS.md` ownership rows, model-pin shape, status-stub
+ownership, dispatch shape, and the normal debate transaction boundary. The protocol's public command
+inventory now omits internal commit verbs, while its common debate path shows the coarse `round`
+commands explicitly. Tests mutate prose successfully and reject structural drift.
+
+The issue 26 recovery wording is already corrected in commit `9cd6c0d`; this change removes the exact
+phrase requirement that would have blocked further wording fixes.
+
+## Open questions for the owner
+
+1. Should any semantic protocol guidance remain an executable contract after removing the literal
+   phrase checks? Options: restore selected phrase pins; keep structural/runtime checks only
+   (recommended); introduce structured metadata for selected policies. The current tests cannot
+   reliably distinguish a prose rewording from a changed rule for guidance such as Round-0
+   independence and retry behavior. Keeping phrase pins recreates the brittleness this issue addresses;
+   structured metadata would need a separate design.
+2. Should the CLI barrier's Agent-level `timeout: 2700000` setting get a machine check? Options: leave
+   it as documentation (recommended); restore an exact prose pin; represent the tool-call settings in
+   a structured block and check those fields. The timeout currently appears only as prose, while the
+   shell wait and sentinel behavior have structural checks.
+
 ## Non-goals
 
 - **This is not "a hobby project does not need tests".** The functional suites in `tests/python/`

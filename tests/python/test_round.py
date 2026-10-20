@@ -192,7 +192,7 @@ class RoundTest(unittest.TestCase):
         self.assertTrue((self.run_dir / "guard" / "manifest.sha256").is_file())
         self.assertIn(str(self.run_dir / "review-profile.md"), common)
         self.assertIn(hashlib.sha256(self.profile).hexdigest(), common)
-        self.assertNotIn("Probe test-specific invariants.", common)
+        self.assertNotIn(self.profile.decode(), common)
 
     def test_prepare_round0_anchors_seat_scratch_outside_the_workdir(self):
         # issue 24: scratch inside the repository under review turned any seat's repo-wide search
@@ -206,19 +206,6 @@ class RoundTest(unittest.TestCase):
         )
         self.assertIn(str(scratch), Path(prepared["prompt"]).read_text(encoding="utf-8"))
         self.assertEqual(list(self.workdir.glob(".panel-review/*/work")), [])
-
-    def test_prepare_round0_renders_the_configured_panel_size(self):
-        prepared = self.prepare_round0("claude", "codex")
-        prompt = Path(prepared["prompt"]).read_text(encoding="utf-8")
-
-        self.assertIn("configured panel has 2 reviewer seats, including you", prompt)
-        self.assertNotIn("two other AIs", prompt)
-
-    def test_prepare_round0_renders_the_full_panel_size(self):
-        prepared = self.prepare_round0("claude", "codex", "gemini")
-        prompt = Path(prepared["prompt"]).read_text(encoding="utf-8")
-
-        self.assertIn("configured panel has 3 reviewer seats, including you", prompt)
 
     def test_rendered_round0_contract_example_passes_runtime_validation(self):
         prepared = self.prepare_round0()
@@ -242,7 +229,7 @@ class RoundTest(unittest.TestCase):
         prompt = Path(json.loads(prepared.stdout)["prompt"]).read_text(encoding="utf-8")
         self.assertIn(str(self.run_dir / "review-profile.md"), prompt)
         self.assertIn(hashlib.sha256(self.profile).hexdigest(), prompt)
-        self.assertNotIn("Probe test-specific invariants.", prompt)
+        self.assertNotIn(self.profile.decode(), prompt)
 
     def test_prepare_rejects_a_profile_snapshot_that_disagrees_with_the_manifest(self):
         (self.run_dir / "review-profile.md").write_text("changed\n", encoding="utf-8")
@@ -570,13 +557,6 @@ class RoundTest(unittest.TestCase):
         self.assertEqual(prepared_result.returncode, 0, prepared_result.stderr)
         prepared = json.loads(prepared_result.stdout)
         claude_prompt = Path(prepared["claude_prompt"]).read_text(encoding="utf-8")
-        self.assertIn("## Stance output", claude_prompt)
-        self.assertIn("## New findings (ALWAYS emit this block)", claude_prompt)
-        self.assertIn("For any multi-block response, put", claude_prompt)
-        self.assertIn(
-            "every requested block in that file and invoke this command once",
-            claude_prompt,
-        )
         self.assertIn("CLAUDE_SEAT_RAW_WRITTEN", claude_prompt)
         raw = debate_response({"id": "i1", "stance": "support", "rationale": "confirmed"})
         self.install_claude_debate(raw)
@@ -877,7 +857,7 @@ class RoundTest(unittest.TestCase):
         self.assertTrue(Path(barrier["command"]).is_file())
         self.assertFalse(Path(barrier["sentinel"]).exists())
 
-    def test_prepare_debate_renders_two_stance_contract(self):
+    def test_prepare_debate_renders_parseable_contract_blocks(self):
         self.prepare_round0()
         self.install_open_index()
 
@@ -885,11 +865,6 @@ class RoundTest(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         prompt_path = json.loads(result.stdout)["prompt"]
-        prompt = Path(prompt_path).read_text(encoding="utf-8")
-        self.assertIn("configured panel has 2 reviewer seats, including you", prompt)
-        self.assertIn("support|reject", prompt)
-        self.assertIn("support may include a `revision`", prompt)
-        self.assertNotIn("support_with_revision", prompt)
 
         for tag in ("stances", "new_findings"):
             with self.subTest(tag=tag):

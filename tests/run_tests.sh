@@ -288,109 +288,12 @@ EOF
 assert_exit "preflight blocks user outside-workdir setting" 1 "$rc"
 assert_file_contains "preflight names blocking user file" "$empty_claude_config/settings.json" "$TMP/preflight-user-block.out"
 
-section "protocol and template contracts"
-protocol="$root/skills/panel-review-for-agent/references/protocol.md"
-# Seat fields, block cardinality, and rendered instructions share one executable owner.
-assert_file_contains "blind template splices the seat contract" '{{SEAT_CONTRACT}}' "$root/prompts/blind_pass.tmpl"
-assert_file_contains "debate template splices the seat contract" '{{SEAT_CONTRACT}}' "$root/prompts/debate.tmpl"
-assert_file_contains "blind template references the saved review profile" '{{PROFILEINFO}}' "$root/prompts/blind_pass.tmpl"
-assert_file_contains "debate template references the saved review profile" '{{PROFILEINFO}}' "$root/prompts/debate.tmpl"
-assert_file_contains "built-in review profile carries the generic priority catalogue" 'auth, permissions, tenant isolation, trust boundaries' "$root/profiles/default.md"
-assert_file_contains "seat contract owns category revision" '"category": "correctness"' "$SC/seat_contract.py"
-assert_file_contains "protocol uses degraded decision script" 'decide_degraded_round' "$protocol"
-assert_file_contains "protocol delegates batch admission" 'sweep ingest-batch' "$protocol"
-assert_file_contains "protocol uses coarse debate salvage" 'round" salvage-debate' "$protocol"
-assert_file_contains "protocol forbids stance checkpoint globbing" 'Do not glob `*.stances.json`' "$protocol"
-assert_file_contains "protocol defines complete two-block checkpoints" 'parsed `new_findings`, zero `status.nf.*`' "$protocol"
-assert_file_contains "protocol delegates dropped-seat cleanup" 'sweep" drop-seat' "$protocol"
-assert_file_contains "protocol reapplies the low-only gate" 'Low-severity stop gate (after each committed round)' "$protocol"
-assert_file_contains "README uses general constrained-seat wording" 'any seat running in a constrained/sandboxed workspace' "$root/README.md"
-assert_file_contains "README warns to run in an isolated environment (broad seat permissions)" 'isolated environment (Docker' "$root/README.md"
-assert_file_contains "blind_pass template carries the scratch sentinel" '{{SCRATCH}}' "$root/prompts/blind_pass.tmpl"
-assert_file_contains "debate template carries the scratch sentinel"     '{{SCRATCH}}' "$root/prompts/debate.tmpl"
-assert_file_contains "protocol passes SCRATCH to assemble" 'SCRATCH=/tmp/$id/scratch.txt' "$protocol"
-assert_file_contains "protocol snapshots the tracked tree" 'repo_guard" snapshot' "$protocol"
-assert_file_contains "protocol verifies + restores the tree" 'repo_guard" verify' "$protocol"
+section "structural prompt and protocol contracts"
+"$SC/check_contracts" --root "$root" > "$TMP/contracts.out" 2>&1; rc=$?
+assert_exit "structural instruction contracts pass" 0 "$rc"
+assert_file_contains "contract checker reports success" 'instruction contracts: OK' "$TMP/contracts.out"
 
-# Both always-loaded referee contracts must distinguish agreement-gated decisions
-# from mechanical updates while leaving transition details to the canonical protocol.
-for contract in \
-  "$root/agents/panel-review-referee.md" \
-  "$root/skills/panel-review-for-agent/SKILL.md"
-do
-  label="${contract#"$root/"}"
-  assert_file_contains_text "$label scopes seat agreement to canonical decisions" \
-    'Seat agreement controls consensus outcomes and detail revisions where required by the canonical transition rules.' "$contract"
-  assert_file_contains_text "$label permits canonical mechanical updates" \
-    'Mechanical evidence, coverage, counter, audit, degradation, and terminal-limit updates follow those rules and do not imply agreement.' "$contract"
-  assert_file_not_contains "$label has no broad mutation prohibition" \
-    'mutate issue records' "$contract"
-done
-
-# Final-report delivery is artifact-only: the bootstrap owns the fixed return statuses and the
-# main-context commands validate the artifact through one deterministic reader mode.
-assert_file_contains "bootstrap owns the artifact-ready stub" 'PANEL_VERDICT_READY id=<id>' "$root/skills/panel-review-for-agent/SKILL.md"
-assert_file_not_contains "referee agent does not restate return literals" 'PANEL_VERDICT_READY' "$root/agents/panel-review-referee.md"
-assert_file_contains "protocol requires durable artifact delivery" 'Artifact persistence is required for delivery' "$protocol"
-assert_file_not_contains "protocol has no legacy worktree verdict path" 'verdict-$id.md' "$protocol"
-assert_file_not_contains "cleanup has no legacy verdict special case" 'verdict-$id.md' "$SC/cleanup"
-assert_file_contains "start closes post-persistence cleanup crash window" 'artifact persistence succeeded but the referee' "$root/skills/start/SKILL.md"
-for command in start resume continue; do
-  skill="$root/skills/$command/SKILL.md"
-  assert_file_contains "$command validates artifact-only delivery" 'read_verdict_artifact" --delivery' "$skill"
-  if grep -Fq 'present the verdict verbatim' "$skill"; then
-    bad "$command does not restate the verdict body" "stale verbatim-delivery instruction remains"
-  else
-    ok "$command does not restate the verdict body"
-  fi
-done
-
-# --- blind-pass robustness (design-notes/blind-pass-robustness.md) ---------------
-# Concern A: the diff body is EXTERNALIZED — blind_pass.tmpl references a file, it no
-# longer inlines the {{DIFF}} body, and round builds/passes {{DIFFINFO}}.
-if grep -Fq -- '{{DIFF}}' "$root/prompts/blind_pass.tmpl"; then
-  bad "blind_pass no longer inlines the diff body" "still carries the {{DIFF}} sentinel"
-else
-  ok "blind_pass no longer inlines the diff body"
-fi
-assert_file_contains "blind_pass carries a diff REFERENCE sentinel" '{{DIFFINFO}}' "$root/prompts/blind_pass.tmpl"
-assert_file_contains "round builds the diff_info reference" 'diff_info.txt' "$SC/round"
-assert_file_contains "round passes DIFFINFO to assemble" '"DIFFINFO": directory / "diff_info.txt"' "$SC/round"
-if grep -Fq -- 'DIFF=/tmp/$id/diff.txt' "$protocol"; then
-  bad "protocol drops the inline DIFF= assemble arg" "still passes DIFF=/tmp/\$id/diff.txt"
-else
-  ok "protocol drops the inline DIFF= assemble arg"
-fi
-# Concern B: absolute anchors — WORKDIR sentinel in both templates, absolute scratch,
-# an explicit agy tool-cwd directive, and absolute card paths in debate.
-assert_file_contains "blind_pass carries the review-root anchor" '{{WORKDIR}}' "$root/prompts/blind_pass.tmpl"
-assert_file_contains "debate carries the review-root anchor"     '{{WORKDIR}}' "$root/prompts/debate.tmpl"
-assert_file_contains "blind_pass directs agy to set the tool cwd" 'working-directory / `cwd` parameter' "$root/prompts/blind_pass.tmpl"
-assert_file_contains "debate directs agy to set the tool cwd"     'working-directory / `cwd` parameter' "$root/prompts/debate.tmpl"
-assert_file_contains "protocol writes an ABSOLUTE scratch anchor" '"/tmp/$id/work" > /tmp/$id/scratch.txt' "$protocol"
-# issue 24: scratch must not live in the repository under review — a seat's repo-wide search would
-# otherwise return a sibling seat's raw output as an unrequested hit and break blindness.
-if grep -Fq '.panel-review/$id/work' "$protocol"; then
-  bad "protocol keeps seat scratch out of the workdir" "still anchors scratch under .panel-review/"
-else
-  ok "protocol keeps seat scratch out of the workdir"
-fi
-if grep -E '^\s*scratch = ' "$SC/round" | grep -Fq '.panel-review'; then
-  bad "round anchors seat scratch under /tmp/<id>" "scratch still resolves inside the workdir"
-else
-  ok "round anchors seat scratch under /tmp/<id>"
-fi
-assert_file_contains "protocol writes the review-root file" 'workdir.txt' "$protocol"
-assert_file_contains "protocol collects ABSOLUTE card paths" '<workdir>/.panel-review/<id>/issue-<oid>.md' "$protocol"
-# Concern C: the rendered output-contract sentinel is ABOVE the Files/Diff section.
-of_line="$(grep -nF '{{SEAT_CONTRACT}}' "$root/prompts/blind_pass.tmpl" | head -1 | cut -d: -f1)"
-fd_line="$(grep -nF '## Files / Diff' "$root/prompts/blind_pass.tmpl" | head -1 | cut -d: -f1)"
-if [ -n "$of_line" ] && [ -n "$fd_line" ] && [ "$of_line" -lt "$fd_line" ]; then
-  ok "blind_pass hoists the output contract above the diff"
-else
-  bad "blind_pass output-contract ordering" "SEAT_CONTRACT line=$of_line Files/Diff line=$fd_line"
-fi
-# Concern E: each rendered contract validates through the runtime parser.
+section "rendered seat contract — runtime parser accepts its examples"
 "$SC/seat_contract.py" render round0 --panel-size 2 --check-command "$SC/check_draft findings" > "$TMP/contract.round0.txt"
 "$SC/parse_block" --response round0 findings "$TMP/contract.round0.txt" x >/dev/null 2>&1
 assert_exit "rendered round0 contract validates through parse_block" 0 "$?"
@@ -399,72 +302,22 @@ assert_exit "rendered round0 contract validates through parse_block" 0 "$?"
 assert_exit "rendered debate stance contract validates through parse_block" 0 "$?"
 "$SC/parse_block" --response debate new_findings "$TMP/contract.debate.txt" x >/dev/null 2>&1
 assert_exit "rendered debate new-findings contract validates through parse_block" 0 "$?"
-# field-shuffled variant: an unknown revision subfield is normalized away, not rejected.
+# Unknown object fields are stripped during normalization even when source fields are shuffled.
 printf '```stances\n%s\n```\n' '{"id":"i1","stance":"support","revision":{"bogus_field":"x","severity":"high"}}' > "$TMP/frag.shuffled.txt"
 shuf_out="$("$SC/parse_block" stances "$TMP/frag.shuffled.txt" x 2>/dev/null)"
 assert_exit "field-shuffled stance still validates (normalized)" 0 "$?"
 case "$shuf_out" in *bogus_field*) bad "unknown revision subfield normalized away" "leaked: $shuf_out";; *) ok "unknown revision subfield normalized away";; esac
-# Concern F: new_findings is required-EMPTYABLE — an explicit `[]` (or empty) block is
-# valid (exit 0), NOT malformed, so a seat with nothing new is not falsely repaired.
+# A valid empty new-findings block distinguishes "nothing new" from a missing or malformed block.
 printf '```new_findings\n[]\n```\n' > "$TMP/nf.empty-array.txt"
 "$SC/parse_block" new_findings "$TMP/nf.empty-array.txt" x >/dev/null 2>&1
-assert_exit "empty-array new_findings block is valid (F)" 0 "$?"
-assert_file_contains "seat contract asks to ALWAYS emit new_findings" 'ALWAYS emit this block' "$SC/seat_contract.py"
-assert_file_contains "protocol treats new_findings as required-emptyable" 'required-emptyable' "$protocol"
-# Salvage is referee-owned (no script repair, no repair seat): the protocol carries the
-# extract-first-else-empty anti-hallucination rule, and repair.tmpl is retired.
-assert_file_contains "protocol salvage uses extract-first-else-empty wording" 'if and only if the seat genuinely raised nothing' "$protocol"
+assert_exit "empty-array new_findings block is valid" 0 "$?"
 [ -e "$root/prompts/repair.tmpl" ] && bad "repair.tmpl is retired" "still present" || ok "repair.tmpl is retired"
-
-# --- CLI-seat wait is isolated in a foreground Agent parallel with the Claude seat ---
-# Root cause it guards: ending the referee while background Agents are live completes the referee;
-# later child notifications reach the main session. Both foreground Agent calls must therefore be
-# emitted together so they run concurrently and block the referee until both return.
-spk="$protocol"
-bar="$root/agents/panel-review-cli-barrier.md"
-assert_file_contains "cli-barrier agent exists with the right name" 'name: panel-review-cli-barrier' "$bar"
-assert_file_contains "cli-barrier agent is a non-reviewing wait barrier" 'wait barrier**, not a reviewer' "$bar"
-assert_file_contains "cli-barrier runs await_seats detached in the background" 'run_in_background: true' "$bar"
-assert_file_contains \
-  "cli-barrier sets a 45-minute timeout for its detached Bash call" \
-  'timeout` parameter to `2700000` ms (45 minutes)' "$bar"
-assert_file_contains "cli-barrier waits via a bounded foreground loop" 'until [ -f' "$bar"
-# The step-2 wait is a foreground Bash tool call, so each wait stays under the Bash tool's 2-min
-# default and loops rather than letting Claude Code auto-background the wait.
-assert_file_contains "cli-barrier waits in short chunks under the 2-min Bash default" 'timeout 100 bash -c' "$bar"
-# Regression: must NOT reintroduce the fragile long-wait-with-raised-tool-timeout design.
-if grep -Fq '570000' "$bar"; then bad "cli-barrier must not raise a foreground Bash wait timeout"; else ok "cli-barrier does not raise a foreground Bash wait timeout"; fi
-# Match the command FORM ('timeout 540 bash'), not a prose mention of the number, so the doc can
-# still cite `timeout 540` as the auto-backgrounding anti-pattern it explains against.
-if grep -Fq 'timeout 540 bash' "$bar"; then bad "cli-barrier must not use a wait that the Bash tool auto-backgrounds"; else ok "cli-barrier uses no >2-min blocking wait"; fi
-assert_file_contains "protocol dispatches the cli-barrier Agent" 'panel-review:panel-review-cli-barrier' "$spk"
-assert_file_contains "protocol documents the unattended background-call timeout" 'timeout: 2700000' "$spk"
-assert_file_contains "protocol runs seat Agents as foreground calls" 'run_in_background: false' "$spk"
-assert_file_contains_text "protocol emits foreground seat Agents in parallel" \
-  'Issue every returned Agent call together in one assistant response' "$spk"
-assert_file_contains "round writes the Round-0 barrier command to a script" 'cli_barrier.round0.sh' "$SC/round"
-# Regression guard: the OLD broken instruction (referee backgrounds await_seats itself) must be gone.
-if grep -Fq 'ONE background Bash call' "$spk"; then bad "protocol must not background await_seats as a bash job"; else ok "protocol no longer backgrounds await_seats directly"; fi
-if grep -Eq 'await_seats.*run_in_background' "$spk"; then bad "protocol must not pair await_seats with run_in_background"; else ok "await_seats is not backgrounded by the referee"; fi
-
-# --- The barrier owns await_seats' terminal state via an exit-code SENTINEL (the false-degrade fix) ---
-# Root cause it guards: the barrier used to poll the --done file, which await_seats writes ONLY on a
-# clean exit. A setup/usage error left no done-file, so the barrier polled its whole ~43-min budget
-# and then falsely reported "seats did not finish" (a silent degraded review). It also could not tell
-# a crashed detached job from a slow one, and a late write could land after the referee moved on.
-assert_file_contains "cli-barrier takes a sentinel input path"                'sentinel=<path>' "$bar"
-assert_file_contains "cli-barrier captures await_seats' exit code into the sentinel" 'rc=$?; printf' "$bar"
-assert_file_contains "cli-barrier waits on the sentinel, not the done-file"   'until [ -f "<sentinel>"' "$bar"
-assert_file_contains "cli-barrier reports await_seats_rc so the referee can tell setup-error from clean" 'await_seats_rc=' "$bar"
-assert_file_contains "cli-barrier best-effort reaps a wedged job on budget exhaustion" 'pkill -f' "$bar"
-assert_file_contains "round returns the Round-0 sentinel path" 'await.round0.sentinel' "$SC/round"
-assert_file_contains "protocol reads await_seats_rc and treats nonzero/absent as CLI seats down" 'await_seats_rc' "$spk"
 
 # --- Packaging: every plugin agent the protocol dispatches must be TRACKED in git ---
 # Root cause it guards: agents/panel-review-cli-barrier.md once existed on disk but was never
 # `git add`ed, so the tracked diff would ship without it and a fresh clone/install could not resolve
-# the first `subagent_type: panel-review:panel-review-cli-barrier` dispatch. `assert_file_contains`
-# checks bytes on disk and would NOT catch that; only git tracking does.
+# the first `subagent_type: panel-review:panel-review-cli-barrier` dispatch. File presence alone
+# would not catch that; only git tracking does.
 section "packaging — every plugin agent file is tracked in git"
 for f in "$root"/agents/*.md; do
   rel="agents/$(basename "$f")"
@@ -477,21 +330,6 @@ for a in $(grep -rhoE 'subagent_type[": ]+panel-review:panel-review-[a-z0-9-]+' 
   else bad "skill dispatches subagent $a but agents/$a.md is not tracked in git" "the first dispatch in a fresh install would fail"; fi
 done
 
-assert_file_contains "Claude seat exposes read-only tilth tools" 'mcp__tilth__tilth_search' "$root/agents/panel-review-claude-seat.md"
-case "$(grep -F 'tools:' "$root/agents/panel-review-claude-seat.md")" in
-  *mcp__tilth__tilth_write*) bad "Claude seat must NOT expose tilth write tool" ;;
-  *) ok "Claude seat excludes tilth write tool" ;;
-esac
-assert_file_not_contains "Claude seat does not request batched evidence lookups" 'Batch independent evidence lookups' "$root/agents/panel-review-claude-seat.md"
-assert_file_not_contains "Claude seat does not prefer multi-symbol lookup" 'one `tilth_search` multi-symbol query' "$root/agents/panel-review-claude-seat.md"
-assert_file_contains "Claude seat avoids redundant reads" 'Avoid redundant evidence reads' "$root/agents/panel-review-claude-seat.md"
-assert_file_contains "Claude seat stops after sufficient evidence" 'Stop exploratory calls once the output is supported' "$root/agents/panel-review-claude-seat.md"
-assert_file_contains "Claude seat has no hard call cap" 'hard tool-call' "$root/agents/panel-review-claude-seat.md"
-assert_file_contains "Claude seat defers phase requirements to the rendered contract" 'Do not infer or redefine its required blocks.' "$root/agents/panel-review-claude-seat.md"
-assert_file_not_contains "Claude seat does not restate new-findings rules" 'required-emptyable' "$root/agents/panel-review-claude-seat.md"
-assert_file_contains "Claude delivery combines every requested block" 'For any multi-block response, put' "$root/prompts/claude_delivery.tmpl"
-assert_file_contains "Claude delivery validates and writes the complete response once" 'every requested block in that file and invoke this command once' "$root/prompts/claude_delivery.tmpl"
-assert_file_contains "Claude delivery replaces redundant per-block validation" "the task prompt's separate per-block pre-emit validation command" "$root/prompts/claude_delivery.tmpl"
 case "$(grep -F 'codex exec' "$root/scripts/run_codex")" in
   *--sandbox\ read-only*) bad "run_codex must no longer pin --sandbox read-only" ;;
   *--dangerously-bypass-approvals-and-sandbox*) ok "run_codex bypasses the sandbox" ;;
@@ -899,28 +737,6 @@ PATH="$rec_mockbin:$PATH" HOME="$TMP/awaitrechome" \
 assert_exit "barrier exits 0 with the Gemini model record wired" 0 "$?"
 assert_eq "gemini still engages" '0' "$(cat "$TMP/await.st.gemini.rec")"
 assert_file_contains "barrier records the Gemini bound label under the run" 'model=Gemini Barrier (High)' "/tmp/$rec_id/agy-model.txt"
-
-section "protocol wording — the barrier's wait signal is the sentinel, never --done"
-# The behavioral invariant above (no done-file on a setup error) is WHY the barrier must wait on the
-# exit-code sentinel, not on --done (a RESULT file that appears only on a clean exit). But the debate
-# protocol is prompt-driven: contradictory prose in the docs the referee/barrier actually read can
-# route execution back to the old done-file wait, which hangs the whole budget on a setup error and
-# then false-degrades the CLI seats. So guard those docs against the old "watches --done" / "--done
-# is the wait signal" wording. A correct line always names the sentinel, so lines that do are
-# excluded (they may still mention --done as a result file).
-wording_docs=(
-  "$root/skills/panel-review-for-agent/SKILL.md"
-  "$protocol"
-  "$root/agents/panel-review-cli-barrier.md"
-  "$root/AGENTS.md"
-  "$root/scripts/await_seats"
-)
-bad_wording=""
-for f in "${wording_docs[@]}"; do
-  grep -niE 'done is the wait signal' "$f" >/dev/null 2>&1 && bad_wording+=" ${f##*/}(wait-signal)"
-  grep -niE 'watch(e[sd]|ing)?[^.]*--done' "$f" 2>/dev/null | grep -qvi sentinel && bad_wording+=" ${f##*/}(watches-done)"
-done
-if [ -z "$bad_wording" ]; then ok "no protocol doc treats --done as the barrier's wait signal"; else bad "stale --done-as-wait-signal wording present" "$bad_wording"; fi
 
 # ---------------------------------------------------------------------------
 # run_agy invocation contract. agy's `--print` TAKES the prompt as its argument;
@@ -1362,12 +1178,6 @@ JSON
 assert_eq "no-match makes no archive"    'no' "$([ -d "/tmp/$rid2/epochs" ] && echo yes || echo no)"
 assert_eq "no-match leaves index untouched" '1|0' "$(jq -r '"\(.round)|\(.run_epoch)"' "/tmp/$rid2/index.json")"
 rm -rf "/tmp/$rid" "/tmp/$rid.md" "/tmp/$rid.md.bak" "/tmp/$rid2"
-
-section "protocol references the new deterministic helpers"
-assert_file_contains "protocol uses birth_index"          'birth_index' "$protocol"
-assert_file_contains "protocol uses run_seat"             'run_seat'    "$protocol"
-assert_file_contains "protocol uses resolve_instructions" 'resolve_instructions' "$protocol"
-assert_file_contains "protocol waits via await_seats barrier" 'await_seats' "$protocol"
 
 # ---------------------------------------------------------------------------
 # Python suite — the coverage for the migrated stateful scripts (index, parse_block,

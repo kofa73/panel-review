@@ -16,21 +16,18 @@ PHASES = ("common", "salvage", "round0", "debate", "degraded", "gate", "recovery
 
 class ProtocolPhasesTest(unittest.TestCase):
     def test_each_phase_is_independently_readable(self):
-        headings = {
-            "common": "## The wrapper scripts",
-            "salvage": "## Salvage",
-            "round0": "## Round 0 — blind pass",
-            "debate": "## Debate loop",
-            "degraded": "If fewer than two seats remain",
-            "gate": "Low-severity stop gate",
-            "recovery": "# Mode: resume",
-            "verdict": "# Verdict synthesis",
-        }
-        for phase, heading in headings.items():
+        source = PROTOCOL.read_text(encoding="utf-8")
+        for phase in PHASES:
             with self.subTest(phase=phase):
                 result = subprocess.run([str(READER), phase], capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertIn(heading, result.stdout)
+                matches = re.findall(
+                    rf"<!-- phase:{phase} -->\n(.*?)<!-- /phase:{phase} -->",
+                    source,
+                    re.DOTALL,
+                )
+                self.assertTrue(matches, phase)
+                self.assertEqual(result.stdout.strip(), "\n".join(matches).strip())
                 self.assertNotIn("<!-- phase:", result.stdout)
 
     def test_marked_phases_cover_all_canonical_procedure_text(self):
@@ -51,15 +48,6 @@ class ProtocolPhasesTest(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("usage: read_protocol_phase", result.stderr)
 
-    def test_debate_contract_reopens_fold_only_when_evidence_conflicts(self):
-        result = subprocess.run([str(READER), "debate"], capture_output=True, text=True)
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("Preserve its current state", result.stdout)
-        self.assertIn("materially conflicts with its current outcome", result.stdout)
-        self.assertIn("remaining debate budget", result.stdout)
-        self.assertNotIn("and a `set_state {open}` to", result.stdout)
-
     def test_debate_contract_uses_only_the_coarse_commit_interface(self):
         result = subprocess.run([str(READER), "debate"], capture_output=True, text=True)
 
@@ -72,24 +60,6 @@ class ProtocolPhasesTest(unittest.TestCase):
         post_decision = result.stdout.partition(decision_command)[2]
         self.assertNotRegex(post_decision, r'\$SC/regen_cards\b')
 
-    def test_round0_contract_retries_down_seats_and_resume_preserves_completed_seats(self):
-        round0 = subprocess.run(
-            [str(READER), "round0"], capture_output=True, text=True, check=False
-        )
-        recovery = subprocess.run(
-            [str(READER), "recovery"], capture_output=True, text=True, check=False
-        )
-
-        self.assertEqual(round0.returncode, 0, round0.stderr)
-        self.assertEqual(recovery.returncode, 0, recovery.stderr)
-        round0_text = " ".join(round0.stdout.split())
-        recovery_text = " ".join(recovery.stdout.split())
-        self.assertIn("Retry each still-down seat once", round0_text)
-        self.assertIn('prepare-round0 "$id" --retry', round0_text)
-        self.assertIn("preserves every complete Round-0 seat pass", recovery_text)
-        self.assertIn("currently available seat that remains down", recovery_text)
-        self.assertIn('prepare-round0 "$id" --resume', recovery_text)
-
     def test_referee_return_contract_distinguishes_review_and_write_failures(self):
         referee = REFEREE.read_text(encoding="utf-8")
         bootstrap = BOOTSTRAP.read_text(encoding="utf-8")
@@ -98,33 +68,6 @@ class ProtocolPhasesTest(unittest.TestCase):
         self.assertIn("PANEL_REVIEW_FAILED id=<id>", bootstrap)
         self.assertNotIn("PANEL_VERDICT_WRITE_FAILED", referee)
         self.assertNotIn("PANEL_REVIEW_FAILED", referee)
-        self.assertIn("preloaded skill's fixed return contract", referee)
-
-    def test_verdict_contract_reports_round0_retry_results_from_coarse_input(self):
-        result = subprocess.run(
-            [str(READER), "verdict"], capture_output=True, text=True, check=False
-        )
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        text = " ".join(result.stdout.split())
-        self.assertIn("Round-0 attempt history plus final seat statuses", text)
-        self.assertIn("report every retry and final down-seat result in Process notes", text)
-
-    def test_referee_waits_for_parallel_foreground_agents_without_polling(self):
-        bootstrap = BOOTSTRAP.read_text(encoding="utf-8")
-        common = subprocess.run(
-            [str(READER), "common"], capture_output=True, text=True, check=False
-        )
-
-        self.assertEqual(common.returncode, 0, common.stderr)
-        for contract in (bootstrap, common.stdout):
-            with self.subTest(contract="bootstrap" if contract == bootstrap else "common"):
-                normalized = " ".join(contract.split())
-                self.assertIn("in one assistant response", normalized)
-                self.assertIn("run_in_background: false", normalized)
-                self.assertIn("resumes only after every Agent returns", normalized)
-                self.assertIn("Do not poll or narrate between dispatch and that combined return", normalized)
-                self.assertNotIn("PANEL_REVIEW_WAITING", normalized)
 
 
 if __name__ == "__main__":

@@ -12,10 +12,6 @@ import tempfile
 from seat_contract import PHASES, get_rules, render_contract, response_problem
 
 
-def normalized(text):
-    return re.sub(r"\s+", " ", text).strip()
-
-
 def fail(errors, invariant, location, detail):
     errors.append(f"{invariant}: {location}: {detail}")
 
@@ -43,6 +39,33 @@ def read_protocol_phase(root, phase):
         detail = result.stderr.strip() or f"exit {result.returncode}"
         raise RuntimeError(f"cannot render protocol phase {phase}: {detail}")
     return result.stdout
+
+
+def fenced_blocks(text, language):
+    return re.findall(
+        rf"(?ms)^[ \t]*```{re.escape(language)}[ \t]*\n(.*?)^[ \t]*```[ \t]*$",
+        text,
+    )
+
+
+def instruction_code(text):
+    pattern = re.compile(
+        r"^[ \t]*```bash[ \t]*\n(?P<fenced>.*?)^[ \t]*```[ \t]*$"
+        r"|(?<!`)`(?P<inline>[^`\n]+)`(?!`)",
+        re.MULTILINE | re.DOTALL,
+    )
+    return [match.group("fenced") or match.group("inline") for match in pattern.finditer(text)]
+
+
+def redefines_seat_blocks(text, include_inline_tokens=False):
+    block_names = r"(?:findings|stances|new_findings)"
+    return bool(
+        re.search(rf"(?m)^[ \t]*```{block_names}[ \t\r]*$", text)
+        or (
+            include_inline_tokens
+            and re.search(rf"(?<!`)`{block_names}`(?!`)", text)
+        )
+    )
 
 
 def check_merge_payload_contract(errors, root):
@@ -108,24 +131,6 @@ def check_repo_guard_contract(errors, root):
         if marker not in script:
             fail(errors, "repo-guard-index-contract", "scripts/repo_guard", f"missing {invariant}")
 
-    readme = read(root, "README.md")
-    row = next((line for line in readme.splitlines() if line.startswith("| `repo_guard` |")), "")
-    if (
-        "index's path/mode/object/stage entries" not in row
-        or "fails closed" not in row
-        or "including merge commits" not in row
-        or "stash-create structure" not in row
-    ):
-        fail(errors, "repo-guard-index-contract", "README.md", "ownership row omits index or baseline behavior")
-
-    protocol = read(root, "skills/panel-review-for-agent/references/protocol.md")
-    if (
-        "clean baselines (including merges) use their own tree" not in protocol
-        or "validated second parent's tree" not in protocol
-        or "ambiguous candidates fail closed" not in protocol
-    ):
-        fail(errors, "repo-guard-index-contract", "protocol.md", "legacy index recovery behavior is missing")
-
 
 def check_card_cache_contract(errors, root):
     """Keep projected cards disposable and remove stale files before rendering."""
@@ -144,8 +149,9 @@ def check_card_cache_contract(errors, root):
             "stale cards must be removed before current cards are rendered",
         )
 
+
 def check_retired_script_surface(errors, root):
-    """Keep removed command paths and the installer warning policy out of the active interface."""
+    """Keep retired verbs out of the public CLI and model-facing command inventory."""
     command_lists = {}
     for relative, retired in (
         ("scripts/index", {"bump", "state", "flag"}),
@@ -167,7 +173,6 @@ def check_retired_script_surface(errors, root):
             fail(errors, "retired-script-surface", relative, "help does not expose its command list")
             continue
         exposed = set(match.group(1).split("|"))
-        command_lists[relative.rsplit("/", 1)[-1]] = exposed
         remaining = exposed & retired
         if remaining:
             fail(
@@ -176,6 +181,12 @@ def check_retired_script_surface(errors, root):
                 relative,
                 f"help still exposes retired command(s): {', '.join(sorted(remaining))}",
             )
+
+        # These verbs remain script internals for round's transaction. Listing them in model-facing
+        # protocol instructions makes it easy to bypass that owner even though the CLI still has them.
+        name = relative.rsplit("/", 1)[-1]
+        internal = {"index": {"commit-sweep"}, "sweep": {"commit"}}.get(name, set())
+        command_lists[name] = exposed - internal
 
     protocol = read(root, "skills/panel-review-for-agent/references/protocol.md")
     for name, exposed in command_lists.items():
@@ -195,19 +206,6 @@ def check_retired_script_surface(errors, root):
     installer = read(root, "install.sh")
     if "for old_skill in" in installer or "for old_agent in" in installer:
         fail(errors, "retired-script-surface", "install.sh", "still removes the obsolete loose layout")
-    if "will shadow the plugin" not in installer.lower():
-        fail(errors, "retired-script-surface", "install.sh", "does not warn about shadowing agents")
-
-    for relative in ("README.md", ".claude/rules/scripts.md", "skills/panel-review-for-agent/references/protocol.md"):
-        text = read(root, relative)
-        writer_lines = [line for line in text.splitlines() if "write_card" in line]
-        if not any("origin" in line.lower() for line in writer_lines):
-            fail(
-                errors,
-                "origin-writer-purpose",
-                relative,
-                "does not identify write_card as the atomic writer for origin records",
-            )
 
 
 def check_rendered_contracts(errors):
@@ -228,15 +226,6 @@ def check_rendered_contracts(errors):
                     "agy-prompt-prefix",
                     label,
                     "rendered seat contract starts with a slash command",
-                )
-            if f"configured panel has {panel_size} reviewer seats, including you" not in rendered:
-                fail(errors, "configured-panel-wording", label, "panel size is absent or incorrect")
-            if "any field or evidence point the parser would discard" not in rendered:
-                fail(
-                    errors,
-                    "pre-emit-loss-diagnostics",
-                    label,
-                    "the seat instructions do not explain that the validator reports dropped fields and points",
                 )
             problem = response_problem(rendered, phase)
             if problem is not None:
@@ -277,6 +266,10 @@ def check_tree(errors, root):
         "round0": read(root, "prompts/blind_pass.tmpl"),
         "debate": read(root, "prompts/debate.tmpl"),
     }
+    required_sentinels = {
+        "round0": ("SCOPE", "WORKDIR", "SCRATCH", "DIFFINFO", "INSTRUCTIONS", "TILTH"),
+        "debate": ("WORKDIR", "SCRATCH", "CARDS", "INSTRUCTIONS", "TILTH"),
+    }
     for phase, template in templates.items():
         if template.count("{{SEAT_CONTRACT}}") != 1:
             fail(errors, "seat-contract-owner", f"prompts/{phase}", "must contain one SEAT_CONTRACT sentinel")
@@ -288,34 +281,21 @@ def check_tree(errors, root):
                 f"prompts/{phase}",
                 "first line must be the SEAT_CONTRACT sentinel",
             )
-        if re.search(r"(?m)^```(findings|stances|new_findings)[ \t\r]*$", template):
+        if redefines_seat_blocks(template):
             fail(errors, "seat-contract-owner", f"prompts/{phase}", "template restates a seat block")
         if template.count("{{PROFILEINFO}}") != 1:
             fail(errors, "review-profile-owner", f"prompts/{phase}", "must contain one PROFILEINFO sentinel")
-
-    anchor_contracts = {
-        "round0": (
-            "Every file of the code under review resolves under this root.",
-            "The canonical diff file and saved review profile are outside this root, each identified below by its full absolute path.",
-            "Your scratch directory is also outside this root, identified below by its full absolute path.",
-            "Use those paths exactly as written; do not re-root them.",
-        ),
-        "debate": (
-            "Every file of the code under review resolves under this root, and so does every card file",
-            "The saved review profile and your scratch directory are outside this root,",
-            "each identified below by its full absolute path.",
-            "Use those paths exactly as written; do not re-root them.",
-        ),
-    }
-    for phase, required_fragments in anchor_contracts.items():
-        template = normalized(templates[phase])
-        if any(fragment not in template for fragment in required_fragments):
-            fail(
-                errors,
-                "absolute-review-root",
-                f"prompts/{phase}",
-                "must distinguish paths under the review root from external absolute input paths",
-            )
+        for sentinel in required_sentinels[phase]:
+            placeholder = f"{{{{{sentinel}}}}}"
+            if template.count(placeholder) != 1:
+                fail(
+                    errors,
+                    "prompt-template-sentinel",
+                    f"prompts/{phase}",
+                    f"must contain one {placeholder} sentinel",
+                )
+    if "{{DIFF}}" in templates["round0"]:
+        fail(errors, "prompt-template-sentinel", "prompts/blind_pass.tmpl", "must reference the external diff")
 
     owner_map = read(root, "CONTRACTS.md")
     for owner in (
@@ -326,6 +306,7 @@ def check_tree(errors, root):
         "skills/panel-review-for-agent/references/protocol.md",
         "agents/panel-review-cli-barrier.md",
         "scripts/write_verdict_artifact",
+        "scripts/write_card",
         "skills/panel-review-for-agent/SKILL.md",
         "hooks/enforce_agent_status_stub",
     ):
@@ -340,335 +321,125 @@ def check_tree(errors, root):
     bootstrap = read(root, "skills/panel-review-for-agent/SKILL.md")
     agent_status_hook = read(root, "hooks/enforce_agent_status_stub")
     hook_config = json.loads(read(root, "hooks/hooks.json"))
-    status = read(root, "skills/status/SKILL.md")
+    round_script = read(root, "scripts/round")
     commands = {
         name: read(root, f"skills/{name}/SKILL.md")
         for name in ("start", "resume", "continue")
     }
-    readme = read(root, "README.md")
-    settlement_limit = (
-        "Settlement uses only stances from seats engaged in the current round. It does not guarantee "
-        "correctness, and a seat's earlier dissent does not block later settlement when that seat is absent."
-    )
-    for location, text in (("README.md", readme), ("protocol.md", protocol)):
-        if settlement_limit not in normalized(text):
-            fail(
-                errors,
-                "round-consensus-limit",
-                location,
-                "does not state the current-round consensus and correctness limit",
-            )
-    if "agy expands leading slash commands in print mode" not in readme.lower():
-        fail(
-            errors,
-            "agy-slash-command-policy",
-            "README.md",
-            "does not state that print-mode slash-command expansion stays enabled",
-        )
-    executable_text = "\n".join([*templates.values(), protocol, referee, bootstrap])
-    round0 = normalized(read_protocol_phase(root, "round0"))
-    recovery = normalized(read_protocol_phase(root, "recovery"))
     debate = read_protocol_phase(root, "debate")
-    verdict = normalized(read_protocol_phase(root, "verdict"))
 
-    for location, text, required in (
-        ("rendered:round0", round0, "Retry each still-down seat once"),
-        ("rendered:round0", round0, 'prepare-round0 "$id" --retry'),
-        ("rendered:round0", round0, "exact saved blind prompt"),
-        ("rendered:recovery", recovery, "preserves every complete Round-0 seat pass"),
-        ("rendered:recovery", recovery, "currently available seat that remains down"),
-        ("rendered:recovery", recovery, 'prepare-round0 "$id" --resume'),
-        ("rendered:verdict", verdict, "Round-0 attempt history plus final seat statuses"),
-    ):
-        if required not in text:
+    for marker in ('panel_atomic_write(str(directory / "diff_info.txt")', '"DIFFINFO": directory / "diff_info.txt"'):
+        if marker not in round_script:
             fail(
                 errors,
-                "round0-retry-contract",
-                location,
-                f"missing `{required}` behavior",
+                "diff-reference-assembly",
+                "scripts/round",
+                f"does not create and pass the external diff reference ({marker})",
             )
 
-    for location, text, required in (
-        ("rendered:round0", round0, "non-independent when it copies another seat's distinctive wording"),
-        ("rendered:round0", round0, "shared conclusion, location, or conventional phrase alone is not copying"),
-        ("rendered:round0", round0, "remove the other co-raiser(s) from `raised_by`"),
-        ("rendered:round0", round0, "origins/independence.round0.txt"),
-        ("rendered:round0", round0, "filtered Round-0 raiser list for each issue in `/tmp/$id/origins/round0.origins.txt`"),
-        ("rendered:debate", normalized(debate), "same-pass raisers and original finding text in `/tmp/$id/origins/epoch-$epoch.round-$round.origins.txt`"),
-        ("rendered:verdict", verdict, "report each dropped co-raiser"),
-        ("rendered:verdict", verdict, "as a blindness incident"),
-        ("rendered:verdict", verdict, "origin record from each issue's birth pass for its \"flagged by\" list"),
-        ("rendered:verdict", verdict, "for a Round-0-born issue, use the post-drop raiser list in `/tmp/$id/origins/round0.origins.txt` for both that list and the independent Round-0 support count"),
-        ("rendered:verdict", verdict, "for an issue born in debate, use its `epoch-<epoch>.round-<N>.origins.txt` record for \"flagged by\" and report independent Round-0 support as `0`"),
-        ("rendered:verdict", verdict, "never count dropped co-raisers or use cumulative `evaluated_by` for the Round-0 support count"),
-        ("README.md", normalized(readme), "a copied or near-verbatim finding counts once"),
-        ("README.md", normalized(readme), "the verdict's \"flagged by\" list uses each issue's birth-pass origins"),
-        ("README.md", normalized(readme), "debate-born issues have zero independent Round-0 support"),
+    protocol_commands = "\n".join(instruction_code(protocol))
+    for pattern, command in (
+        (r'\$SC/merge_payload\b', "merge_payload"),
+        (r'\$SC/index"?[ \t]+commit-sweep\b', "index commit-sweep"),
+        (r'\$SC/sweep"?[ \t]+commit\b', "sweep commit"),
+        (r'\$SC/decide_(?:degraded_)?round\b', "direct decision helper"),
     ):
-        if required.lower() not in text.lower():
+        if re.search(pattern, protocol_commands):
             fail(
                 errors,
-                "round0-independence-contract",
-                location,
-                f"missing `{required}` behavior",
+                "model-instruction-transaction-owner",
+                "protocol.md",
+                f"direct command example exposes internal {command}",
             )
 
-    independence_notice = "A copied Round-0 finding counts once. The referee records any dropped co-raiser"
-    for location, text in (
-        ("prompts/blind_pass.tmpl", templates["round0"]),
-        ("prompts/debate.tmpl", templates["debate"]),
-        ("agents/panel-review-claude-seat.md", claude_seat),
+    round0 = read_protocol_phase(root, "round0")
+    recovery = read_protocol_phase(root, "recovery")
+    for phase, instructions, attempt in (
+        ("round0", round0, "--retry"),
+        ("recovery", recovery, "--resume"),
     ):
-        if independence_notice not in text:
+        commands_in_phase = "\n".join(instruction_code(instructions))
+        if not re.search(
+            rf'"\$SC/round"\s+prepare-round0\s+"\$id"\s+{re.escape(attempt)}(?:\s|$)',
+            commands_in_phase,
+        ):
             fail(
                 errors,
-                "round0-independence-contract",
-                location,
-                "is missing the copied-finding consequence",
+                "round0-prepare-command-shape",
+                f"rendered:{phase}",
+                f"must invoke prepare-round0 with {attempt}",
             )
-
-    for location, text, required in (
-        ("README.md", normalized(readme), "retry each non-complete batch once"),
-        ("rendered:debate", normalized(debate), "Retry every non-complete batch once"),
-    ):
-        if required.lower() not in text.lower():
-            fail(
-                errors,
-                "debate-retry-contract",
-                location,
-                f"missing `{required}` behavior",
-            )
-
-    if "if it finds index.phase=round0 load round0 too" not in normalized(bootstrap):
-        fail(
-            errors,
-            "round0-retry-contract",
-            "skills/panel-review-for-agent/SKILL.md",
-            "resume bootstrap does not load the Round-0 phase for Round-0 recovery",
-        )
 
     for name, command in commands.items():
         dispatches = [
             block
             for block in re.findall(r"(?ms)^```[^\n]*\n(.*?)^```[ \t]*$", command)
-            if "subagent_type: panel-review:panel-review-referee" in block
+            if re.search(r"(?m)^subagent_type:", block)
         ]
-        if not dispatches or any("run_in_background: false" not in block for block in dispatches):
-            fail(
-                errors,
-                "outer-referee-agent-contract",
-                f"skills/{name}/SKILL.md",
-                "every referee Agent dispatch must set run_in_background: false",
-            )
-        command_text = normalized(command)
-        if "background helper Agent" in command_text:
-            fail(
-                errors,
-                "outer-referee-agent-contract",
-                f"skills/{name}/SKILL.md",
-                "uses the retired background-helper description",
-            )
-        for required in (
-            "Concurrent subagent limit reached",
-            "refuses to start this Agent dispatch",
-            "do not perform the referee's work",
-            "or retry the dispatch",
-            "Leave the run intact",
-            "/clear",
-            "panel-review:resume",
+        if not dispatches or any(
+            "subagent_type: panel-review:panel-review-referee" not in block
+            or "run_in_background: false" not in block
+            for block in dispatches
         ):
-            if required not in command_text:
-                fail(
-                    errors,
-                    "agent-spawn-budget",
-                    f"skills/{name}/SKILL.md",
-                    f"missing `{required}` handling",
-                )
-        delivery_instruction = (
-            "continue to Step 5"
-            if name == "start"
-            else "continue to `start`'s artifact-delivery flow"
-        )
-        if delivery_instruction not in command_text:
             fail(
                 errors,
-                "agent-spawn-budget",
+                "outer-referee-agent-contract",
                 f"skills/{name}/SKILL.md",
-                f"does not continue to artifact validation after a refused dispatch",
+                "every Agent dispatch must target the referee and set run_in_background: false",
+            )
+        if not re.search(r'\$SC/read_verdict_artifact["`]?[ \t\n]+--delivery\b', command):
+            fail(
+                errors,
+                "public-artifact-delivery",
+                f"skills/{name}/SKILL.md",
+                "does not validate delivery through read_verdict_artifact --delivery",
             )
 
-    if "Step 4 form" not in commands["start"].partition("**Await its single return")[2]:
+    for field in (
+        "subagent_type: panel-review:panel-review-claude-seat",
+        "subagent_type: panel-review:panel-review-cli-barrier",
+        "run_in_background: false",
+    ):
+        if field not in protocol:
+            fail(
+                errors,
+                "inner-seat-agent-dispatch",
+                "protocol.md",
+                f"is missing Agent dispatch field `{field}`",
+            )
+
+    frontmatter = re.match(r"(?s)^---\s*\n(.*?)\n---(?:\s|$)", claude_seat)
+    tools_line = re.search(r"(?m)^tools:\s*(.*)$", frontmatter.group(1)) if frontmatter else None
+    if (
+        tools_line is None
+        or "mcp__tilth__tilth_search" not in tools_line.group(1)
+        or "mcp__tilth__tilth_write" in tools_line.group(1)
+    ):
         fail(
             errors,
-            "outer-referee-agent-contract",
-            "skills/start/SKILL.md",
-            "low-severity re-dispatch does not reuse the foreground Step 4 form",
+            "claude-seat-tool-surface",
+            "agents/panel-review-claude-seat.md",
+            "tool frontmatter must expose read-only tilth search without a write tool",
         )
 
-    start_delivery = normalized(commands["start"].partition("## Step 5")[2])
-    for required in (
-        "whether it returns, fails, or is refused",
-        "Do not use the return status to decide whether an artifact exists",
-        "Check the artifact for `PANEL_REVIEW_FAILED id=<ID>` and Agent-tool failures too",
-        "After every referee Agent dispatch",
-        "/clear",
-        "panel-review:resume",
-    ):
-        if required not in start_delivery:
+    debate_shell = "\n".join(instruction_code(debate))
+    for operation in ("prepare-debate", "collect-debate"):
+        if not re.search(rf'"\$SC/round"\s+{operation}\b', debate_shell):
             fail(
                 errors,
-                "agent-spawn-budget",
-                "skills/start/SKILL.md",
-                f"shared delivery flow is missing `{required}` propagation",
+                "normal-debate-transaction-owner",
+                "rendered:debate",
+                f"common single-batch path omits round {operation}",
             )
-
-    bootstrap_text = normalized(bootstrap)
-    bootstrap_lower = bootstrap_text.lower()
-    for required in (
-        "concurrent subagent limit reached",
-        "another orchestration reason",
-        "do not perform the missing agent's work",
-        "do not retry either agent call",
-        "do not treat this as an ordinary down-seat pass",
-        "leave the current checkpoint intact",
-        "panel_review_failed",
-    ):
-        if required not in bootstrap_lower:
-            fail(
-                errors,
-                "agent-spawn-budget",
-                "skills/panel-review-for-agent/SKILL.md",
-                f"missing `{required}` handling",
-            )
-
-    for relative, text in (
-        ("README.md", readme),
-        ("skills/start/SKILL.md", commands["start"]),
-        ("skills/resume/SKILL.md", commands["resume"]),
-        ("skills/continue/SKILL.md", commands["continue"]),
-    ):
-        if re.search(r"(?i)subagent spawn limit reached|session spawn limit", text):
-            fail(
-                errors,
-                "agent-spawn-budget",
-                relative,
-                "retains the removed per-session spawn-limit guidance",
-            )
-
-    for required in (
-        "after every referee agent call",
-        "including a failed call",
-        "panel_review_failed",
-        "saved artifact",
-    ):
-        if required not in normalized(readme).lower():
-            fail(
-                errors,
-                "artifact-after-agent-failure",
-                "README.md",
-                f"missing `{required}` recovery guidance",
-            )
-
-    for required in (
-        "after every agent call",
-        "including a failed tool call",
-        "fixed failure return",
-        "saved artifact",
-    ):
-        if required not in verdict.lower():
-            fail(
-                errors,
-                "artifact-after-agent-failure",
-                "rendered:verdict",
-                f"missing `{required}` recovery guidance",
-            )
-
-    barrier_text = normalized(barrier)
-    barrier_lower = barrier_text.lower()
-    for required in (
-        "2 minutes by default",
-        "10-minute maximum",
-        "moves the call to the background instead of stopping it",
-        "explicitly backgrounds `await_seats`",
-        "timeout` parameter to `2700000` ms (45 minutes)",
-        "owns the launch and completion-sentinel lifecycle",
-        "before the bash tool can auto-background the wait",
-    ):
-        if required not in barrier_lower:
-            fail(
-                errors,
-                "bash-timeout-contract",
-                "agents/panel-review-cli-barrier.md",
-                f"missing `{required}` behavior",
-            )
-    for stale in ("killed by the harness", "would be killed", "silently truncated"):
-        if stale in barrier_lower:
-            fail(
-                errors,
-                "bash-timeout-contract",
-                "agents/panel-review-cli-barrier.md",
-                f"retains stale `{stale}` wording",
-            )
-
-    run_seat_match = re.search(r"(?m)^\| `run_seat` \|.*$", readme)
-    if run_seat_match is None:
-        fail(errors, "bash-timeout-contract", "README.md", "missing run_seat ownership row")
-    else:
-        run_seat_row = run_seat_match.group(0).lower()
-        if "panel-review-cli-barrier" not in run_seat_row:
-            fail(errors, "bash-timeout-contract", "README.md", "run_seat row does not point to the barrier")
-        for stale in ("killed", "empty raw"):
-            if stale in run_seat_row:
-                fail(
-                    errors,
-                    "bash-timeout-contract",
-                    "README.md",
-                    f"run_seat row retains stale `{stale}` wording",
-                )
-
-    readme_lower = normalized(readme).lower()
-    if "scope_diagnostics" not in readme:
-        fail(errors, "divergence-diagnostics", "README.md", "does not name the diagnostics owner")
-    divergence_docs = {
-        "README.md": readme_lower,
-        "skills/panel-review-for-agent/references/protocol.md": normalized(protocol).lower(),
-    }
-    for location, text in divergence_docs.items():
-        for required in (".git/info/exclude", "saved diff hash", "tracked `.gitignore`"):
-            if required not in text:
-                fail(errors, "divergence-recovery", location, f"is missing `{required}` guidance")
-    if "only way forward" in readme_lower:
-        fail(errors, "divergence-recovery", "README.md", "still presents discard as the only recovery")
-    for required in (
-        "concurrent subagent limit reached",
-        "not a down-seat pass",
-        "including a failed call or a `panel_review_failed` return",
-        "valid report even if the final return failed",
-        "/clear",
-        "panel-review:resume",
-    ):
-        if required not in readme_lower:
-            fail(
-                errors,
-                "agent-spawn-budget",
-                "README.md",
-                f"public recovery guidance is missing `{required}`",
-            )
-
-    if "refuses a dispatch before this protocol starts" not in verdict.lower():
-        fail(
-            errors,
-            "artifact-after-agent-failure",
-            "rendered:verdict",
-            "does not distinguish a refused dispatch from a failed final response",
-        )
 
     forbidden_debate_commands = (
         (r'\$SC/merge_payload\b', "merge_payload"),
         (r'\$SC/sweep"?[ \t]+commit\b', "sweep commit"),
+        (r'\$SC/index"?[ \t]+commit-sweep\b', "index commit-sweep"),
+        (r'\$SC/decide_(?:degraded_)?round\b', "direct decision helper"),
     )
     for pattern, command in forbidden_debate_commands:
-        if re.search(pattern, debate):
+        if re.search(pattern, debate_shell):
             fail(
                 errors,
                 "normal-debate-transaction-owner",
@@ -676,14 +447,14 @@ def check_tree(errors, root):
                 f"directly invokes {command} instead of round commit",
             )
     decision_command = '"$SC/round" commit "$id"'
-    if decision_command not in debate:
+    if decision_command not in debate_shell:
         fail(
             errors,
             "normal-debate-transaction-owner",
             "rendered:debate",
             "does not invoke round commit",
         )
-    post_decision = debate.partition(decision_command)[2]
+    post_decision = debate_shell.partition(decision_command)[2]
     if re.search(r'\$SC/regen_cards\b', post_decision):
         fail(
             errors,
@@ -692,29 +463,18 @@ def check_tree(errors, root):
             "directly invokes post-decision regen_cards instead of round commit",
         )
 
-    if re.search(r"(?i)`(findings|stances|new_findings)` block|required-emptyable", claude_seat):
-        fail(errors, "seat-contract-owner", "agents/panel-review-claude-seat.md", "restates phase block rules")
-    if "`stances`" in claude_delivery or "`new_findings`" in claude_delivery:
-        fail(errors, "seat-contract-owner", "prompts/claude_delivery.tmpl", "restates phase block names")
-
     for relative, text in (
-        ("protocol.md", protocol),
-        ("panel-review-cli-barrier.md", barrier),
+        ("prompts/claude_delivery.tmpl", claude_delivery),
+        ("agents/panel-review-claude-seat.md", claude_seat),
     ):
-        for sentence in re.split(r"[.\n]", normalized(text)):
-            lowered = sentence.lower()
-            if "watch" in lowered and "--done" in lowered and "sentinel" not in lowered:
-                fail(errors, "barrier-completion-signal", relative, "treats --done as the wait signal")
+        if redefines_seat_blocks(text, include_inline_tokens=True):
+            fail(
+                errors,
+                "seat-contract-owner",
+                relative,
+                "Claude-specific instructions restate a seat block owned by seat_contract.py",
+            )
 
-    if re.search(r"(?i)(scratch )?path is \**relative\**|relative (scratch|seat) path", normalized(protocol)):
-        fail(errors, "absolute-seat-paths", "protocol.md", "describes a seat path as relative")
-
-    broad_failure = re.compile(
-        r"(?is)(PANEL_VERDICT_WRITE_FAILED.{0,100}(any|general|review) failure|"
-        r"(any|general|review) failure.{0,100}PANEL_VERDICT_WRITE_FAILED)"
-    )
-    if broad_failure.search(referee + "\n" + bootstrap + "\n" + protocol):
-        fail(errors, "referee-return-status", "referee contracts", "write failure stub is used for a review failure")
     for status_name in ("PANEL_VERDICT_READY", "PANEL_VERDICT_WRITE_FAILED", "PANEL_REVIEW_FAILED"):
         if status_name not in bootstrap:
             fail(errors, "referee-return-status", "bootstrap skill", f"missing {status_name}")
@@ -767,39 +527,35 @@ def check_tree(errors, root):
                 "Agent status hook",
                 f"missing bounded failure behavior `{required}`",
             )
-    bounded_handback = (
-        "The hook denies at most one invalid hand-back per subagent; if retry state is unavailable "
-        "or a later hand-back is still invalid, it replaces the message with a fixed failure stub "
-        "and allows it."
-    )
-    missing_run_id_fallback = (
-        "If the referee task ID and an exact stub ID are both unavailable, the hook uses"
-    )
-    pending_denial_stop_check = (
-        "If no accepted auto-mode hand-back is recorded, SubagentStop checks the final message itself."
-    )
-    for relative, text in (("README.md", readme), ("protocol.md", protocol)):
-        text = normalized(text.replace("`", ""))
-        for required in (bounded_handback, missing_run_id_fallback, pending_denial_stop_check):
-            if required not in text:
-                fail(
-                    errors,
-                    "auto-handback-retry-bound",
-                    relative,
-                    f"missing `{required}`",
-                )
-
-    if re.search(r"(?i)two other AIs", executable_text):
-        fail(errors, "configured-panel-wording", "seat-facing instructions", "hard-codes a three-seat panel")
-
-    if re.search(r"(?i)peer seat \(Codex or Gemini\) down", normalized(protocol)):
-        fail(errors, "all-seat-health-reporting", "protocol.md", "excludes Claude from down-seat notes")
-
-    if re.search(r"(?i)(verdict.{0,80})?shown in the transcript", normalized(status)):
-        fail(errors, "artifact-only-status-wording", "skills/status/SKILL.md", "claims the verdict body entered the transcript")
-
-    if "support_with_revision" in executable_text:
-        fail(errors, "canonical-stance-values", "executable instructions", "contains retired stance support_with_revision")
+    barrier_shell = "\n".join(fenced_blocks(barrier, "bash"))
+    for required in (
+        'timeout 100 bash -c',
+        'until [ -f "<sentinel>"',
+        'rc=$?; printf',
+        'await_seats_rc=$(cat "<sentinel>")',
+        'pkill -f "$(dirname "<sentinel>")/"',
+    ):
+        if required not in barrier_shell:
+            fail(
+                errors,
+                "cli-barrier-command-shape",
+                "agents/panel-review-cli-barrier.md",
+                f"missing shell operation `{required}`",
+            )
+    if not re.search(r"\brun_in_background:\s*true\b", barrier):
+        fail(
+            errors,
+            "cli-barrier-command-shape",
+            "agents/panel-review-cli-barrier.md",
+            "await_seats wrapper is not issued as a background call",
+        )
+    if re.search(r"(?m)^\s*timeout\s+(?:540|570000)\s+bash\b", barrier_shell):
+        fail(
+            errors,
+            "cli-barrier-command-shape",
+            "agents/panel-review-cli-barrier.md",
+            "contains an overlong foreground Bash wait",
+        )
 
     # agy binds --model by DISPLAY LABEL ("Gemini 3.7 Flash (High)"), and a slug is not a stable
     # identifier across agy versions: on 1.1.10 the listed slug `gemini-3.1-pro-high` bound

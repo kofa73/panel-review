@@ -88,12 +88,6 @@ byte-exact.
   own `.codex/config.toml`. `run_agy` likewise records the label agy logged as bound into
   `AGY_SEAT_MODEL_FILE` after a successful attempt (issue 63; best effort, nothing depends on it),
   and `preflight` reports a `run_agy` pin that `agy models` no longer lists.
-- `check_contracts` — checks that each generated Gemini prompt starts with prose while agy's
-  print-mode slash-command expansion stays enabled, and that `repo_guard` snapshots, reports, and
-  restores logical index entries while refusing an invalid dirty-tree baseline; it also checks the
-  legacy clean-merge versus stash-index recovery contract. Both templates start with the
-  `SEAT_CONTRACT` sentinel, and both rendered contracts start with prose. README records why expansion
-  stays enabled for `/boost`.
 - `repo_guard` — protects the code under review. `snapshot` records tracked worktree content (a
   `git stash create` SHA + sha256 manifest) and the index's path/mode/object/stage entries; `verify
   --restore` after each seat pass reverts and reports worktree or index drift. Guards tracked state
@@ -111,9 +105,11 @@ byte-exact.
   stance values, examples, and validators drive both rendered Round-0/debate instructions and
   runtime parsing. Use its `render` command only for exceptional manual prompt assembly; normal
   prompt preparation goes through `round`. Do not add a second prompt schema or stance enum.
-- `check_contracts` — the repository-level consistency gate for the ownership map in `CONTRACTS.md`,
-  every phase/panel rendering, runtime-valid examples, README/protocol's current-round settlement
-  limit, and narrow forbidden legacy wording checks. Failures name the invariant and location.
+- `check_contracts` — the repository-level consistency gate for `CONTRACTS.md` ownership rows, public
+  `index`/`sweep` verbs, prompt sentinels, rendered seat-contract blocks against the runtime parser,
+  referee dispatch and artifact-delivery interfaces, the normal debate transaction boundary,
+  status-stub ownership, barrier command shape, agy model-pin form, and script-owned cache/index
+  invariants. Failures name the invariant and location.
 - `check_draft` — the **seat-facing** pre-emit validator (spliced into prompts as `{{CHECK}}`; the
   referee never calls it). Wrapper over `parse_block --diagnose` and the shared seat-contract
   normalizers — don't re-implement the finding/stance checks. Reports rejected items and retained

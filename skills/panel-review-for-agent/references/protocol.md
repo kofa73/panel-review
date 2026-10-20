@@ -54,14 +54,10 @@ reference; grepping a script for its flags wastes a full source-read into your c
 "$SC/round" commit <id> [--addendum <f>]                             # decide/merge/commit/regenerate + compact states/gate; exit 3 asks for judgment addendum
 "$SC/round" verdict-input <id>                                      # compact stable manifest/panel/index/origin/guard facts for synthesis
 "$SC/birth_index" --available "<seats>" --configured "<seats>" < issues.json   # clustered Round-0 issues -> full index.json (birth state/flags/coverage)
-"$SC/index"   {get|put|issue|gate-status|delivery-status|commit-sweep|reopen} <id> ...   # ONLY writer of index.json
+"$SC/index"   {get|put|issue|gate-status|delivery-status|reopen} <id> ...   # ONLY writer of index.json
 "$SC/project_card" --id <id> --workdir <dir> < issue.json                # one issue record -> its card
 "$SC/regen_cards"  --id <id> --workdir <dir>                                # rebuild ALL cards from the index
-"$SC/index"   commit-sweep <id> <round> <epoch>  # apply a WHOLE debate round atomically (payload JSON on stdin)
-"$SC/sweep"   {begin|plan|plan-scaffold|extend-plan|ingest-batch|drop-seat|resume-plan|has|done|commit} <id> <round> ...  # checkpointed sweeps; scaffold/extend take panel seats
-"$SC/decide_round" --id <id> --round N --configured "<seats>" --engaged "<seats>" --stances <f> [--advice <f>]  # normal Transitions table -> commit-sweep payload
-"$SC/decide_degraded_round" --id <id> --round N --configured "<seats>" --engaged "<zero-or-one-seat>" --stances <f>  # terminal non-voting payload
-"$SC/merge_payload" <base.json> < addendum.json   # fold referee additions into the payload (set_state replace, revise field-merge) — never append a 2nd entry for an id
+"$SC/sweep"   {begin|plan|plan-scaffold|extend-plan|ingest-batch|drop-seat|resume-plan|has|done} <id> <round> ...  # checkpointed sweeps; scaffold/extend take panel seats
 "$SC/cleanup" --id <id> --workdir <dir>      # remove cards + /tmp state (ONLY after the verdict is produced)
 "$SC/write_card" <path> < origin-record.txt   # atomically install a referee-owned origins file
 "$SC/write_verdict_artifact" --id <id> < verdict.md   # durable /tmp/<id>.md copy; survives cleanup/discard
@@ -391,14 +387,23 @@ For `round = 1, 2, … max-rounds`, while any issue is `open`:
 **Common single-batch path — use the coarse module.** Before calling it, use the current cards to
 decide whether the set needs the exceptional pagination in steps 4–7; do not register a common plan
 and then try to replace it. Otherwise, re-run `preflight`, form this pass's configured panel from
-Claude plus the available peer seat(s), then call
-`"$SC/round" prepare-debate "$id" <configured seats...>`.
+Claude plus the available peer seat(s), then prepare the common pass:
+
+```bash
+"$SC/round" prepare-debate "$id" <configured seats...>
+```
+
 Its JSON gives the round/epoch, shared CLI prompt, optional Claude-specific prompt, and barrier paths.
 Spawn one CLI barrier per returned entry and a fresh Claude Agent only when `claude_prompt` is
 non-null; a missing entry/prompt is already checkpointed and must not be re-dispatched. Issue every
 returned Agent call together in one assistant response with `run_in_background: false`; they run
-concurrently, and the referee resumes only after every Agent returns. Then call
-`"$SC/round" collect-debate "$id" --final`; use its batch statuses and engaged list.
+concurrently, and the referee resumes only after every Agent returns. Then collect the pass:
+
+```bash
+"$SC/round" collect-debate "$id" --final
+```
+
+Use its batch statuses and engaged list.
 Load `salvage` only for a failed CLI block. After rewriting both blocks to the canonical side file,
 call `round salvage-debate`, then call `round collect-debate` again; recollection reads the completed
 checkpoint instead of the malformed original. Retry each still-non-complete batch once, and use
@@ -504,7 +509,8 @@ the common one-batch shape.
    # cli-barrier Agent — never background await_seats yourself (it would not wake you).
    printf '%s\n' "$SC/await_seats --id $id --tag new_findings --prompt /tmp/$id/debate.$round.prompt --seat codex --raw /tmp/$id/raw/round$round.codex.$batch.txt --parsed /tmp/$id/nf.$round.codex.json --status /tmp/$id/status.round$round.codex.$batch --seat gemini --raw /tmp/$id/raw/round$round.gemini.$batch.txt --parsed /tmp/$id/nf.$round.gemini.json --status /tmp/$id/status.round$round.gemini.$batch --done /tmp/$id/await.round$round.$batch.txt" > /tmp/$id/cli_barrier.round$round.$batch.sh
    ```
-   Spawn the **CLI barrier** as a `panel-review:panel-review-cli-barrier` Agent
+   Spawn the **CLI barrier** as an Agent with
+   `subagent_type: panel-review:panel-review-cli-barrier`
    (`command=/tmp/<id>/cli_barrier.round$round.$batch.sh`, `done=/tmp/<id>/await.round$round.$batch.txt`,
    `sentinel=/tmp/<id>/await.round$round.$batch.sentinel`, `workdir=<repo root>`; on its return an
    `await_seats_rc` that is nonzero or `absent` means the seats did not run this batch — treat those

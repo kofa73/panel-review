@@ -1,6 +1,7 @@
 """Black-box coverage for executable-instruction ownership checks."""
 
 from pathlib import Path
+import os
 import re
 import shutil
 import subprocess
@@ -48,33 +49,6 @@ class ContractConsistencyTest(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("card-cache-projection", result.stderr)
 
-    def test_prompt_path_anchors_distinguish_rooted_and_external_paths(self):
-        cases = [
-            (
-                "prompts/blind_pass.tmpl",
-                "saved review profile are outside this root, each identified below by its full absolute path.",
-                "saved review profile are under this root.",
-            ),
-            (
-                "prompts/debate.tmpl",
-                "The saved review profile and your scratch directory are outside this root,",
-                "The saved review profile and your scratch directory are under this root,",
-            ),
-        ]
-        for relative_path, correct, incorrect in cases:
-            with self.subTest(path=relative_path), tempfile.TemporaryDirectory() as directory:
-                root = Path(directory)
-                self.copy_contract_tree(root)
-                target = root / relative_path
-                text = target.read_text(encoding="utf-8")
-                self.assertIn(correct, text)
-                target.write_text(text.replace(correct, incorrect, 1), encoding="utf-8")
-
-                result = self.run_check(root)
-
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn("absolute-review-root", result.stderr)
-
     def test_merge_payload_validation_drift_is_reported(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -103,8 +77,13 @@ class ContractConsistencyTest(unittest.TestCase):
             ),
             (
                 "skills/panel-review-for-agent/references/protocol.md",
+                '"$SC/index"   {get|put|issue|gate-status|delivery-status|reopen}',
                 '"$SC/index"   {get|put|issue|gate-status|delivery-status|commit-sweep|reopen}',
-                '"$SC/index"   {get|put|issue|state|gate-status|delivery-status|commit-sweep|reopen}',
+            ),
+            (
+                "skills/panel-review-for-agent/references/protocol.md",
+                '"$SC/sweep"   {begin|plan|plan-scaffold|extend-plan|ingest-batch|drop-seat|resume-plan|has|done}',
+                '"$SC/sweep"   {begin|plan|plan-scaffold|extend-plan|ingest-batch|drop-seat|resume-plan|has|done|commit}',
             ),
         ]
         for relative_path, current, retired in cases:
@@ -132,25 +111,37 @@ class ContractConsistencyTest(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("retired-script-surface", result.stderr)
 
-    def test_origin_writer_purpose_is_required(self):
+    def test_installer_warns_when_a_project_agent_shadows_the_plugin(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            self.copy_contract_tree(root)
-            readme = root / "README.md"
-            text = readme.read_text(encoding="utf-8")
-            writer_line = next(line for line in text.splitlines() if "`write_card`" in line)
-            readme.write_text(text.replace(writer_line, writer_line.replace("origin", "card")), encoding="utf-8")
+            workdir = root / "project"
+            shadow = workdir / ".claude/agents/panel-review-referee.md"
+            shadow.parent.mkdir(parents=True)
+            shadow.write_text("name: panel-review-referee\n", encoding="utf-8")
+            config_dir = root / "claude-config"
+            environment = os.environ.copy()
+            environment["CLAUDE_DIR"] = str(config_dir)
 
-            result = self.run_check(root)
+            result = subprocess.run(
+                [str(ROOT / "install.sh")],
+                cwd=workdir,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
 
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("origin-writer-purpose", result.stderr)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("WARNING:", result.stdout)
+            self.assertIn(str(shadow), result.stdout)
+            self.assertTrue((config_dir / "skills/panel-review/agents/panel-review-referee.md").is_file())
 
     def copy_contract_tree(self, root):
         for name in ("agents", "skills", "prompts", "hooks"):
             shutil.copytree(ROOT / name, root / name)
         (root / "scripts").mkdir()
         shutil.copy2(ROOT / "scripts/read_protocol_phase", root / "scripts/read_protocol_phase")
+        shutil.copy2(ROOT / "scripts/round", root / "scripts/round")
         shutil.copy2(ROOT / "scripts/merge_payload", root / "scripts/merge_payload")
         shutil.copy2(ROOT / "scripts/repo_guard", root / "scripts/repo_guard")
         for name in ("index", "sweep", "panel_common.py", "seat_contract.py", "project_card", "regen_cards"):
@@ -164,140 +155,13 @@ class ContractConsistencyTest(unittest.TestCase):
         shutil.copy2(ROOT / ".claude/rules/scripts.md", rules / "scripts.md")
         shutil.copy2(ROOT / "install.sh", root / "install.sh")
 
-    def test_round_consensus_limit_is_required_in_readme_and_protocol(self):
-        for relative_path in (
-            "README.md",
-            "skills/panel-review-for-agent/references/protocol.md",
-        ):
-            with self.subTest(path=relative_path), tempfile.TemporaryDirectory() as directory:
-                root = Path(directory)
-                self.copy_contract_tree(root)
-                target = root / relative_path
-                original = target.read_text(encoding="utf-8")
-                start = original.index("Settlement uses only stances from")
-                end = original.index("that seat is absent.", start) + len("that seat is absent.")
-                revised = original[:start] + original[end:]
-                target.write_text(revised, encoding="utf-8")
-
-                result = self.run_check(root)
-
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn("round-consensus-limit", result.stderr)
-
-    def test_each_known_drift_is_reported_by_invariant_name(self):
-        cases = [
-            (
-                "barrier-completion-signal",
-                "skills/panel-review-for-agent/references/protocol.md",
-                "\nThe barrier watches --done until the seats settle.\n",
-            ),
-            (
-                "absolute-seat-paths",
-                "skills/panel-review-for-agent/references/protocol.md",
-                "\nThe scratch path is relative because every seat starts in the workdir.\n",
-            ),
-            (
-                "referee-return-status",
-                "agents/panel-review-referee.md",
-                "\nPANEL_VERDICT_WRITE_FAILED reports any review failure.\n",
-            ),
-            (
-                "configured-panel-wording",
-                "prompts/debate.tmpl",
-                "\nYou and two other AIs reviewed the same work.\n",
-            ),
-            (
-                "review-profile-owner",
-                "prompts/debate.tmpl",
-                "\n{{PROFILEINFO}}\n",
-            ),
-            (
-                "all-seat-health-reporting",
-                "skills/panel-review-for-agent/references/protocol.md",
-                "\nProcess notes name any peer seat (Codex or Gemini) down.\n",
-            ),
-            (
-                "artifact-only-status-wording",
-                "skills/status/SKILL.md",
-                "\nThe verdict was shown in the transcript.\n",
-            ),
-            (
-                "canonical-stance-values",
-                "prompts/debate.tmpl",
-                "\nThe stance may be support_with_revision.\n",
-            ),
-        ]
-
-        for invariant, relative_path, bad_text in cases:
-            with self.subTest(invariant=invariant), tempfile.TemporaryDirectory() as directory:
-                root = Path(directory)
-                self.copy_contract_tree(root)
-                target = root / relative_path
-                target.write_text(target.read_text(encoding="utf-8") + bad_text, encoding="utf-8")
-
-                result = self.run_check(root)
-
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn(invariant, result.stderr)
-
-    def test_round0_duplicate_consequence_stays_in_all_seat_instructions(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            self.copy_contract_tree(root)
-            prompt = root / "prompts/blind_pass.tmpl"
-            text = prompt.read_text(encoding="utf-8")
-            text = text.replace(
-                "A copied Round-0 finding counts once. The referee records any dropped co-raiser",
-                "A copied Round-0 finding is ignored. The referee records any dropped co-raiser",
-                1,
-            )
-            prompt.write_text(text, encoding="utf-8")
-
-            result = self.run_check(root)
-
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("round0-independence-contract", result.stderr)
-
-    def test_round0_protocol_requires_the_referee_to_drop_copied_co_raisers(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            self.copy_contract_tree(root)
-            protocol = root / "skills/panel-review-for-agent/references/protocol.md"
-            text = protocol.read_text(encoding="utf-8")
-            text = text.replace(
-                "remove the other\n   co-raiser(s) from `raised_by`",
-                "keep every co-raiser in `raised_by`",
-                1,
-            )
-            protocol.write_text(text, encoding="utf-8")
-
-            result = self.run_check(root)
-
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("round0-independence-contract", result.stderr)
-
-    def test_verdict_uses_birth_pass_origins_and_separates_round0_support(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            self.copy_contract_tree(root)
-            protocol = root / "skills/panel-review-for-agent/references/protocol.md"
-            text = protocol.read_text(encoding="utf-8")
-            text = text.replace(
-                "Use the origin record from each issue's birth pass for its \"Flagged by\" list.",
-                "Use the Round-0 origins for every issue's \"Flagged by\" list.",
-                1,
-            )
-            protocol.write_text(text, encoding="utf-8")
-
-            result = self.run_check(root)
-
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("round0-independence-contract", result.stderr)
-
     def test_direct_normal_debate_transaction_helpers_are_rejected(self):
         commands = (
             '"$SC/merge_payload" /tmp/base.json < /tmp/addendum.json',
             '"$SC/sweep" commit "$id" "$round" "$epoch" < /tmp/payload.json',
+            '"$SC/index" commit-sweep "$id" "$round" "$epoch" < /tmp/payload.json',
+            '"$SC/decide_round" --id "$id"',
+            '"$SC/decide_degraded_round" --id "$id"',
             '"$SC/regen_cards" --id "$id" --workdir "$workdir"',
         )
 
@@ -318,79 +182,285 @@ class ContractConsistencyTest(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("normal-debate-transaction-owner", result.stderr)
 
-    def test_claude_runtime_contract_drift_is_reported(self):
+    def test_inline_transaction_helper_after_round_commit_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_contract_tree(root)
+            protocol = root / "skills/panel-review-for-agent/references/protocol.md"
+            text = protocol.read_text(encoding="utf-8")
+            prefix, marker, suffix = text.rpartition("<!-- /phase:debate -->")
+            self.assertTrue(marker)
+            injected = (
+                '\n\nAfter the transaction: `"$SC/sweep" commit "$id" "$round" '
+                '"$epoch" < /tmp/payload.json`.\n\n<!-- /phase:debate -->'
+            )
+            protocol.write_text(prefix + injected + suffix, encoding="utf-8")
+
+            result = self.run_check(root)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("normal-debate-transaction-owner", result.stderr)
+
+    def test_internal_transaction_commands_stay_out_of_protocol_instructions(self):
+        commands = (
+            '"$SC/merge_payload" /tmp/base.json < /tmp/addendum.json',
+            '"$SC/index" commit-sweep "$id" "$round" "$epoch" < /tmp/payload.json',
+            '"$SC/sweep" commit "$id" "$round" "$epoch" < /tmp/payload.json',
+            '"$SC/decide_round" --id "$id"',
+        )
+        for command in commands:
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.copy_contract_tree(root)
+                protocol = root / "skills/panel-review-for-agent/references/protocol.md"
+                text = protocol.read_text(encoding="utf-8")
+                start = text.index("```bash")
+                end = text.index("```", start + 3)
+                text = text[:end] + command + "\n" + text[end:]
+                protocol.write_text(text, encoding="utf-8")
+
+                result = self.run_check(root)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("model-instruction-transaction-owner", result.stderr)
+
+    def test_round0_retry_and_recovery_resume_flags_are_command_contracts(self):
+        cases = (
+            ('prepare-round0 "$id" --retry', 'prepare-round0 "$id"'),
+            ('prepare-round0 "$id" --resume', 'prepare-round0 "$id"'),
+        )
+        for current, replacement in cases:
+            with self.subTest(attempt=current), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.copy_contract_tree(root)
+                protocol = root / "skills/panel-review-for-agent/references/protocol.md"
+                text = protocol.read_text(encoding="utf-8")
+                self.assertIn(current, text)
+                protocol.write_text(text.replace(current, replacement, 1), encoding="utf-8")
+
+                result = self.run_check(root)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("round0-prepare-command-shape", result.stderr)
+
+    def test_claude_specific_consumers_cannot_redefine_seat_blocks(self):
+        cases = (
+            ("prompts/claude_delivery.tmpl", "\nEmit only a `stances` block.\n"),
+            ("agents/panel-review-claude-seat.md", "\n```findings\n[]\n```\n"),
+        )
+        for relative_path, injected in cases:
+            with self.subTest(path=relative_path), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.copy_contract_tree(root)
+                target = root / relative_path
+                target.write_text(target.read_text(encoding="utf-8") + injected, encoding="utf-8")
+
+                result = self.run_check(root)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("seat-contract-owner", result.stderr)
+
+    def test_normal_debate_requires_round_commit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_contract_tree(root)
+            protocol = root / "skills/panel-review-for-agent/references/protocol.md"
+            text = protocol.read_text(encoding="utf-8")
+            command = '   "$SC/round" commit "$id"\n'
+            self.assertIn(command, text)
+            protocol.write_text(text.replace(command, "   true\n", 1), encoding="utf-8")
+
+            result = self.run_check(root)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("normal-debate-transaction-owner", result.stderr)
+
+    def test_common_debate_requires_coarse_round_preparation_and_collection(self):
+        for operation in ("prepare-debate", "collect-debate"):
+            with self.subTest(operation=operation), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.copy_contract_tree(root)
+                protocol = root / "skills/panel-review-for-agent/references/protocol.md"
+                text = protocol.read_text(encoding="utf-8")
+                command = f'"$SC/round" {operation} "$id"'
+                self.assertIn(command, text)
+                protocol.write_text(text.replace(command, f'"$SC/{operation}" "$id"', 1), encoding="utf-8")
+
+                result = self.run_check(root)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("normal-debate-transaction-owner", result.stderr)
+
+    def test_command_dispatch_must_remain_a_foreground_referee_call(self):
+        mutations = (
+            (
+                "subagent_type: panel-review:panel-review-referee",
+                "subagent_type: panel-review:panel-review-cli-barrier",
+            ),
+            ("run_in_background: false", "run_in_background: true"),
+        )
+        for original, replacement in mutations:
+            with self.subTest(field=original), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.copy_contract_tree(root)
+                skill = root / "skills/start/SKILL.md"
+                text = skill.read_text(encoding="utf-8")
+                self.assertIn(original, text)
+                skill.write_text(text.replace(original, replacement, 1), encoding="utf-8")
+
+                result = self.run_check(root)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("outer-referee-agent-contract", result.stderr)
+
+    def test_protocol_seat_dispatch_fields_are_preserved(self):
+        mutations = (
+            (
+                "subagent_type: panel-review:panel-review-claude-seat",
+                "subagent_type: panel-review:wrong-seat",
+            ),
+            ("run_in_background: false", "run_in_background: true"),
+        )
+        for original, replacement in mutations:
+            with self.subTest(field=original), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.copy_contract_tree(root)
+                protocol = root / "skills/panel-review-for-agent/references/protocol.md"
+                text = protocol.read_text(encoding="utf-8")
+                self.assertIn(original, text)
+                protocol.write_text(text.replace(original, replacement), encoding="utf-8")
+
+                result = self.run_check(root)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("inner-seat-agent-dispatch", result.stderr)
+
+    def test_round_keeps_the_diff_as_an_external_prompt_reference(self):
+        for marker in (
+            'panel_atomic_write(str(directory / "diff_info.txt")',
+            '"DIFFINFO": directory / "diff_info.txt"',
+        ):
+            with self.subTest(marker=marker), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.copy_contract_tree(root)
+                round_script = root / "scripts/round"
+                text = round_script.read_text(encoding="utf-8")
+                self.assertIn(marker, text)
+                round_script.write_text(text.replace(marker, "missing_reference", 1), encoding="utf-8")
+
+                result = self.run_check(root)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("diff-reference-assembly", result.stderr)
+
+    def test_explanatory_prose_can_be_reworded(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_contract_tree(root)
+            readme = root / "README.md"
+            text = readme.read_text(encoding="utf-8")
+            start = text.index("Settlement uses only stances from")
+            end = text.index("that seat is absent.", start) + len("that seat is absent.")
+            readme.write_text(
+                text[:start] + "Consensus uses the reviewers available for this pass." + text[end:],
+                encoding="utf-8",
+            )
+
+            result = self.run_check(root)
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_template_sentinels_and_block_ownership_are_structural(self):
         cases = (
             (
-                "outer-referee-agent-contract",
-                "skills/start/SKILL.md",
-                "run_in_background: false",
-                "run_in_background: true",
+                "prompts/debate.tmpl",
+                "{{SEAT_CONTRACT}}",
+                "seat-contract-owner",
             ),
             (
-                "agent-spawn-budget",
-                "skills/panel-review-for-agent/SKILL.md",
-                "Concurrent subagent limit reached",
-                "Concurrent agent limit reached",
-            ),
-            (
-                "agent-spawn-budget",
-                "README.md",
-                "including a failed call or a `PANEL_REVIEW_FAILED` return",
-                "including a successful call or a `PANEL_REVIEW_FAILED` return",
-            ),
-            (
-                "agent-spawn-budget",
-                "skills/start/SKILL.md",
-                "refuses to start this Agent dispatch",
-                "refuses this Agent dispatch after the referee starts",
-            ),
-            (
-                "agent-spawn-budget",
-                "skills/start/SKILL.md",
-                "Check the artifact for `PANEL_REVIEW_FAILED id=<ID>`",
-                "Skip artifact validation for `PANEL_REVIEW_FAILED id=<ID>`",
-            ),
-            (
-                "artifact-after-agent-failure",
-                "skills/panel-review-for-agent/references/protocol.md",
-                "including a failed tool",
-                "including a successful tool",
-            ),
-            (
-                "bash-timeout-contract",
-                "agents/panel-review-cli-barrier.md",
-                "moves the call to the background",
-                "stops the call",
-            ),
-            (
-                "agent-spawn-budget",
-                "README.md",
-                "down-seat pass",
-                "ordinary seat pass",
-            ),
-            (
-                "agy-slash-command-policy",
-                "README.md",
-                "agy expands leading slash commands in print mode",
-                "agy disables leading slash commands in print mode",
+                "prompts/blind_pass.tmpl",
+                "\n```findings\n```\n",
+                "seat-contract-owner",
             ),
         )
-
-        for invariant, relative_path, old, new in cases:
-            with self.subTest(invariant=invariant), tempfile.TemporaryDirectory() as directory:
+        for relative_path, mutation, invariant in cases:
+            with self.subTest(path=relative_path), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 self.copy_contract_tree(root)
                 target = root / relative_path
                 text = target.read_text(encoding="utf-8")
-                self.assertIn(old, text)
-                target.write_text(text.replace(old, new, 1), encoding="utf-8")
+                if mutation == "{{SEAT_CONTRACT}}":
+                    text = text.replace(mutation, mutation + "\n" + mutation, 1)
+                else:
+                    text += mutation
+                target.write_text(text, encoding="utf-8")
 
                 result = self.run_check(root)
 
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(invariant, result.stderr)
 
-    def test_agy_prompt_templates_keep_the_prose_contract_first(self):
+    def test_referee_status_stub_stays_in_its_owner(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_contract_tree(root)
+            referee = root / "agents/panel-review-referee.md"
+            referee.write_text(
+                referee.read_text(encoding="utf-8") + "\nPANEL_VERDICT_READY id=<id>\n",
+                encoding="utf-8",
+            )
+
+            result = self.run_check(root)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("referee-return-status", result.stderr)
+
+    def test_command_skill_requires_public_artifact_delivery(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_contract_tree(root)
+            skill = root / "skills/start/SKILL.md"
+            skill.write_text(
+                re.sub(
+                    r'(\$SC/read_verdict_artifact["`]?[ \t\n]+)--delivery\b',
+                    r"\1--unvalidated",
+                    skill.read_text(encoding="utf-8"),
+                ),
+                encoding="utf-8",
+            )
+
+            result = self.run_check(root)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("public-artifact-delivery", result.stderr)
+
+    def test_barrier_shell_shape_rejects_long_foreground_wait(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_contract_tree(root)
+            barrier = root / "agents/panel-review-cli-barrier.md"
+            text = barrier.read_text(encoding="utf-8")
+            barrier.write_text(text.replace("timeout 100 bash -c", "timeout 540 bash -c", 1), encoding="utf-8")
+
+            result = self.run_check(root)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("cli-barrier-command-shape", result.stderr)
+
+    def test_claude_seat_tool_surface_rejects_write_access(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_contract_tree(root)
+            seat = root / "agents/panel-review-claude-seat.md"
+            text = seat.read_text(encoding="utf-8")
+            seat.write_text(text.replace("mcp__tilth__tilth_read", "mcp__tilth__tilth_write", 1), encoding="utf-8")
+
+            result = self.run_check(root)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("claude-seat-tool-surface", result.stderr)
+
+    def test_agy_prompt_templates_keep_the_seat_contract_first(self):
         for template_name in ("blind_pass.tmpl", "debate.tmpl"):
             with self.subTest(template=template_name), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
@@ -439,25 +509,6 @@ class ContractConsistencyTest(unittest.TestCase):
 
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("agy-model-pin-form", result.stderr)
-
-    def test_round0_retry_contract_drift_is_reported(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            self.copy_contract_tree(root)
-            protocol = root / "skills/panel-review-for-agent/references/protocol.md"
-            text = protocol.read_text(encoding="utf-8")
-            required = "Retry each still-down seat once"
-            self.assertIn(required, text)
-            protocol.write_text(
-                text.replace(required, "Treat each still-down seat as unavailable", 1),
-                encoding="utf-8",
-            )
-
-            result = self.run_check(root)
-
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("round0-retry-contract", result.stderr)
-
 
 if __name__ == "__main__":
     unittest.main()
