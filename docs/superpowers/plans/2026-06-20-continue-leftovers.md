@@ -1,5 +1,8 @@
 # Continue a finished review (`--continue`) — Implementation Plan
 
+> **Superseded by issue 44.** This plan is retained as implementation history; do not execute its
+> steps. The current command interface is documented in `README.md` and the agent protocol.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to
 > implement this plan task-by-task.
 
@@ -69,7 +72,8 @@ flag handling and one referee skip-cleanup exception.
 - [ ] **Step 3: Update the usage line** (last `*)` echo) to include `reopen`:
   `  *) echo "usage: index {get|put|issue|bump|state|flag|commit-round|commit-sweep|reopen} <ID> ..." >&2; exit 2 ;;`
 
-- [ ] **Step 4: Update the header doc block.** After the `index flag` doc line (around line 14), add:
+- [ ] **Step 4: Update the header doc block.** Rewrite the entry for the current atomic index
+  interface; issue 44 removed the direct mutator this plan referenced.
 ```
 #   index reopen <ID> both|unresolved|contested
 #                 Re-open leftover issues for another debate cycle: matching issues

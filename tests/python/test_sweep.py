@@ -217,7 +217,7 @@ class TestSweep(unittest.TestCase):
         # Regression for issues-2026-07-04 #1: USAGE must be reachable WITHOUT a run
         # id. If panel_require_id ran before dispatch, `sweep`/`sweep -h`/unknown verb
         # died on "invalid run id: ''" and the interface was undiscoverable.
-        for args, code in [((), 2), (("-h",), 0), (("--help",), 0), (("bogus",), 2)]:
+        for args, code in [((), 2), (("-h",), 0), (("--help",), 0), (("bogus",), 2), (("record",), 2)]:
             result = self.run_sweep(*args)
             self.assertEqual(result.returncode, code, msg=f"sweep {args}")
             self.assertIn("usage: sweep", result.stdout + result.stderr, msg=f"sweep {args}")

@@ -20,7 +20,7 @@ from seat_contract import PHASES
 
 NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 NUMBER_RE = re.compile(r"^[0-9]+$")
-USAGE = "usage: sweep {begin|record|plan|plan-scaffold|extend-plan|ingest-batch|drop-seat|resume-plan|has|done|commit} <ID> <round> ..."
+USAGE = "usage: sweep {begin|plan|plan-scaffold|extend-plan|ingest-batch|drop-seat|resume-plan|has|done|commit} <ID> <round> ..."
 STANCE_TAG, NEW_FINDINGS_TAG = PHASES["debate"]["required_blocks"]
 
 
@@ -193,32 +193,6 @@ def cmd_begin(sd, idx, epoch):
     os.makedirs(sd, exist_ok=True)
     if not epoch_file_present(epoch_path):
         write_atomic(epoch_path, f"{epoch}\n")
-    return 0
-
-
-def cmd_record(sd, idx, epoch, seat, src, batch):
-    if not is_number(epoch):
-        return fail("sweep record: requires numeric epoch", 2)
-    if not valid_name(seat):
-        return fail("sweep: bad seat name", 2)
-    if not valid_name(batch):
-        return fail("sweep: bad batch name", 2)
-    if not os.path.isfile(src):
-        return fail(f"sweep record: no such file: {src}", 1)
-    if not os.path.isdir(sd):
-        return fail("sweep record: sweep dir not found", 1)
-    epoch_path = os.path.join(sd, ".epoch")
-    if not epoch_file_present(epoch_path):
-        return fail("sweep record: sweep epoch not found or empty", 1)
-    directory_epoch = read_epoch(epoch_path)
-    if not is_number(directory_epoch):
-        return fail("sweep record: sweep epoch not numeric", 1)
-    if epoch != directory_epoch:
-        return fail(f"sweep record: stale worker epoch {epoch} != {directory_epoch}", 1)
-    if index_epoch(idx) != directory_epoch:
-        return fail("sweep record: stale run epoch", 1)
-    with open(src, "rb") as handle:
-        write_atomic(os.path.join(sd, f"{seat}.{batch}.out"), handle.read())
     return 0
 
 
@@ -533,7 +507,7 @@ def cmd_commit(sd, idx, run_id, round_text, epoch):
     return 0
 
 
-KNOWN_CMDS = {"begin", "record", "plan", "plan-scaffold", "extend-plan", "ingest-batch", "drop-seat",
+KNOWN_CMDS = {"begin", "plan", "plan-scaffold", "extend-plan", "ingest-batch", "drop-seat",
               "resume-plan", "has", "done", "commit"}
 
 
@@ -559,8 +533,6 @@ def main(argv):
 
     if cmd == "begin":
         return cmd_begin(sd, idx, argv[4] if len(argv) > 4 else "")
-    if cmd == "record":
-        return cmd_record(sd, idx, argv[4] if len(argv) > 4 else "", argv[5] if len(argv) > 5 else "", argv[6] if len(argv) > 6 else "", argv[7] if len(argv) > 7 else "all")
     if cmd == "plan":
         return cmd_plan(sd, argv[4] if len(argv) > 4 else "", argv[5] if len(argv) > 5 else "")
     if cmd == "plan-scaffold":

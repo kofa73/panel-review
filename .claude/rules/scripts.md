@@ -17,10 +17,12 @@ The referee never hand-rolls flags, writes, index math, or parsing — it calls 
 byte-exact.
 
 - `index` — the **only** writer of `/tmp/<ID>/index.json`; all state/flag/counter math lives here.
-  `commit-sweep` applies a whole debate round atomically and idempotently (guarded by
-  `committed_rounds`) and writes that round's inspection-only `audit/round-<N>.md` as a best-effort
-  side effect. Its read-only `delivery-status` owns low-gate/leftover classification and reports the
-  exact index hash used to reject a stale same-epoch report snapshot. Never hand-write `index.json`.
+  `put` installs the Round-0 index. `commit-sweep` applies a whole debate round atomically and
+  idempotently (guarded by `committed_rounds`) and writes that round's inspection-only
+  `audit/round-<N>.md` as a best-effort side effect. `reopen` starts a new debate epoch. No
+  per-field mutation command bypasses those paths. Its read-only `delivery-status` owns
+  low-gate/leftover classification and reports the exact index hash used to reject a stale
+  same-epoch report snapshot. Never hand-write `index.json`.
 - `decide_round` / `decide_degraded_round` — the **only** builders of normal and degraded debate
   `commit-sweep` payloads. They apply the Transitions table mechanically (stance counting, `bump`,
   `peer_reviewed`/`fully_vetted`, enum convergence, forced-terminal). Normal path carries evidence
@@ -158,11 +160,13 @@ byte-exact.
 - `reopen` — engine behind `panel-review:continue`: revives a finished run's leftover
   (`unresolved`/`contested`) issues via `index reopen` (bumps `run_epoch`, clears `committed_rounds`)
   then clears `/tmp/<ID>/sweeps/`. Counterpart to `init_run`.
-- `write_card` / `write_verdict_artifact` — atomic-write CLIs over `panel_atomic_write`: one card;
-  the durable verdict to the `/tmp/<ID>.md` sibling. Because that file is the only final-report
-  delivery surface, artifact failure keeps the run resumable and blocks cleanup. The verdict writer
-  stamps the continuation epoch and whether the canonical index was finished or incomplete;
-  `start -- Finish here` uses its explicit `--final` mode before cleanup.
+- `write_card` — atomically installs referee-owned origin records from stdin through
+  `panel_atomic_write`; card files go through `project_card` or `regen_cards`.
+- `write_verdict_artifact` — atomically writes the durable verdict to the `/tmp/<ID>.md` sibling.
+  Because that file is the only final-report delivery surface, artifact failure keeps the run
+  resumable and blocks cleanup. The verdict writer stamps the continuation epoch and whether the
+  canonical index was finished or incomplete; `start -- Finish here` uses its explicit `--final`
+  mode before cleanup.
 - `read_verdict_artifact` — validates the durable artifact's ID, metadata, and optional expected
   scope/diff hash/continuation epoch. Its default mode requires a finished artifact and emits the
   verdict body for `panel-review:result <ID>`; `--delivery` verifies any retained index through

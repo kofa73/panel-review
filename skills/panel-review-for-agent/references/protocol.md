@@ -54,7 +54,7 @@ reference; grepping a script for its flags wastes a full source-read into your c
 "$SC/round" commit <id> [--addendum <f>]                             # decide/merge/commit/regenerate + compact states/gate; exit 3 asks for judgment addendum
 "$SC/round" verdict-input <id>                                      # compact stable manifest/panel/index/origin/guard facts for synthesis
 "$SC/birth_index" --available "<seats>" --configured "<seats>" < issues.json   # clustered Round-0 issues -> full index.json (birth state/flags/coverage)
-"$SC/index"   {get|put|issue|bump|state|flag|gate-status|delivery-status|commit-sweep} <id> ...   # ONLY writer of index.json
+"$SC/index"   {get|put|issue|gate-status|delivery-status|commit-sweep|reopen} <id> ...   # ONLY writer of index.json
 "$SC/project_card" --id <id> --workdir <dir> [--index-rev N] < issue.json   # one issue record -> its card
 "$SC/regen_cards"  --id <id> --workdir <dir>                                # rebuild ALL cards from the index
 "$SC/index"   commit-sweep <id> <round> <epoch>  # apply a WHOLE debate round atomically (payload JSON on stdin)
@@ -63,6 +63,7 @@ reference; grepping a script for its flags wastes a full source-read into your c
 "$SC/decide_degraded_round" --id <id> --round N --configured "<seats>" --engaged "<zero-or-one-seat>" --stances <f>  # terminal non-voting payload
 "$SC/merge_payload" <base.json> < addendum.json   # fold referee additions into the payload (set_state replace, revise field-merge) — never append a 2nd entry for an id
 "$SC/cleanup" --id <id> --workdir <dir>      # remove cards + /tmp state (ONLY after the verdict is produced)
+"$SC/write_card" <path> < origin-record.txt   # atomically install a referee-owned origins file
 "$SC/write_verdict_artifact" --id <id> < verdict.md   # durable /tmp/<id>.md copy; survives cleanup/discard
 ```
 
@@ -176,8 +177,9 @@ A **point**: `{"location":"file:line"|["file:line",...]|"analysis","assertion":"
   `[json.loads(l) for l in f]`), the way `decide_round` does; `jq '.[]'` over it is wrong.
 
 **Origins are yours alone.** Keep each finding's origin and original wording, the post-drop
-independent raisers for each Round-0 issue, and per-round stances in `/tmp/<id>/origins/` (write them
-with any atomic means, e.g. `index`-style temp files or `project_card`'s sibling `write_card`). Store
+independent raisers for each Round-0 issue, and per-round stances in `/tmp/<id>/origins/`. Use
+Call `"$SC/write_card" "$path"` with the record on stdin to install each file atomically. Card
+renderers own card files. Store
 the filtered Round-0 raiser list in `round0.origins.txt`; store dropped co-raisers and their text
 evidence in `independence.round0.txt`. For each debate-born issue, store its same-pass raisers and
 original finding text in `epoch-<epoch>.round-<N>.origins.txt`, keyed by issue id. The epoch keeps a

@@ -68,6 +68,63 @@ class ContractConsistencyTest(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("merge-payload-validation", result.stderr)
 
+    def test_retired_commands_and_installer_migration_are_rejected(self):
+        cases = [
+            (
+                "scripts/index",
+                "usage: index {get|put|issue|gate-status|delivery-status|commit-sweep|reopen}",
+                "usage: index {get|put|issue|state|gate-status|delivery-status|commit-sweep|reopen}",
+            ),
+            (
+                "scripts/sweep",
+                "usage: sweep {begin|plan|plan-scaffold|extend-plan|ingest-batch|drop-seat|resume-plan|has|done|commit}",
+                "usage: sweep {begin|record|plan|plan-scaffold|extend-plan|ingest-batch|drop-seat|resume-plan|has|done|commit}",
+            ),
+            (
+                "skills/panel-review-for-agent/references/protocol.md",
+                '"$SC/index"   {get|put|issue|gate-status|delivery-status|commit-sweep|reopen}',
+                '"$SC/index"   {get|put|issue|state|gate-status|delivery-status|commit-sweep|reopen}',
+            ),
+        ]
+        for relative_path, current, retired in cases:
+            with self.subTest(path=relative_path), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.copy_contract_tree(root)
+                target = root / relative_path
+                text = target.read_text(encoding="utf-8")
+                self.assertIn(current, text)
+                target.write_text(text.replace(current, retired, 1), encoding="utf-8")
+
+                result = self.run_check(root)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("retired-script-surface", result.stderr)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_contract_tree(root)
+            installer = root / "install.sh"
+            installer.write_text(installer.read_text(encoding="utf-8") + "\nfor old_skill in obsolete; do\n", encoding="utf-8")
+
+            result = self.run_check(root)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("retired-script-surface", result.stderr)
+
+    def test_origin_writer_purpose_is_required(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_contract_tree(root)
+            readme = root / "README.md"
+            text = readme.read_text(encoding="utf-8")
+            writer_line = next(line for line in text.splitlines() if "`write_card`" in line)
+            readme.write_text(text.replace(writer_line, writer_line.replace("origin", "card")), encoding="utf-8")
+
+            result = self.run_check(root)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("origin-writer-purpose", result.stderr)
+
     def copy_contract_tree(self, root):
         for name in ("agents", "skills", "prompts", "hooks"):
             shutil.copytree(ROOT / name, root / name)
@@ -75,10 +132,16 @@ class ContractConsistencyTest(unittest.TestCase):
         shutil.copy2(ROOT / "scripts/read_protocol_phase", root / "scripts/read_protocol_phase")
         shutil.copy2(ROOT / "scripts/merge_payload", root / "scripts/merge_payload")
         shutil.copy2(ROOT / "scripts/repo_guard", root / "scripts/repo_guard")
+        for name in ("index", "sweep", "panel_common.py", "seat_contract.py"):
+            shutil.copy2(ROOT / "scripts" / name, root / "scripts" / name)
         # run_agy carries the agy model pins the checker shape-validates.
         shutil.copy2(ROOT / "scripts/run_agy", root / "scripts/run_agy")
         shutil.copy2(ROOT / "CONTRACTS.md", root / "CONTRACTS.md")
         shutil.copy2(ROOT / "README.md", root / "README.md")
+        rules = root / ".claude" / "rules"
+        rules.mkdir(parents=True)
+        shutil.copy2(ROOT / ".claude/rules/scripts.md", rules / "scripts.md")
+        shutil.copy2(ROOT / "install.sh", root / "install.sh")
 
     def test_round_consensus_limit_is_required_in_readme_and_protocol(self):
         for relative_path in (

@@ -110,14 +110,14 @@ class IndexTest(unittest.TestCase):
             },
         )
 
-    def test_state_validates_and_bumps_card_revision(self):
-        result = self.run_index("state", self.run_id, "i1", "contested")
-        self.assertEqual(result.returncode, 0)
-        self.assertEqual(self.read_index()["issues"][0]["state"], "contested")
-        self.assertEqual(self.read_index()["issues"][0]["card_rev"], 1)
-        result = self.run_index("state", self.run_id, "i1", "bad")
-        self.assertEqual(result.returncode, 2)
-        self.assertEqual(result.stderr, "index state: bad state bad (allowed: open|accepted|rejected|contested|unresolved|merged)\n")
+    def test_removed_mutator_verbs_are_rejected_without_writing(self):
+        original = self.index_path.read_bytes()
+        for verb in ("bump", "state", "flag"):
+            with self.subTest(verb=verb):
+                result = self.run_index(verb, self.run_id, "i1", "accepted", "fully_vetted", "true")
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("usage: index", result.stderr)
+                self.assertEqual(self.index_path.read_bytes(), original)
 
     def test_commit_happy_path_idempotency_and_evaluated_by(self):
         payload = {"bump": ["i1"], "set_flag": [{"id": "i1", "flag": "peer_reviewed", "value": True}], "evaluated_by": {"i1": ["codex", "claude"]}}

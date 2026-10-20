@@ -39,8 +39,9 @@ skills/agents are Markdown. `python3`, `jq`, `git` are required.
 
 - **Install (two paths):**
   - `./install.sh` copies the tree into `~/.claude/skills/panel-review` (override with
-    `CLAUDE_DIR=/path`). It removes the old pre-plugin layout, sets exec bits on `scripts/*`, and warns
-    about agent files that would *shadow* the plugin's. Run `/reload-plugins` afterward.
+    `CLAUDE_DIR=/path`). It replaces that plugin tree, sets exec bits on `scripts/*`, and warns about
+    agent files that would *shadow* the plugin's. It leaves other loose skills and agents alone, so
+    remove any reported stale agent files yourself. Run `/reload-plugins` afterward.
   - `.claude-plugin/marketplace.json` lets the repo double as its own local marketplace: `/plugin
     marketplace add /path` then `/plugin install panel-review@panel-review` (installs into
     `~/.claude/plugins/cache`, independent of `install.sh`'s target — keep both working).

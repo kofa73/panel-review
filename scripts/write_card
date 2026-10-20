@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# write_card — atomically write a card file from stdin (rotate .bak, temp+sync+rename).
-# Thin CLI over panel_atomic_write so the protocol can write a card in one call.
+# write_card — atomically install one referee-owned origins record from stdin.
+# The protocol uses this generic writer for origin files; project_card and
+# regen_cards own card files.
 #
-# Usage: <render markdown> | write_card <cardpath>
+# Usage: <file contents> | write_card <path>
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"; . "$here/_panel_common.sh"
-[ "$#" -eq 1 ] || { echo "usage: write_card <cardpath>" >&2; exit 2; }
+[ "$#" -eq 1 ] || { echo "usage: write_card <path>" >&2; exit 2; }
 panel_atomic_write "$1"

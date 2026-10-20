@@ -127,6 +127,72 @@ def check_repo_guard_contract(errors, root):
         fail(errors, "repo-guard-index-contract", "protocol.md", "legacy index recovery behavior is missing")
 
 
+def check_retired_script_surface(errors, root):
+    """Keep removed command paths and the installer warning policy out of the active interface."""
+    command_lists = {}
+    for relative, retired in (
+        ("scripts/index", {"bump", "state", "flag"}),
+        ("scripts/sweep", {"record"}),
+    ):
+        try:
+            result = subprocess.run(
+                [str(root / relative), "--help"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError as error:
+            fail(errors, "retired-script-surface", relative, f"cannot read command list: {error}")
+            continue
+        usage = result.stdout.strip()
+        match = re.search(r"\{([^}]+)\}", usage)
+        if result.returncode != 0 or match is None:
+            fail(errors, "retired-script-surface", relative, "help does not expose its command list")
+            continue
+        exposed = set(match.group(1).split("|"))
+        command_lists[relative.rsplit("/", 1)[-1]] = exposed
+        remaining = exposed & retired
+        if remaining:
+            fail(
+                errors,
+                "retired-script-surface",
+                relative,
+                f"help still exposes retired command(s): {', '.join(sorted(remaining))}",
+            )
+
+    protocol = read(root, "skills/panel-review-for-agent/references/protocol.md")
+    for name, exposed in command_lists.items():
+        command_line = next(
+            (line for line in protocol.splitlines() if f'"$SC/{name}"' in line and "{" in line),
+            "",
+        )
+        match = re.search(r"\{([^}]+)\}", command_line)
+        if match is None or set(match.group(1).split("|")) != exposed:
+            fail(
+                errors,
+                "retired-script-surface",
+                "skills/panel-review-for-agent/references/protocol.md",
+                f"{name} command list does not match its CLI help",
+            )
+
+    installer = read(root, "install.sh")
+    if "for old_skill in" in installer or "for old_agent in" in installer:
+        fail(errors, "retired-script-surface", "install.sh", "still removes the obsolete loose layout")
+    if "will shadow the plugin" not in installer.lower():
+        fail(errors, "retired-script-surface", "install.sh", "does not warn about shadowing agents")
+
+    for relative in ("README.md", ".claude/rules/scripts.md", "skills/panel-review-for-agent/references/protocol.md"):
+        text = read(root, relative)
+        writer_lines = [line for line in text.splitlines() if "write_card" in line]
+        if not any("origin" in line.lower() for line in writer_lines):
+            fail(
+                errors,
+                "origin-writer-purpose",
+                relative,
+                "does not identify write_card as the atomic writer for origin records",
+            )
+
+
 def check_rendered_contracts(errors):
     recognized = {tag for phase in PHASES.values() for tag in phase["required_blocks"]}
     for phase, definition in PHASES.items():
@@ -187,6 +253,7 @@ def check_rendered_contracts(errors):
 def check_tree(errors, root):
     check_merge_payload_contract(errors, root)
     check_repo_guard_contract(errors, root)
+    check_retired_script_surface(errors, root)
 
     templates = {
         "round0": read(root, "prompts/blind_pass.tmpl"),

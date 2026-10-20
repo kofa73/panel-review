@@ -358,8 +358,8 @@ def mutation_failure(reason=""):
     return 1
 
 
-USAGE = "usage: index {get|put|issue|bump|state|flag|gate-status|delivery-status|commit-sweep|reopen} <ID> ..."
-KNOWN_CMDS = {"get", "issue", "gate-status", "delivery-status", "put", "bump", "state", "flag", "commit-sweep", "reopen"}
+USAGE = "usage: index {get|put|issue|gate-status|delivery-status|commit-sweep|reopen} <ID> ..."
+KNOWN_CMDS = {"get", "issue", "gate-status", "delivery-status", "put", "commit-sweep", "reopen"}
 
 
 def main(argv):
@@ -430,12 +430,6 @@ def main(argv):
         )
         return 0
 
-    mutations = {"put", "bump", "state", "flag", "commit-sweep", "reopen"}
-    if cmd not in mutations:
-        # Reached only for the read verbs handled above; defensive guard against
-        # the dispatch chain and KNOWN_CMDS/mutations sets drifting out of sync.
-        print(USAGE, file=sys.stderr)
-        return 2
     os.makedirs(f"/tmp/{run_id}", exist_ok=True)
     with open(f"/tmp/{run_id}/.index.lock", "a+b") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
@@ -452,20 +446,6 @@ def main(argv):
             panel_atomic_write(path, raw.rstrip(b"\n"))
             return 0
 
-        if cmd == "state":
-            state = argv[4] if len(argv) > 4 else ""
-            if state not in STATES:
-                print(f"index state: bad state {state} (allowed: open|accepted|rejected|contested|unresolved|merged)", file=sys.stderr)
-                return 2
-        if cmd == "flag":
-            flag = argv[4] if len(argv) > 4 else ""
-            boolean = argv[5] if len(argv) > 5 else ""
-            if flag not in FLAGS:
-                print(f"index flag: bad flag {flag}", file=sys.stderr)
-                return 2
-            if boolean not in {"true", "false"}:
-                print("index flag: bool must be true|false", file=sys.stderr)
-                return 2
         if cmd == "commit-sweep":
             round_text = argv[3] if len(argv) > 3 else ""
             epoch = argv[4] if len(argv) > 4 else ""
@@ -497,34 +477,7 @@ def main(argv):
 
         try:
             index = copy.deepcopy(read_index(path))
-            if cmd == "bump":
-                issue_id = argv[3] if len(argv) > 3 else ""
-                for issue in index["issues"]:
-                    if issue.get("id") == issue_id:
-                        issue["rounds_debated"] = jq_default(issue.get("rounds_debated"), 0) + 1
-                        issue["card_rev"] = jq_default(issue.get("card_rev"), 0) + 1
-                if issue_invariant_violated(index):
-                    raise TransactionError()
-                write_index(path, index)
-            elif cmd == "state":
-                issue_id = argv[3] if len(argv) > 3 else ""
-                for issue in index["issues"]:
-                    if issue.get("id") == issue_id:
-                        issue["state"] = state
-                        issue["card_rev"] = jq_default(issue.get("card_rev"), 0) + 1
-                if issue_invariant_violated(index):
-                    raise TransactionError()
-                write_index(path, index)
-            elif cmd == "flag":
-                issue_id = argv[3] if len(argv) > 3 else ""
-                for issue in index["issues"]:
-                    if issue.get("id") == issue_id:
-                        issue[flag] = boolean == "true"
-                        issue["card_rev"] = jq_default(issue.get("card_rev"), 0) + 1
-                if issue_invariant_violated(index):
-                    raise TransactionError()
-                write_index(path, index)
-            elif cmd == "commit-sweep":
+            if cmd == "commit-sweep":
                 updated, idempotent, audit_text = apply_sweep(index, payload, int(round_text), epoch)
                 if not idempotent:
                     write_index(path, updated)

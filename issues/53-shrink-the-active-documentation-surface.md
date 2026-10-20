@@ -16,8 +16,8 @@ Three separate bodies of text read as current instruction while only part of eac
   state schemas, and implementation rationale. A first-time user and a maintainer changing
   `merge_payload` need almost disjoint subsets.
 - **`docs/superpowers/plans/` (919 lines across two files)** holds superseded implementation plans
-  that look like current instructions. `2026-06-20-continue-leftovers.md:72` still gives step-by-step
-  edits against `index flag`, a verb issue 44 deletes.
+  that look like current instructions. Issue 44 updated the obsolete index-command example at
+  `2026-06-20-continue-leftovers.md:72`; both plans still need to be archived or marked historical.
 - **`issues/`** keeps completed incident narratives in the active directory. Of 41 files, 13 are
   Completed or Closed, and the index table is long enough that the actual work queue is hard to see.
 

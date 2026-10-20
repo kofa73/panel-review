@@ -278,9 +278,4 @@ case "$cmd" in
     exit 1
     ;;
 
-  *)
-    # Unreachable: cmd was validated to snapshot|verify above. Defensive.
-    echo "$USAGE" >&2
-    exit 2
-    ;;
 esac

@@ -337,14 +337,11 @@ provide (item 3), and `discard` needs an explicit **fault-tolerant traversal** t
       away.
 12. **`install.sh` cutover.** install.sh copies the **single plugin tree** into
     `~/.claude/skills/panel-review/` (instead of three skills + two agents into separate dirs) and
-    keeps the exec-bit fix-up on `scripts/`. It must **remove the pre-plugin layout** on install —
-    the old `~/.claude/skills/{panel-review,panel-review-for-agent,panel-review-init}` plain skills
-    and `~/.claude/agents/panel-review-{referee,claude-seat}.md` — because **both project- and
-    user-level** `agents/` definitions **outrank a plugin agent** (plugin agents are lowest priority,
-    Claude Code `sub-agents.md:175`), so a stale same-named copy at *either* scope silently shadows the
-    plugin's. Removing the user-level copies is necessary but **not sufficient** — also warn on any
-    project-level `.claude/agents/panel-review-*.md`. Removal/uninstall for the user: delete the folder
-    or `claude plugin disable panel-review@skills-dir`.
+    keeps the exec-bit fix-up on `scripts/`. The original design also removed the old loose skills
+    and agents because definitions at either scope can shadow plugin agents. Issue 44 later removed
+    that cleanup because the repository no longer produces the old layout; the installer now leaves
+    loose files alone and warns about shadowing agents. To remove the installed plugin, delete its
+    folder or run `claude plugin disable panel-review@skills-dir`.
 13. **Qualify every internal component reference.** Once the skills and agents live in the plugin they
     are **namespaced**, and bare-name references can silently fail to resolve (Claude Code `changelog.md`
     fix #25834: *"plugin agent skills silently failing to load when referenced by bare name instead of

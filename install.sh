@@ -8,13 +8,9 @@
 # namespaced panel-review:<verb> (panel-review:start, :status, :resume,
 # :continue, :result, :discard).
 #
-# It REMOVES the old pre-plugin layout this repo used to install (loose
-# skills/agents, not a plugin) — both project- and user-level agents/
-# definitions outrank a plugin agent of the same name (Claude Code
-# sub-agents.md), so a stale copy at either scope would silently shadow the
-# plugin's agents. Only the user-level copies are removed here; a
-# project-level .claude/agents/panel-review-*.md is warned about, not
-# touched (it isn't this installer's to delete).
+# It replaces its plugin destination and leaves other skill and agent
+# directories alone. Project- and user-level agent files can shadow plugin
+# agents, so the installer warns about those files instead of deleting them.
 #
 # Target defaults to ~/.claude; override with CLAUDE_DIR=/path ./install.sh
 set -euo pipefail
@@ -29,27 +25,8 @@ PLUGIN_DST="$SKILLS_DST/panel-review"
 
 echo "Installing the panel-review plugin into: $PLUGIN_DST"
 
-# Remove the OLD pre-plugin layout first, so nothing stale is left beside (or
-# shadowing) the new plugin tree. The old layout had panel-review,
-# panel-review-for-agent, and panel-review-init as separate loose skill dirs,
-# and the two agents at the top level of agents/.
-for old_skill in panel-review-for-agent panel-review-init; do
-  if [ -d "$SKILLS_DST/$old_skill" ]; then
-    echo "  removing old loose skill: $SKILLS_DST/$old_skill"
-    rm -rf -- "$SKILLS_DST/$old_skill"
-  fi
-done
-for old_agent in panel-review-referee panel-review-claude-seat; do
-  if [ -f "$AGENTS_DST/$old_agent.md" ]; then
-    echo "  removing old top-level agent: $AGENTS_DST/$old_agent.md"
-    rm -f -- "$AGENTS_DST/$old_agent.md"
-  fi
-done
-
-# The old panel-review dir held a flat skill (SKILL.md at its root). The new
-# plugin tree reuses the SAME name but as a plugin (.claude-plugin/ at its
-# root, commands nested under skills/<verb>/). Wipe it before copying so no
-# stale old SKILL.md or old scripts linger alongside the new tree.
+# Replace the plugin destination so files from an earlier plugin version do not
+# linger beside the current tree.
 rm -rf -- "$PLUGIN_DST"
 mkdir -p "$PLUGIN_DST"
 
