@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Regression suite for the panel-review scripts that are STILL bash (resolve_diff,
-# preflight, birth_index, run_seat, resolve_instructions, cleanup/discard) plus the
+# preflight, run_seat, resolve_instructions, cleanup/discard) plus the
 # protocol/template contracts. Self-contained: fixtures live in tests/fixtures/,
 # this is plain bash with a tiny assert harness.
 #
-# The stateful scripts ported to Python (index, parse_block, decide_round,
-# decide_degraded_round, merge_payload, sweep) are covered by tests/python/ via
-# unittest. This script invokes that Python suite as a final gate (see the end), so
+# Python script interfaces, including birth_index, extract_block, and the stateful
+# modules, are covered by black-box cases here and/or tests/python/ via unittest.
+# This script invokes the Python suite as a final gate (see the end), so
 # `tests/run_tests.sh` still runs the whole regression in one command.
 #
 # Usage: tests/run_tests.sh            # run all (bash + python), nonzero if any fail

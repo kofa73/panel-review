@@ -2,6 +2,7 @@
 """Shared persistence and schema helpers for migrated panel-review scripts."""
 
 import os
+import re
 import stat
 import sys
 import tempfile
@@ -124,3 +125,66 @@ def valid_point(value):
         and ("precondition" not in value or type(value["precondition"]) is str)
         and ("impact" not in value or type(value["impact"]) is str)
     )
+
+
+def extract_fenced_block(text, tag):
+    """Return whether a tagged fence exists and concatenate every matching body."""
+    opening = re.compile(rf"```{re.escape(tag)}[ \t\r]*")
+    closing = re.compile(r"```[ \t\r]*")
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+
+    present = False
+    inside = False
+    content = []
+    for line in lines:
+        if opening.fullmatch(line):
+            present = True
+            inside = True
+        elif inside and closing.fullmatch(line):
+            inside = False
+        elif inside:
+            content.append(line[:-1] if line.endswith("\r") else line)
+
+    return present, "".join(f"{line}\n" for line in content)
+
+
+def stance_integrity_problems(index, stances, engaged, configured, deduplicate_unknown_sources):
+    """Find shared debate-input errors while leaving each caller's diagnostics stable.
+
+    Normal rounds report one unknown-source error per distinct value; degraded rounds report one
+    per offending stance. The flag keeps that existing difference at the shared validation point.
+    """
+    problems = [
+        ("unconfigured_seat", seat)
+        for seat in engaged
+        if seat not in configured
+    ]
+    sources = [stance.get("_source") for stance in stances]
+    if deduplicate_unknown_sources:
+        unique_sources = []
+        for source in sources:
+            if source not in unique_sources:
+                unique_sources.append(source)
+        sources = unique_sources
+    problems.extend(
+        ("unknown_source", source)
+        for source in sources
+        if source not in engaged
+    )
+
+    open_ids = [
+        issue.get("id")
+        for issue in index.get("issues", [])
+        if issue.get("state") == "open"
+    ]
+    for seat in engaged:
+        for issue_id in open_ids:
+            count = sum(
+                stance.get("_source") == seat and stance.get("id") == issue_id
+                for stance in stances
+            )
+            if count != 1:
+                problems.append(("stance_count", (seat, issue_id, count)))
+    return problems

@@ -7,6 +7,7 @@ or helper internals.
 | Invariant | Authoritative owner | Consumers |
 |---|---|---|
 | Seat blocks, fields, stance values, normalization, and phase cardinality | `scripts/seat_contract.py` | `parse_block`, `write_seat_raw`, `sweep`, `decide_round`, and rendered prompts produced by `round` |
+| Shared Python issue/evidence predicates, fence extraction, and debate stance-integrity checks | `scripts/panel_common.py` | `birth_index`, `parse_block`, `extract_block`, `decide_round`, and `decide_degraded_round` |
 | Review phases and referee judgment points | `skills/panel-review-for-agent/references/protocol.md` | the bootstrap skill and referee agent load or reference the active phase |
 | Round-0 configured-panel/prompt freezing, attempt history, complete-seat checkpoint recovery, selective retry/resume dispatch, and final Process-note facts | `scripts/round prepare-round0`, `scripts/round collect-round0`, and `scripts/round verdict-input` | the referee protocol supplies current availability plus the explicit initial/`--retry`/`--resume` attempt kind, dispatches only returned non-null Agent inputs, and synthesizes from the returned attempt/final-status summary |
 | Mechanical issue transitions and state mutation | `scripts/decide_round`, `scripts/decide_degraded_round`, `scripts/merge_payload`, `scripts/index`, and `scripts/sweep` | `scripts/round` invokes these internal interfaces; the normal debate protocol does not |

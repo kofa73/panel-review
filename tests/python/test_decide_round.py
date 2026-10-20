@@ -242,6 +242,20 @@ class DecideRoundTest(unittest.TestCase):
                 self.assertEqual(result.stdout, "")
                 self.assertIn("stance-integrity violation", result.stderr)
 
+    def test_integrity_reports_unknown_source_once_per_distinct_value(self):
+        self.write_stances(
+            [
+                *(stance("i1", seat) for seat in ("codex", "gemini", "claude")),
+                stance("i1", "mistral"),
+                stance("i1", "mistral"),
+            ]
+        )
+
+        result = self.run_decide()
+
+        self.assertEqual(result.returncode, 3)
+        self.assertEqual(result.stderr.count("unknown _source (not an engaged seat): mistral"), 1)
+
     def test_integrity_gate_rejects_removed_stance_in_retained_checkpoint(self):
         self.write_stances(
             [

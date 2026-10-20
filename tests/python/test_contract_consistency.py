@@ -63,6 +63,32 @@ class ContractConsistencyTest(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("merge-payload-validation", result.stderr)
 
+    def test_shared_python_helpers_remain_the_authoritative_owners(self):
+        cases = (
+            ("scripts/birth_index", "valid_point", "shared-point-validation"),
+            ("scripts/parse_block", "extract_fenced_block", "shared-fence-scan"),
+            ("scripts/extract_block", "extract_fenced_block", "shared-fence-scan"),
+            ("scripts/decide_round", "stance_integrity_problems", "shared-stance-integrity"),
+            (
+                "scripts/decide_degraded_round",
+                "stance_integrity_problems",
+                "shared-stance-integrity",
+            ),
+        )
+        for relative_path, helper, invariant in cases:
+            with self.subTest(path=relative_path), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.copy_contract_tree(root)
+                target = root / relative_path
+                text = target.read_text(encoding="utf-8")
+                self.assertIn(helper, text)
+                target.write_text(text.replace(helper, "retired_helper"), encoding="utf-8")
+
+                result = self.run_check(root)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(invariant, result.stderr)
+
     def test_retired_commands_and_installer_migration_are_rejected(self):
         cases = [
             (
@@ -144,7 +170,19 @@ class ContractConsistencyTest(unittest.TestCase):
         shutil.copy2(ROOT / "scripts/round", root / "scripts/round")
         shutil.copy2(ROOT / "scripts/merge_payload", root / "scripts/merge_payload")
         shutil.copy2(ROOT / "scripts/repo_guard", root / "scripts/repo_guard")
-        for name in ("index", "sweep", "panel_common.py", "seat_contract.py", "project_card", "regen_cards"):
+        for name in (
+            "birth_index",
+            "decide_degraded_round",
+            "decide_round",
+            "extract_block",
+            "index",
+            "parse_block",
+            "sweep",
+            "panel_common.py",
+            "seat_contract.py",
+            "project_card",
+            "regen_cards",
+        ):
             shutil.copy2(ROOT / "scripts" / name, root / "scripts" / name)
         # run_agy carries the agy model pins the checker shape-validates.
         shutil.copy2(ROOT / "scripts/run_agy", root / "scripts/run_agy")

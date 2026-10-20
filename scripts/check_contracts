@@ -208,6 +208,51 @@ def check_retired_script_surface(errors, root):
         fail(errors, "retired-script-surface", "install.sh", "still removes the obsolete loose layout")
 
 
+def check_shared_python_helper_ownership(errors, root):
+    """Keep migrated schema, fence, and stance checks behind their shared owner."""
+    shared = read(root, "scripts/panel_common.py")
+    for relative, markers, invariant in (
+        (
+            "scripts/birth_index",
+            ("CATEGORIES", "SEVERITIES", "valid_location", "valid_point"),
+            "shared-point-validation",
+        ),
+        (
+            "scripts/parse_block",
+            ("extract_fenced_block",),
+            "shared-fence-scan",
+        ),
+        (
+            "scripts/extract_block",
+            ("extract_fenced_block",),
+            "shared-fence-scan",
+        ),
+        (
+            "scripts/decide_round",
+            ("stance_integrity_problems",),
+            "shared-stance-integrity",
+        ),
+        (
+            "scripts/decide_degraded_round",
+            ("stance_integrity_problems",),
+            "shared-stance-integrity",
+        ),
+    ):
+        consumer = read(root, relative)
+        for marker in markers:
+            if marker not in shared or marker not in consumer:
+                fail(errors, invariant, relative, f"must use panel_common.py helper {marker}")
+
+    parser = read(root, "scripts/parse_block")
+    if "subprocess.run" in parser or "extract_block" in parser:
+        fail(
+            errors,
+            "shared-fence-scan",
+            "scripts/parse_block",
+            "must scan through panel_common.py without spawning the CLI shim",
+        )
+
+
 def check_rendered_contracts(errors):
     recognized = {tag for phase in PHASES.values() for tag in phase["required_blocks"]}
     for phase, definition in PHASES.items():
@@ -261,6 +306,7 @@ def check_tree(errors, root):
     check_repo_guard_contract(errors, root)
     check_card_cache_contract(errors, root)
     check_retired_script_surface(errors, root)
+    check_shared_python_helper_ownership(errors, root)
 
     templates = {
         "round0": read(root, "prompts/blind_pass.tmpl"),
@@ -300,6 +346,7 @@ def check_tree(errors, root):
     owner_map = read(root, "CONTRACTS.md")
     for owner in (
         "scripts/seat_contract.py",
+        "scripts/panel_common.py",
         "scripts/round",
         "scripts/stage_review_profile",
         "scripts/scope_diagnostics",

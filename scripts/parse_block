@@ -2,10 +2,10 @@
 import sys
 import os
 import json
-import subprocess
 import re
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from panel_common import extract_fenced_block
 from seat_contract import get_rules, response_problem
 
 def compact_json(obj):
@@ -38,19 +38,20 @@ def main():
     file_path = args[1]
     label = args[2] if len(args) > 2 else ""
 
-    if not diagnose and label:
-        pass
-    else:
+    if diagnose:
         label = ""
 
     if not os.path.isfile(file_path):
         print(f"parse_block: no such file: {file_path}", file=sys.stderr)
         sys.exit(1)
 
+    with open(file_path, encoding="utf-8", errors="replace", newline="") as handle:
+        raw_file = handle.read()
+
     if response_phase is not None:
         try:
-            with open(file_path, encoding="utf-8", errors="replace") as handle:
-                problem = response_problem(handle.read(), response_phase)
+            response_text = raw_file.replace("\r\n", "\n").replace("\r", "\n")
+            problem = response_problem(response_text, response_phase)
         except ValueError as error:
             print(f"parse_block: {error}", file=sys.stderr)
             sys.exit(2)
@@ -59,25 +60,19 @@ def main():
             print(f"parse_block: {message}", file=sys.stderr)
             sys.exit(code)
 
-    here = os.path.dirname(os.path.abspath(__file__))
-    extract_bin = os.path.join(here, "extract_block")
-
-    # 1. extract_block --present
-    res = subprocess.run([extract_bin, "--present", tag, file_path])
-    if res.returncode != 0:
+    present, raw = extract_fenced_block(raw_file, tag)
+    if not present:
         print(f"parse_block: no '{tag}' block in output (seat produced none)", file=sys.stderr)
         sys.exit(4)
 
-    # 2. Extract inner content
-    res = subprocess.run([extract_bin, tag, file_path], stdout=subprocess.PIPE, text=True, check=True)
-    raw = res.stdout
+    # Match subprocess text mode's newline conversion for the parser's prior extractor output.
+    raw = raw.replace("\r\n", "\n").replace("\r", "\n")
 
     # 3. If empty or whitespace-only -> exit 0
     if not raw.strip():
         sys.exit(0)
 
     # 4. Try whole-block JSON decode
-    parsed_whole = False
     lines_to_process = []
 
     decoder = json.JSONDecoder()
@@ -100,7 +95,6 @@ def main():
             break
 
     if stream_success:
-        parsed_whole = True
         flattened = []
         for item in items:
             if isinstance(item, list):

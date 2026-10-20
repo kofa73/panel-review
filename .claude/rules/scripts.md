@@ -140,7 +140,9 @@ byte-exact.
   `date`/`ps`/`cat status.*`/narration turns between dispatch and the combined return.
 - `birth_index` — the **only** builder of the Round-0 `index.json` from the referee's clustered
   finding-to-issue map; assigns birth state/flags/`evaluated_by` by the birth-unanimity rule (referee
-  still owns the clustering). Output installs via `index put`.
+  still owns the clustering). It imports the issue enums and evidence predicates from
+  `panel_common.py`, so the builder does not maintain a second issue schema. Output installs via
+  `index put`.
 - `resolve_instructions` — resolves `manifest.instructions` for the deterministic verbatim/none cases;
   returns the compose sentinel (exit 3) for `auto` (the only case the referee composes).
 - `stage_review_profile` — resolves one source path, requires a readable regular non-empty UTF-8
@@ -148,9 +150,9 @@ byte-exact.
   metadata. `init_run` is its only lifecycle caller; resumes never reload the source path.
 - `resolve_diff` — the single place that turns a scope token into diff text; `diff_hash` hashes it.
 - `assemble` — the **only** builder of a reviewer prompt: maps each `{{KEY}}` sentinel line to a file's
-  bytes verbatim (whole-line, literal). `extract_block` is its inverse — pulls one fenced ` ```<tag> `
-  block byte-exactly (`--present` distinguishes empty from missing). Never re-implement the fence
-  scan/substitution inline.
+  bytes verbatim (whole-line, literal). `panel_common.py` owns the shared fence scan used by
+  `parse_block` and the `extract_block` CLI shim; `--present` distinguishes empty from missing.
+  Never re-implement the fence scan/substitution inline.
 - `read_protocol_phase` — the referee's lazy protocol interface. It emits one marked section from the
   single canonical `references/protocol.md`, so inactive branches stay out of context without
   duplicating protocol prose across files.
@@ -176,7 +178,7 @@ byte-exact.
   the profile snapshot, uncommitted-scope divergence snapshot, manifest, and index exist.
   `scope_diagnostics` owns that tracked-diff/untracked-path snapshot and its read-only comparison;
   `inspect_run`, `resume_check`, and `round` report the results without weakening the hash gate.
-- `_panel_common.sh` (bash) / `panel_common.py` (Python) — parallel shared-helper libs kept in sync:
-  `panel_valid_id`/`panel_require_id` (ID validation guarding `rm -rf` paths), `panel_atomic_write`
-  (temp + fsync + rename, `.bak` rotation), git-exclude helpers. Python scripts import
-  `panel_common.py`; bash scripts source `_panel_common.sh`.
+- `_panel_common.sh` (bash) / `panel_common.py` (Python) — shared-helper libraries: validated run IDs,
+  atomic writes, and git-exclude helpers; Python additionally owns issue/evidence predicates, fence
+  extraction, and shared debate stance-integrity validation. Python scripts import `panel_common.py`;
+  bash scripts source `_panel_common.sh`.

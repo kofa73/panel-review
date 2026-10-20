@@ -65,27 +65,19 @@ def main():
         fail("decide_degraded_round: requires zero or one engaged seat", 2)
 
     errors = []
-    open_ids = [issue["id"] for issue in index.get("issues", []) if issue.get("state") == "open"]
-
-    for seat in engaged:
-        if seat not in configured:
+    for problem, value in panel_common.stance_integrity_problems(
+        index, stances, engaged, configured, deduplicate_unknown_sources=False
+    ):
+        if problem == "unconfigured_seat":
+            seat = value
             errors.append(f"engaged seat not in configured panel: {seat}")
-
-    # "each stance whose _source is not an engaged seat (do NOT dedupe — one message per offending stance, matching the Bash)"
-    for stance in stances:
-        source = stance.get("_source")
-        if source not in engaged:
-            # If source is None we should probably still print 'None'
-            source_str = json.dumps(source) if source is None else source
-            if source is None: # match jq printing null
-                source_str = "null"
+        elif problem == "unknown_source":
+            source = value
+            source_str = "null" if source is None else source
             errors.append(f"unknown _source: {source_str}")
-
-    for seat in engaged:
-        for issue_id in open_ids:
-            count = sum(1 for stance in stances if stance.get("_source") == seat and stance.get("id") == issue_id)
-            if count != 1:
-                errors.append(f"expected exactly 1 stance for seat={seat} issue={issue_id}, got {count}")
+        else:
+            seat, issue_id, count = value
+            errors.append(f"expected exactly 1 stance for seat={seat} issue={issue_id}, got {count}")
 
     if not engaged and stances:
         errors.append("zero-seat round has stances")

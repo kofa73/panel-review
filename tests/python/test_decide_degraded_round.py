@@ -119,7 +119,9 @@ class TestDecideDegradedRound(unittest.TestCase):
             "evaluated_by": {}
         }
         stances = [
-            {"_source": "gemini", "id": "old", "stance": "support"}
+            {"_source": "codex", "id": "old", "stance": "support"},
+            {"_source": "gemini", "id": "old", "stance": "support"},
+            {"_source": "gemini", "id": "old", "stance": "support"},
         ]
         args = [
             "--id", "test4",
@@ -129,7 +131,7 @@ class TestDecideDegradedRound(unittest.TestCase):
         ]
         res = self.run_script(args, "test4", index, stances)
         self.assertEqual(res.returncode, 3)
-        self.assertIn("unknown _source: gemini", res.stderr)
+        self.assertEqual(res.stderr.count("unknown _source: gemini"), 2)
 
     def test_integrity_wrong_stance_count(self):
         index = {

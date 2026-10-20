@@ -2,7 +2,7 @@
 
 Priority: 49
 
-Status: Pending
+Status: Completed
 
 Source: Simplification panel (Opus §1.3, §1.5, §5 rows 5-8; Sol "Small removals"), 2026-08-16
 
@@ -77,3 +77,12 @@ characterization test for the missing/empty/duplicate cases before the move.
   about. This issue removes duplication, not module boundaries.
 - Do not change `check_draft` into its own validator. It is deliberately a thin wrapper over
   `parse_block --diagnose` so there is no second schema.
+
+## Resolution
+
+Ported `birth_index` to Python and shared the issue/evidence predicates, moved fence scanning into
+`panel_common.py` while retaining `extract_block` as a CLI shim, removed the parser's dead state, and
+centralized stance-integrity checks without changing their diagnostics. Added characterization and
+ownership tests, updated script documentation, and bumped the plugin to 1.0.40. The lower-priority
+`jq_raw` / `jq_default` naming observation was not part of the five specified deliverables and remains
+unchanged.

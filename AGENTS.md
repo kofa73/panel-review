@@ -30,9 +30,10 @@ code).
 ## Install / "build" / run
 
 There is no build or lint framework. Scripts are a mix of **bash and Python**. The Python scripts are
-`check_contracts`, `check_draft`, `decide_degraded_round`, `decide_round`, `index`, `merge_payload`,
-`parse_block`, `read_protocol_phase`, `read_verdict_artifact`, `round`, `scope_diagnostics`,
-`seat_contract.py`, `stage_review_profile`, `sweep`, and `write_seat_raw`;
+`birth_index`, `check_contracts`, `check_draft`, `decide_degraded_round`, `decide_round`,
+`extract_block`, `index`, `merge_payload`, `parse_block`, `read_protocol_phase`,
+`read_verdict_artifact`, `round`, `scope_diagnostics`, `seat_contract.py`, `stage_review_profile`,
+`sweep`, and `write_seat_raw`;
 `panel_common.py` is their shared library. The
 remaining scripts are bash;
 skills/agents are Markdown. `python3`, `jq`, `git` are required.
@@ -58,8 +59,9 @@ skills/agents are Markdown. `python3`, `jq`, `git` are required.
   "Using it" for flags (`--issue-rounds`, `--max-rounds`, `--debate-low`, `--instructions`).
 - **Tests:** `./tests/run_tests.sh` (`VERBOSE=1` lists each PASS) runs bash asserts then the Python
   `unittest` suite (`tests/python/`, fixtures in `tests/fixtures/`). Run it after changing
-  `seat_contract.py`, `check_contracts`, `parse_block`, `decide_round`, `merge_payload`, `sweep`,
-  `round`, `write_seat_raw`, `read_protocol_phase`, `read_verdict_artifact`,
+  `seat_contract.py`, `panel_common.py`, `birth_index`, `extract_block`, `check_contracts`,
+  `parse_block`, `decide_round`, `merge_payload`, `sweep`, `round`, `write_seat_raw`,
+  `read_protocol_phase`, `read_verdict_artifact`,
   `hooks/enforce_agent_status_stub`, `index`'s `commit-sweep` validator, or the canonical protocol.
   Single module:
   `python3 -m unittest tests.python.test_index -v` from repo root.

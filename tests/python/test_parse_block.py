@@ -112,6 +112,59 @@ class TestParseBlock(unittest.TestCase):
             res_resp = self.run_script(['--response', 'round0', 'findings', fixture, 'gemini'])
             self.assertEqual(res_resp.returncode, 4, f"--response round0 {name}")
 
+    def test_fence_scan_missing_empty_and_duplicate_behavior(self):
+        first = {
+            "claim": "first",
+            "location": "f.c:1",
+            "category": "correctness",
+            "severity": "high",
+            "points": [{"assertion": "first", "location": "f.c:1"}],
+        }
+        second = {**first, "claim": "second", "location": "f.c:2"}
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "response.txt")
+
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write("plain response without a findings fence\n")
+            missing = self.run_script(["findings", path])
+            self.assertEqual(missing.returncode, 4)
+            extract = os.path.abspath(
+                os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "extract_block")
+            )
+            missing_present = subprocess.run(
+                [extract, "--present", "findings", path], capture_output=True, text=True
+            )
+            self.assertEqual(missing_present.returncode, 1)
+
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write("```findings\n```\n")
+            empty = self.run_script(["findings", path])
+            self.assertEqual(empty.returncode, 0)
+            self.assertEqual(empty.stdout, "")
+            empty_present = subprocess.run(
+                [extract, "--present", "findings", path], capture_output=True, text=True
+            )
+            self.assertEqual(empty_present.returncode, 0)
+
+            # Loose parsing retains both blocks; complete-response parsing rejects the duplicate.
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(
+                    f"```findings\n{json.dumps(first)}\n```\n"
+                    f"```findings\n{json.dumps(second)}\n```\n"
+                )
+            duplicate = self.run_script(["findings", path])
+            self.assertEqual(duplicate.returncode, 0, duplicate.stderr)
+            extracted = subprocess.run([extract, "findings", path], capture_output=True, text=True)
+            self.assertEqual(extracted.returncode, 0, extracted.stderr)
+            self.assertEqual(extracted.stdout, f"{json.dumps(first)}\n{json.dumps(second)}\n")
+            self.assertEqual(
+                [json.loads(line)["claim"] for line in duplicate.stdout.splitlines()],
+                ["first", "second"],
+            )
+            complete = self.run_script(["--response", "round0", "findings", path])
+            self.assertEqual(complete.returncode, 5)
+            self.assertIn("expected exactly one `findings` block, got 2", complete.stderr)
+
     def test_stances_byte_identical(self):
         for seat in ['codex', 'gemini', 'claude']:
             fixture = os.path.join(self.fixtures_dir, f'round1.{seat}.stances.txt')

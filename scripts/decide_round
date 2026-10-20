@@ -86,7 +86,6 @@ def unique_values(values):
 
 
 def integrity_errors(index, stances, engaged, configured):
-    open_ids = [issue.get("id") for issue in index.get("issues", []) if issue.get("state") == "open"]
     errors = []
     for stance in stances:
         if stance.get("stance") not in STANCE_VALUES:
@@ -101,22 +100,18 @@ def integrity_errors(index, stances, engaged, configured):
                 f"reject requires non-empty rationale for seat={jq_display(stance.get('_source'))} "
                 f"issue={jq_display(stance.get('id'))}"
             )
-    for seat in engaged:
-        if seat not in configured:
+    for problem, value in panel_common.stance_integrity_problems(
+        index, stances, engaged, configured, deduplicate_unknown_sources=True
+    ):
+        if problem == "unconfigured_seat":
+            seat = value
             errors.append(f"engaged seat not in configured panel: {seat}")
-
-    sources = unique_values([stance.get("_source") for stance in stances])
-    for source in sources:
-        if source not in engaged:
+        elif problem == "unknown_source":
+            source = value
             errors.append(f"unknown _source (not an engaged seat): {jq_display(source)}")
-
-    for seat in engaged:
-        for issue_id in open_ids:
-            count = sum(
-                stance.get("_source") == seat and stance.get("id") == issue_id for stance in stances
-            )
-            if count != 1:
-                errors.append(f"expected exactly 1 stance for seat={seat} issue={issue_id}, got {count}")
+        else:
+            seat, issue_id, count = value
+            errors.append(f"expected exactly 1 stance for seat={seat} issue={issue_id}, got {count}")
     return errors
 
 

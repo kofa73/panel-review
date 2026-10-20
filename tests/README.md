@@ -3,11 +3,11 @@
 Regression suite for the panel-review scripts. It has two layers:
 
 - **`run_tests.sh`** — plain bash + `jq`, covering the scripts that are still bash
-  (`resolve_diff`, `preflight`, `birth_index`, `run_seat`, `resolve_instructions`, `init_run`,
+  (`resolve_diff`, `preflight`, `run_seat`, `resolve_instructions`, `init_run`,
   `cleanup`/`discard`) plus the protocol/template contracts. As its **final step**
   it runs the Python suite below, so this one command exercises the whole pipeline.
-- **`python/`** — `unittest` tests for the Python script interfaces, including `index`,
-  `parse_block`, `seat_contract.py` through rendered `round` prompts, `check_contracts`,
+- **`python/`** — `unittest` tests for the Python script interfaces, including `birth_index`,
+  `extract_block`, `index`, `parse_block`, `seat_contract.py` through rendered `round` prompts, `check_contracts`,
   `decide_round`, `decide_degraded_round`, `merge_payload`, `sweep`, `round`,
   `write_seat_raw`, `read_protocol_phase`, `read_verdict_artifact`, and the
   `enforce_agent_status_stub` hook. These drive public interfaces rather than private helpers
@@ -64,7 +64,8 @@ Each exits `3` when its CLI is not installed, which the suite reports as a skip.
   invariant violation) → exit 1; `put` invariant; `reopen`.
 - **card cache** (`test_cards.py`): stale-file removal before projection, and current card rendering
   without a metadata header.
-- **parse_block** (`test_parse_block.py`): normal-mode exit codes (empty→0,
+- **parse_block** (`test_parse_block.py`): shared fence scanning through `parse_block` and the
+  `extract_block` CLI shim; missing-vs-empty and duplicate-block behavior; normal-mode exit codes (empty→0,
   flat-shape→5, no-block→4); stances parse **byte-identical** to the stored
   fixtures; `--diagnose` pinpoints each failure reason (and exit 5/0); `revision`
   sub-field stripping; empty-vs-real stances block idiom; `--response` phase block
