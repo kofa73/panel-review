@@ -511,7 +511,11 @@ data and validation rules. Each template says that code under review resolves un
 review root** and directs a seat to set its tool `cwd` to that path. Round 0's diff file and the saved
 review profile are outside the root and are supplied by full absolute path; debate's cards are under
 the root, while its saved profile is outside it. Both phases put seat scratch outside the root and
-supply its full absolute path. agy runs tools in its own sandbox and infers the repo root. A short,
+supply its full absolute path. agy expands a leading slash command on the Gemini seat's stdin
+print-mode path, so slash-command expansion stays enabled and `check_contracts` requires the prose
+seat contract at the start of each prompt. The panel does not currently prepend `/boost`; issue 60
+gates that change on live checks of boost's worktree writes, output shape, runtime, and entitlement
+behavior. agy runs tools in its own sandbox and infers the repo root. A short,
 unanchored print-mode probe on agy 1.4.3 from `/workspace/panel-review` resolved both `pwd` and Git's
 root correctly, but realistic-size behavior remains unmeasured. Keep the absolute path until that
 comparison is done. The blind prompt references the diff **file** instead of inlining its body. A

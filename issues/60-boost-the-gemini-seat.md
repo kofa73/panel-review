@@ -144,6 +144,20 @@ than a flag flip. The measurements below are what turns it into one or the other
   shows `/boost` writes inside the workdir, the answer is to relocate it or drop it, not to stop
   checking.
 
+## Open questions for the owner
+
+1. **How should the required live measurements proceed?** The current CLI no longer lists either
+   configured Gemini pin; issue 63 must choose and bind replacement pins before issue 60 can test the
+   actual seat configuration.
+   - **Recommended:** after issue 63 settles the pins, schedule one isolated boosted pass that checks
+     command recognition, worktree and checkout writes, output parsing, elapsed time, and entitlement
+     behavior. If those checks are clean, follow with the required real-review comparison before
+     enabling `/boost` by default. This measures the behavior on the model the panel will actually
+     use without weakening the write-nothing rule.
+   - Keep `/boost` disabled and defer issue 60 if an isolated pass or the real-review comparison
+     cannot be run. The agy release note about moving subagent worktrees is not evidence that the
+     boosted pipeline leaves the reviewed workdir and its Git metadata untouched.
+
 ## Comments
 
 ### 2026-10-19 — agy 1.2.10 moved subagent worktrees out of the workspace
@@ -165,3 +179,13 @@ Installed agy is now **1.4.2**. Evidence for measurement 2 (it does not replace 
 
 `issues/63` changes the Gemini pins. Measure `/boost` on the new pins, not on the retired
 `Gemini 3.1 Pro (High)`.
+
+### 2026-10-20 — current CLI still needs the issue 63 pin decision
+
+`agy --version` reports **1.4.3**. `agy models` lists `Gemini 4 Argon (High)` and
+`Gemini 3.8 Flash (High)`, but neither configured pin (`Gemini 3.1 Pro (High)` and
+`Gemini 3.7 Flash (High)`) appears. This confirms that the boosted pass must wait for issue 63 to
+settle the pins. No `/boost` call was made: the remaining checks require a longer run than the
+permitted short live probes, and no current wrapper configuration can exercise the selected seat
+model until that pin decision is made. Command recognition, worktree placement, prompt output shape,
+runtime, entitlement behavior, and the real-review comparison remain unmeasured.
