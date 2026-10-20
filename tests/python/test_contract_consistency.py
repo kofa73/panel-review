@@ -47,6 +47,7 @@ class ContractConsistencyTest(unittest.TestCase):
         (root / "scripts").mkdir()
         shutil.copy2(ROOT / "scripts/read_protocol_phase", root / "scripts/read_protocol_phase")
         shutil.copy2(ROOT / "scripts/merge_payload", root / "scripts/merge_payload")
+        shutil.copy2(ROOT / "scripts/repo_guard", root / "scripts/repo_guard")
         # run_agy carries the agy model pins the checker shape-validates.
         shutil.copy2(ROOT / "scripts/run_agy", root / "scripts/run_agy")
         shutil.copy2(ROOT / "CONTRACTS.md", root / "CONTRACTS.md")

@@ -1,30 +1,33 @@
 #!/usr/bin/env bash
-# repo_guard — keep the code under review byte-for-byte unchanged across a run.
+# repo_guard — preserve tracked worktree content and index entries across a run.
 #
 # The seats now run with write access (Codex's sandbox is bypassed so its MCP/
 # tilth calls work and it can write scratch files; agy was always a full tool
 # user). Instead of trusting each seat's own sandbox to stay read-only, we take a
-# snapshot of the TRACKED working tree at the start of the review and, after every
-# seat pass, detect and auto-revert any tracked-file drift — then flag it loudly in
-# the verdict's Process notes. Untracked files (the .panel-review/ card cache, and
+# snapshot of tracked worktree content and index entries at the start of the review
+# and, after every seat pass, detect and auto-revert any drift — then flag it loudly
+# in the verdict's Process notes. Untracked files (the .panel-review/ card cache, and
 # any stray file a seat drops in the workdir) are deliberately left alone. Seat
 # scratch itself lives outside the repository, under /tmp/<id>/work/.
 #
 # Usage:
 #   repo_guard snapshot --id <id> --workdir <dir>
 #       Record a baseline for <dir>: a `git stash create` commit SHA (captures the
-#       tracked+staged working-tree bytes WITHOUT touching the tree; empty when the
-#       tree is clean -> baseline falls back to HEAD) plus a sha256 manifest of every
-#       tracked file. Written under /tmp/<id>/guard/.
+#       tracked worktree bytes WITHOUT touching the tree; empty on a clean tree
+#       -> baseline falls back to HEAD, while dirty tracked state without a valid
+#       stash commit fails closed), a sha256 manifest of every tracked file, and the
+#       index's path/mode/object/stage entries. Written under /tmp/<id>/guard/.
 #   repo_guard verify --id <id> --workdir <dir> [--restore]
-#       Re-hash the tracked files and compare to the snapshot. Print each drifted
-#       path (modified/deleted/added) on stdout. With --restore, restore every
-#       drifted tracked file from the baseline (`git checkout <baseline> -- <path>`).
+#       Compare tracked worktree bytes and index entries to the snapshot. Print each
+#       drifted path on stdout. With --restore, restore worktree bytes from the
+#       baseline and restore each affected path's index entries from the snapshot.
 #       Exit nonzero when any drift was found (0 = clean).
 #
-# Protects TRACKED-FILE CONTENT ONLY. A baseline taken on a dirty tree restores the
-# DIRTY bytes (the state at snapshot time), not HEAD — the review must see exactly
-# what it started with. Standalone: jq is not needed; git + sha256sum + bash are.
+# Protects tracked worktree content and logical index entries only; the index file's
+# cache metadata is not preserved. A baseline taken on a dirty tree restores the
+# DIRTY bytes and index entries (the state at snapshot time), not HEAD. Untracked
+# files and paths outside the repository remain outside the guard. Standalone: jq is
+# not needed; git + sha256sum + bash are.
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=_panel_common.sh
@@ -61,7 +64,7 @@ guarddir="/tmp/$id/guard"
 # so the path never appears in sha256sum's output (no `\`-escaping, no filename
 # parsing). A tracked file absent on disk (e.g. `rm` without `git rm`) is recorded
 # as the literal hash "ABSENT" so verify still sees it as drift. Pathological names
-# containing a tab or newline are not supported (none exist in this repo).
+# containing a tab or newline are not supported by either manifest (none exist here).
 hash_tracked() {
   local wd="$1" out="$2" f h
   : > "$out"
@@ -75,43 +78,161 @@ hash_tracked() {
   done < <(git -C "$wd" ls-files -z)
 }
 
+# `ls-files --stage` captures the index state that a worktree-only hash cannot see,
+# including staged versions that differ from the worktree and conflict stages.
+hash_index() {
+  git -C "$1" ls-files --stage -z > "$2"
+}
+
 case "$cmd" in
   snapshot)
     mkdir -p "$guarddir"
     # `git stash create` builds a dangling commit from the current index+worktree
-    # WITHOUT modifying either; empty output means the tree is clean, so the safe
-    # restore source is HEAD. Either way the SHA is a valid `git checkout` source
-    # for the duration of the run (not garbage-collected while referenced here).
-    baseline="$(git -C "$workdir" stash create 2>/dev/null || true)"
-    if [ -z "$baseline" ]; then
+    # WITHOUT modifying either. Accept only a real commit; during a merge conflict
+    # Git can print an error instead of a SHA, and HEAD cannot restore that dirty tree.
+    candidate="$(git -C "$workdir" stash create 2>/dev/null || true)"
+    if [ -n "$candidate" ] && git -C "$workdir" cat-file -e "${candidate}^{commit}" 2>/dev/null; then
+      baseline="$candidate"
+    else
       baseline="$(git -C "$workdir" rev-parse --verify HEAD 2>/dev/null || true)"
+      if [ -n "$(git -C "$workdir" status --porcelain --untracked-files=no)" ]; then
+        echo "repo_guard: cannot snapshot dirty tracked state without a valid stash baseline" >&2
+        exit 2
+      fi
     fi
     printf '%s\n' "$baseline" > "$guarddir/baseline"
     hash_tracked "$workdir" "$guarddir/manifest.sha256"
+    hash_index "$workdir" "$guarddir/index.entries"
     echo "repo_guard: snapshot ${id} (baseline=${baseline:-<none>}, $(wc -l < "$guarddir/manifest.sha256") tracked files)"
     ;;
 
   verify)
     [ -f "$guarddir/manifest.sha256" ] || { echo "repo_guard: no snapshot for $id" >&2; exit 2; }
     baseline="$(cat "$guarddir/baseline" 2>/dev/null || true)"
-    cur="$(mktemp "${TMPDIR:-/tmp}/repo_guard.XXXXXX")"
-    trap 'rm -f "$cur"' EXIT
-    hash_tracked "$workdir" "$cur"
+    if [ ! -f "$guarddir/index.entries" ]; then
+      # Older runs stored only a commit SHA: a stash-create commit when dirty, or
+      # HEAD when clean. Identify the stash shape before using parent two, since a
+      # clean HEAD may itself be a merge commit whose second parent is unrelated to
+      # the saved index. Ambiguous stash-like commits fail closed.
+      index_tree=""
+      if [ -n "$baseline" ]; then
+        legacy_info="$(git -C "$workdir" rev-list --parents -n 1 "$baseline" 2>/dev/null || true)"
+        [ -n "$legacy_info" ] || {
+          echo "repo_guard: cannot recover legacy index snapshot for $id: invalid baseline commit" >&2
+          exit 2
+        }
+        read -r -a legacy_parts <<< "$legacy_info"
+        legacy_parent_count=$((${#legacy_parts[@]} - 1))
+        legacy_subject="$(git -C "$workdir" show -s --format=%s "$baseline" 2>/dev/null || true)"
+        legacy_index_subject=""
+        legacy_stash_hint=0
+        case "$legacy_subject" in
+          "WIP on "*) legacy_stash_hint=1 ;;
+        esac
+        if [ "$legacy_parent_count" -eq 2 ]; then
+          legacy_parent1="${legacy_parts[1]}"
+          legacy_parent2="${legacy_parts[2]}"
+          legacy_index_subject="$(git -C "$workdir" show -s --format=%s "$legacy_parent2" 2>/dev/null || true)"
+          case "$legacy_index_subject" in
+            "index on "*) legacy_stash_hint=1 ;;
+          esac
+        fi
 
-    declare -A old new
+        if [ "$legacy_stash_hint" -eq 1 ]; then
+          if [ "$legacy_parent_count" -ne 2 ] || \
+             [[ "$legacy_subject" != "WIP on "* ]] || \
+             [[ "$legacy_index_subject" != "index on "* ]]; then
+            echo "repo_guard: cannot recover legacy index snapshot for $id: ambiguous stash-shaped baseline" >&2
+            exit 2
+          fi
+          legacy_index_parent_info="$(git -C "$workdir" rev-list --parents -n 1 "$legacy_parent2" 2>/dev/null || true)"
+          read -r -a legacy_index_parent_parts <<< "$legacy_index_parent_info"
+          if [ "${#legacy_index_parent_parts[@]}" -ne 2 ] || \
+             [ "${legacy_index_parent_parts[1]}" != "$legacy_parent1" ]; then
+            echo "repo_guard: cannot recover legacy index snapshot for $id: ambiguous stash-shaped baseline" >&2
+            exit 2
+          fi
+          index_tree="$(git -C "$workdir" rev-parse --verify "${legacy_parent2}^{tree}" 2>/dev/null || true)"
+        else
+          # Legacy clean snapshots saved HEAD, including merge commits. The HEAD
+          # tree is their index tree; its second parent is not stash metadata.
+          index_tree="$(git -C "$workdir" rev-parse --verify "${baseline}^{tree}" 2>/dev/null || true)"
+        fi
+      fi
+      [ -n "$index_tree" ] || { echo "repo_guard: no usable index snapshot for $id" >&2; exit 2; }
+      : > "$guarddir/index.entries"
+      while IFS= read -r -d '' entry; do
+        h="${entry%%$'\t'*}"
+        f="${entry#*$'\t'}"
+        read -r mode _ oid <<< "$h"
+        printf '%s %s 0\t%s\0' "$mode" "$oid" "$f" >> "$guarddir/index.entries"
+      done < <(git -C "$workdir" ls-tree -r -z "$index_tree")
+    fi
+    cur="$(mktemp "${TMPDIR:-/tmp}/repo_guard.XXXXXX")"
+    cur_index="$(mktemp "${TMPDIR:-/tmp}/repo_guard.index.XXXXXX")"
+    restore_index="$(mktemp "${TMPDIR:-/tmp}/repo_guard.restore-index.XXXXXX")"
+    trap 'rm -f -- "$cur" "$cur_index" "$restore_index"' EXIT
+    hash_tracked "$workdir" "$cur"
+    hash_index "$workdir" "$cur_index"
+
+    declare -A old new old_index new_index restore_paths worktree_restore_paths
     while IFS=$'\t' read -r h f; do old["$f"]="$h"; done < "$guarddir/manifest.sha256"
     while IFS=$'\t' read -r h f; do new["$f"]="$h"; done < "$cur"
+
+    # Keep all stages for a path together so a changed conflict entry is reported
+    # once and can be restored without flattening the user's unmerged index.
+    while IFS= read -r -d '' entry; do
+      h="${entry%%$'\t'*}"
+      f="${entry#*$'\t'}"
+      if [ -n "${old_index[$f]+x}" ]; then
+        old_index["$f"]+=$'\n'"$h"
+      else
+        old_index["$f"]="$h"
+      fi
+    done < "$guarddir/index.entries"
+    while IFS= read -r -d '' entry; do
+      h="${entry%%$'\t'*}"
+      f="${entry#*$'\t'}"
+      if [ -n "${new_index[$f]+x}" ]; then
+        new_index["$f"]+=$'\n'"$h"
+      else
+        new_index["$f"]="$h"
+      fi
+    done < "$cur_index"
 
     drift=()
     for f in "${!old[@]}"; do
       if [ -z "${new[$f]+x}" ]; then
         drift+=("deleted: $f")                       # un-tracked since snapshot (git rm)
+        restore_paths["$f"]=1
+        worktree_restore_paths["$f"]=1
       elif [ "${old[$f]}" != "${new[$f]}" ]; then
         drift+=("modified: $f")                       # content changed (or now ABSENT)
+        restore_paths["$f"]=1
+        worktree_restore_paths["$f"]=1
       fi
     done
     for f in "${!new[@]}"; do
-      [ -z "${old[$f]+x}" ] && drift+=("added: $f")    # newly tracked since snapshot
+      if [ -z "${old[$f]+x}" ]; then
+        drift+=("added: $f")                         # newly tracked since snapshot
+        restore_paths["$f"]=1
+        worktree_restore_paths["$f"]=1
+      fi
+    done
+    for f in "${!old_index[@]}"; do
+      if [ -z "${new_index[$f]+x}" ]; then
+        drift+=("index deleted: $f")
+        restore_paths["$f"]=1
+      elif [ "${old_index[$f]}" != "${new_index[$f]}" ]; then
+        drift+=("index modified: $f")
+        restore_paths["$f"]=1
+      fi
+    done
+    for f in "${!new_index[@]}"; do
+      if [ -z "${old_index[$f]+x}" ]; then
+        drift+=("index added: $f")
+        restore_paths["$f"]=1
+      fi
     done
 
     if [ "${#drift[@]}" -eq 0 ]; then
@@ -120,17 +241,39 @@ case "$cmd" in
 
     printf '%s\n' "${drift[@]}"
     if [ "$restore" -eq 1 ]; then
-      if [ -z "$baseline" ]; then
-        echo "repo_guard: cannot restore — no baseline recorded" >&2
-      else
-        for d in "${drift[@]}"; do
-          f="${d#*: }"
-          # `added` files do not exist in the baseline; checkout is a no-op error
-          # there (left in place, still reported). modified/deleted restore cleanly.
-          git -C "$workdir" checkout "$baseline" -- "$f" 2>/dev/null \
-            || echo "repo_guard: could not restore $f from baseline" >&2
-        done
-      fi
+      for f in "${!restore_paths[@]}"; do
+        # A path tracked at snapshot can be checked out from the saved worktree
+        # tree, but checkout also writes the index. Restore the index below even
+        # when its entries were not themselves drifted.
+        if [ -n "${worktree_restore_paths[$f]+x}" ] && [ -n "${old[$f]+x}" ]; then
+          if [ "${old[$f]}" = ABSENT ]; then
+            if [ -e "$workdir/$f" ] || [ -L "$workdir/$f" ]; then
+              rm -f -- "$workdir/$f" \
+                || echo "repo_guard: could not remove $f to restore its absent snapshot state" >&2
+            fi
+          elif [ -n "$baseline" ]; then
+            git -C "$workdir" checkout "$baseline" -- ":(literal)$f" 2>/dev/null \
+              || echo "repo_guard: could not restore worktree file $f from baseline" >&2
+          else
+            echo "repo_guard: cannot restore worktree file $f — no baseline recorded" >&2
+          fi
+        fi
+
+        # Rebuild only this path's saved entries. Rewriting the whole index would
+        # disturb paths that were not part of the detected drift.
+        git -C "$workdir" update-index --force-remove -- "$f" 2>/dev/null || true
+        : > "$restore_index"
+        while IFS= read -r -d '' entry; do
+          entry_path="${entry#*$'\t'}"
+          if [ "$entry_path" = "$f" ]; then
+            printf '%s\0' "$entry" >> "$restore_index"
+          fi
+        done < "$guarddir/index.entries"
+        if [ -s "$restore_index" ]; then
+          git -C "$workdir" update-index -z --index-info < "$restore_index" \
+            || echo "repo_guard: could not restore index entries for $f" >&2
+        fi
+      done
     fi
     exit 1
     ;;

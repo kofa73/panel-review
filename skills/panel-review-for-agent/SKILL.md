@@ -108,8 +108,8 @@ either failure so the main conversation can report it and a later `panel-review:
   default. **Never** hand-create, edit, or delete `~/.codex/config.toml` or other
   `~/.codex/*.config.toml` profiles yourself.
 - ✅ Code-under-review integrity is enforced by **`repo_guard`**, not by per-seat sandboxes: snapshot
-  the tracked tree after `resolve_diff`, `verify --restore` after every seat pass (Round 0 + each
-  debate round), and surface any reverted drift in Process notes. Seats write only to the
+  tracked worktree content and index entries after `resolve_diff`, `verify --restore` after every
+  seat pass (Round 0 + each debate round), and surface any reverted drift in Process notes. Seats write only to the
   `/tmp/<id>/work` scratch subtree (outside the repository under review, so no seat's repo-wide
   search returns another seat's work), except that the Claude seat must pass its response to
   `write_seat_raw`, which can atomically write only the derived `/tmp/<id>/raw/` destination.

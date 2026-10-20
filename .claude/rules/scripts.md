@@ -77,13 +77,18 @@ byte-exact.
   `AGY_SEAT_MODEL_FILE` after a successful attempt (issue 63; best effort, nothing depends on it),
   and `preflight` reports a `run_agy` pin that `agy models` no longer lists.
 - `check_contracts` — checks that each generated Gemini prompt starts with prose while agy's
-  print-mode slash-command expansion stays enabled. Both templates start with the `SEAT_CONTRACT`
-  sentinel, and both rendered contracts start with prose. README records why expansion stays enabled
-  for `/boost`.
-- `repo_guard` — protects the code under review. `snapshot` records the tracked tree (a
-  `git stash create` SHA + sha256 manifest) at the start; `verify --restore` after each seat pass
-  reverts and reports tracked-file drift. Guards tracked content only — leaves untracked scratch and
-  the `.panel-review/` cache alone.
+  print-mode slash-command expansion stays enabled, and that `repo_guard` snapshots, reports, and
+  restores logical index entries while refusing an invalid dirty-tree baseline; it also checks the
+  legacy clean-merge versus stash-index recovery contract. Both templates start with the
+  `SEAT_CONTRACT` sentinel, and both rendered contracts start with prose. README records why expansion
+  stays enabled for `/boost`.
+- `repo_guard` — protects the code under review. `snapshot` records tracked worktree content (a
+  `git stash create` SHA + sha256 manifest) and the index's path/mode/object/stage entries; `verify
+  --restore` after each seat pass reverts and reports worktree or index drift. Guards tracked state
+  only — leaves untracked scratch and the `.panel-review/` cache alone. A dirty tracked tree with no
+  valid stash baseline fails closed instead of falling back to HEAD. Legacy snapshots without saved
+  entries derive clean indexes from the baseline commit (including merge commits), and use the second
+  parent only for a baseline with the stash-create structure; ambiguous stash-like baselines fail closed.
 - `run_seat` — dispatch wrapper for the two **CLI** seats: dispatch → `parse_block`; prints the parse
   status. **It does not repair.** Salvaging a slipped block (a malformed fence, or a real review the
   seat forgot to fence) is referee-owned — the seat that wrote it has exited, so any re-dispatch is a

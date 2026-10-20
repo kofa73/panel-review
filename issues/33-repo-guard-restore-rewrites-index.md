@@ -2,7 +2,7 @@
 
 Priority: 33
 
-Status: Pending
+Status: Completed
 
 Source: Panel review `panel-20260816-080558-5ab680af` (Claude + Codex + Gemini), 2026-08-16 — accepted, 2 of 3 seats at Round 0
 
@@ -79,8 +79,8 @@ after a "successful" restore. That case is at least reported as drift.
 **2026-08-16 — historical scan: the destructive branch has never fired.** Before scheduling this
 issue, every surviving run record was scanned for a real restore. Nothing was found, so the two
 data-loss modes are latent, not active, and this issue was reordered below the cheap fixes (41, and
-34's uncontested options 1 and 5). It stays Pending: nothing prevents the failure, seats have simply
-not drifted a tracked file yet.
+34's uncontested options 1 and 5). It remained Pending at that time because nothing prevented the
+failure; seats had simply not drifted a tracked file yet.
 
 What was scanned:
 
@@ -106,3 +106,10 @@ invisible) leaves no trace by construction. `hash_tracked` (`repo_guard:69`) has
 only, so a seat that ran `git add` would be neither reported nor reverted, and the empty logs above
 cannot rule that out. The likelihood is low — staging without changing content is an odd thing for a
 seat to do — but the scan is silent on it rather than negative.
+
+**2026-10-20 — completed.** `snapshot` now records the index's path/mode/object/stage entries and
+refuses dirty tracked state when Git cannot produce a valid stash baseline; `verify` detects
+index-only drift and restores affected worktree bytes and index entries from their snapshot state.
+Regression tests cover distinct staged/worktree versions, unstaged dirty state, index-only staging,
+legacy stash snapshots, legacy clean merge snapshots, ambiguous legacy baselines, new index paths, and
+the invalid-baseline case.

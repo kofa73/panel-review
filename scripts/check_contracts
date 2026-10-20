@@ -92,6 +92,41 @@ def check_merge_payload_contract(errors, root):
                 )
 
 
+def check_repo_guard_contract(errors, root):
+    """Keep the repeated review-time guard honest about logical index state."""
+    script = read(root, "scripts/repo_guard")
+    for invariant, marker in (
+        ("index snapshot", "ls-files --stage -z"),
+        ("index-only drift reporting", 'drift+=("index modified: $f")'),
+        ("saved index-entry restoration", "update-index -z --index-info"),
+        ("dirty-state baseline refusal", "cannot snapshot dirty tracked state without a valid stash baseline"),
+        ("legacy stash identification", '"WIP on "*'),
+        ("legacy stash index-parent identification", '"index on "*'),
+        ("legacy clean-baseline tree", '${baseline}^{tree}'),
+        ("ambiguous legacy-baseline refusal", "ambiguous stash-shaped baseline"),
+    ):
+        if marker not in script:
+            fail(errors, "repo-guard-index-contract", "scripts/repo_guard", f"missing {invariant}")
+
+    readme = read(root, "README.md")
+    row = next((line for line in readme.splitlines() if line.startswith("| `repo_guard` |")), "")
+    if (
+        "index's path/mode/object/stage entries" not in row
+        or "fails closed" not in row
+        or "including merge commits" not in row
+        or "stash-create structure" not in row
+    ):
+        fail(errors, "repo-guard-index-contract", "README.md", "ownership row omits index or baseline behavior")
+
+    protocol = read(root, "skills/panel-review-for-agent/references/protocol.md")
+    if (
+        "clean baselines (including merges) use their own tree" not in protocol
+        or "validated second parent's tree" not in protocol
+        or "ambiguous candidates fail closed" not in protocol
+    ):
+        fail(errors, "repo-guard-index-contract", "protocol.md", "legacy index recovery behavior is missing")
+
+
 def check_rendered_contracts(errors):
     recognized = {tag for phase in PHASES.values() for tag in phase["required_blocks"]}
     for phase, definition in PHASES.items():
@@ -151,6 +186,7 @@ def check_rendered_contracts(errors):
 
 def check_tree(errors, root):
     check_merge_payload_contract(errors, root)
+    check_repo_guard_contract(errors, root)
 
     templates = {
         "round0": read(root, "prompts/blind_pass.tmpl"),

@@ -154,18 +154,19 @@ it — one measured Gemini pass spent 1m48s of its 2m54s waiting for a build it 
 (`issues/57-seats-rebuild-the-repository-under-review.md`).
 
 That instruction is a convenience, not a control, and only the tracked half of it is enforced: the
-checkout is not preventively read-only, so the referee snapshots the tracked tree at the start
-(`scripts/repo_guard`) and, after every seat pass, detects and reverts honest tracked-file drift and
-flags it loudly in the verdict's Process notes. This restores tracked repository content; it does not
-confine a seat, protect untracked files, or protect anything outside the repository. Safety rests on
-that restoration plus the disposable container the panel runs in — not on per-seat sandboxes.
+checkout is not preventively read-only, so the referee snapshots tracked worktree content and index
+entries at the start (`scripts/repo_guard`) and, after every seat pass, detects and reverts honest
+tracked-file or index drift and flags it loudly in the verdict's Process notes. This restores tracked
+repository content and the saved index entries; it does not confine a seat, protect untracked files,
+or protect anything outside the repository. Safety rests on that restoration plus the disposable
+container the panel runs in — not on per-seat sandboxes.
 
 > **⚠️ Run this in an isolated environment (Docker container or a throwaway VM).** To let the seats
 > use tilth and run scratch scripts, all three run with **broad write/execute permissions**: Codex
 > with its sandbox bypassed (`--dangerously-bypass-approvals-and-sandbox`), Gemini/`agy` with
 > `--dangerously-skip-permissions`, and the Claude seat with `Bash`. `repo_guard` protects **only the
-> code under review** (it reverts changes to tracked files in your repo) — it does **not** confine a
-> seat from touching the rest of the machine: other directories, your home dir, credentials, the
+> tracked worktree content and index entries in the repository under review** — it does **not** confine
+> a seat from touching the rest of the machine: other directories, your home dir, credentials, the
 > network. Treat a panel run as executing untrusted agentic code with your user's privileges, and
 > isolate it accordingly. Do not run it directly on a host you care about.
 
@@ -521,11 +522,11 @@ These hooks provide bounded runtime enforcement, not a security boundary.
 | `diff_hash` | Stable hash of the resolved diff, for the manifest and the resume/diverged check |
 | `assemble` | Splice scope + a diff **reference** (or card paths) + the rendered seat contract into a prompt template without an LLM retyping them |
 | `seat_contract.py` | Authoritative seat-output contract: defines fields, examples, stance values, phase-required blocks/cardinality, normalization, and renders panel-size-correct Round-0/debate instructions. Its Python interface is shared by runtime validators; its `render` command supports exceptional manual prompt assembly |
-| `check_contracts` | Validate the ownership map, every rendered panel-size/phase variant, runtime-valid examples, merge-payload rejection behavior, the prose-first Gemini prompt prefix, and forbidden legacy wording; failures name the violated invariant and location |
+| `check_contracts` | Validate the ownership map, every rendered panel-size/phase variant, runtime-valid examples, merge-payload rejection behavior, the prose-first Gemini prompt prefix, repo_guard's index and legacy-baseline recovery contract, and forbidden legacy wording; failures name the violated invariant and location |
 | `resolve_instructions` | Resolve `manifest.instructions` to the seat-facing text for the two deterministic cases (verbatim author text, or the "(none …)" line); returns a compose **sentinel** (exit 3) for `auto`, the only case that needs the referee to write neutral context |
 | `stage_review_profile` | Resolve and validate one built-in or external profile source, atomically snapshot its exact bytes, and return its source-path/size/SHA-256 metadata; the source is never reloaded after run creation |
 | `run_codex` | The **only** way to call the Codex seat — defaults `--profile panel-review` (auto-creates the profile from a shipped default) and runs with the sandbox **bypassed** (`--dangerously-bypass-approvals-and-sandbox`, the only mode where Codex's MCP/tilth runs and it can write scratch; integrity is enforced by `repo_guard`, not this sandbox). Runs in Codex's human output mode, which reports the model that actually bound; with `CODEX_SEAT_MODEL_FILE` set it records that binding (the profile pin is outranked by a reviewed repository's own Codex config) |
-| `repo_guard` | Protect the **code under review**: `snapshot` records the tracked tree (a `git stash create` SHA + a sha256 manifest) at the start; `verify --restore` after each seat pass detects, reverts, and reports any tracked-file drift. Untracked scratch and the `.panel-review/` cache are left alone |
+| `repo_guard` | Protect the **code under review**: `snapshot` records the tracked worktree (`git stash create` SHA + sha256 manifest) and the index's path/mode/object/stage entries; it fails closed if dirty tracked state has no valid stash baseline. `verify --restore` after each seat pass detects, reverts, and reports worktree or index drift. Legacy snapshots derive clean indexes from the baseline commit (including merge commits), and use a second parent only for a baseline with the stash-create structure; ambiguous stash-like baselines fail closed. Untracked scratch and the `.panel-review/` cache are left alone |
 | `run_agy` | The **only** way to call the Gemini seat — pins the model by its **exact agy display label** (never a slug: an unrecognized `--model` is not an error, agy silently runs the user's `settings.json` default), a 15-min `--print-timeout` budget, and the flag-binding invocation (prompt on **stdin with no bare `--print`**, since agy's `--print` takes the prompt as its argument and would otherwise swallow `--model`); retries once with a pinned fallback model from a different Gemini family if the primary fails or exhausts its `--print-timeout` (whose expiry has surfaced differently across agy versions — exit 0 with `Error: timed out waiting for response` at the end of stdout on ≤1.1.18, exit 1 with `Error: timeout waiting for response` on stderr and empty stdout on 1.1.20, and exit 0 with partial stdout plus `[agy] print timeout after <duration> with turn in progress; returning partial output` on stderr on 1.1.28+ / measured on 1.4.3 — so `run_agy` captures and forwards stderr, checks both the stdout tail and stderr, and suppresses stdout if both models fail). agy expands leading slash commands in print mode, including the wrapper's stdin form (measured on 1.4.3). Expansion stays enabled for `/boost` (issue 60). Both prompt templates start with the prose seat contract, and `check_contracts` enforces that prefix. With `AGY_SEAT_MODEL_FILE` set it gives each attempt its own `--log-file` beside that file (when `agy --help` offers the flag) and, after a successful attempt only, records the label agy logged as bound |
 | `run_seat` | Dispatch one **CLI** seat (Codex or Gemini) for a tag, parse the block, and print the parse status (0 engaged · 4 no block · 5 malformed). **It does not repair.** Salvaging a slipped CLI block — a malformed fence, or a real review the seat forgot to fence — is the **referee's** job, not a script's: the seat that wrote the block has exited, so any "repair" re-dispatch is a fresh cold model whose only input is the raw file the referee already has, and deciding *"real review or down-seat stub?"* is an LLM judgment, not a grep heuristic. On a 4/5 the referee reads that one CLI seat's raw and rewrites it well-formed (see "Salvage" in the referee protocol); debate salvage is installed through `round salvage-debate`, which requires the canonical `.salvaged` side path and never overwrites the original. The Claude seat instead writes through `write_seat_raw`, which validates before installation and fails closed. CLI seats are long-running; `panel-review-cli-barrier` owns their background launch and wait mechanism. |
 | `await_seats` | **Barrier** over the CLI seats: runs them all concurrently (each through `run_seat`, so dispatch + parse are unchanged — neither repairs) inside **one** job, waits for every seat with a configurable per-seat outer timeout (`--seat-timeout`, default 2400s — the backstop `run_codex` otherwise lacks), writes each seat's final status plus one combined `--done` summary, and exits. The referee runs it only through the foreground **`panel-review-cli-barrier` Agent**, dispatched in the same assistant response as the foreground Claude seat. The two Agent calls execute concurrently and return together, so the referee never polls seat files while either branch is live. |
@@ -714,10 +715,11 @@ discipline.
   `~/.codex/*.config.toml` profile to their tools.
 - Seats must write nothing inside the repository under review — tracked or not, which rules out
   builds into a build tree; read-only compile checks are encouraged in their place.
-  `scripts/repo_guard` snapshots the tracked tree and
-  detects and auto-reverts honest tracked-file drift after every seat pass. This restoration is not
-  confinement and does not protect untracked files or paths outside the repository. Intended seat
-  writes stay under `/tmp/<ID>/work/` (outside the repository under review), except that the Claude seat passes its complete
+  `scripts/repo_guard` snapshots tracked worktree content and index entries and
+  detects and auto-reverts honest tracked-file or index drift after every seat pass. This restoration
+  is not confinement and does not protect untracked files or paths outside the repository. Intended
+  seat writes stay under `/tmp/<ID>/work/` (outside the repository under review), except that the
+  Claude seat passes its complete
   response to `write_seat_raw`, which can write only the derived `/tmp/<ID>/raw/` path.
 - `index.json` is written **only** through the `index` / `sweep` scripts; cards **only** through
   `project_card` / `regen_cards`. Never hand-write state files.

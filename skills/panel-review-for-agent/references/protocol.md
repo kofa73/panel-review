@@ -33,8 +33,10 @@ reference; grepping a script for its flags wastes a full source-read into your c
 "$SC/preflight"                              # env check; tail "GEMINI_PIN_UNLISTED: yes|no|unknown"/"CODEX_MODEL_LAYER: yes|no"/"CODEX: yes|no"/"GEMINI: yes|no"; exit 1 = core unusable (needs jq, git, work-tree, ≥1 peer). CODEX_MODEL_LAYER: yes = a repo/cwd/tree Codex config outranks our model pin; GEMINI_PIN_UNLISTED: yes = agy no longer lists a run_agy pin; both are warnings `start` already asked about, never yours to act on
 "$SC/resolve_instructions" --id <id>         # manifest.instructions -> verbatim/none text (exit 0) OR compose sentinel (exit 3 = auto, you compose)
 "$SC/assemble" TMPL KEY=file ...             # splice files into a template's {{KEY}} sentinels -> stdout
-"$SC/repo_guard" snapshot --id <id> --workdir <dir>          # record tracked-tree baseline (git stash create SHA + sha256 manifest)
-"$SC/repo_guard" verify   --id <id> --workdir <dir> --restore  # re-hash tracked files; auto-revert drift; nonzero + drift list = a seat touched the code
+"$SC/repo_guard" snapshot --id <id> --workdir <dir>          # record tracked worktree bytes and index entries; dirty state requires a valid stash baseline
+"$SC/repo_guard" verify   --id <id> --workdir <dir> --restore  # compare tracked bytes and index; restore drift; nonzero + drift list = a seat changed tracked state
+# For legacy snapshots without index.entries, clean baselines (including merges) use their own tree;
+# only a stash-shaped baseline uses its validated second parent's tree; ambiguous candidates fail closed.
 "$SC/run_codex" < prompt > raw 2> err        # Codex seat (pins --profile panel-review; sandbox BYPASSED so MCP/tilth + scratch work — repo_guard enforces integrity; auto-creates the profile)
 "$SC/run_agy"   < prompt > raw 2> err        # Gemini seat (pins model/timeout/stdin)
 "$SC/run_seat" --seat <codex|gemini> --tag <tag> --prompt <f> --raw <f> --parsed <f> [--label L]  # dispatch a CLI seat + parse; parse status on stdout (no repair — you salvage a 4/5, see "Salvage")
@@ -839,8 +841,8 @@ surfacing origins only here. Severity → headings: `critical`/`high` → **Crit
   passes are not recorded. When `model` differs from `requested`, say so: agy substituted a model.
   Absent = no successful Gemini pass recorded one (an agy without `--log-file`, or an unrecognized log)
 - **guard violations:** if `/tmp/$id/origins/guard.round0.txt` or `guard.debate.txt` is non-empty, list
-  each drifted tracked file **loudly** here ("⚠ a seat modified `<file>` during review; reverted from
-  the start-of-review snapshot") — the review continued, but a seat broke the read-only contract
+  each drifted tracked path **loudly** here ("⚠ a seat changed `<file>` during review; restored from
+  the start-of-review worktree and index snapshot") — the review continued, but a seat broke the read-only contract
 ```
 
 Before cleanup, persist the final verdict to the durable artifact that outlives cleanup/discard.

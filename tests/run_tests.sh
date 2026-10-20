@@ -536,7 +536,105 @@ printf 'dirty\n' > "$rg/a.txt"
 printf 'tampered2\n' > "$rg/a.txt"
 "$SC/repo_guard" verify --id "$gid2" --workdir "$rg" --restore >/dev/null 2>&1 || true
 assert_eq "dirty-at-snapshot restores the dirty bytes (not HEAD)" 'dirty' "$(cat "$rg/a.txt")"
-rm -rf "/tmp/$gid" "/tmp/$gid2"
+assert_eq "dirty-at-snapshot preserves the original index entry" 'orig' "$(git -C "$rg" show :a.txt)"
+assert_eq "dirty-at-snapshot remains unstaged after restore" ' M a.txt' "$(git -C "$rg" status --porcelain -- a.txt)"
+# Restoring a dirty worktree must preserve a distinct staged version from the same snapshot.
+gid3="$PREFIX-guard-staged"; rm -rf "/tmp/$gid3"
+printf 'staged\n' > "$rg/a.txt"
+git -C "$rg" add a.txt
+printf 'worktree\n' > "$rg/a.txt"
+"$SC/repo_guard" snapshot --id "$gid3" --workdir "$rg" >/dev/null 2>&1
+printf 'tampered-staged\n' > "$rg/a.txt"
+git -C "$rg" add a.txt
+"$SC/repo_guard" verify --id "$gid3" --workdir "$rg" --restore > "$TMP/guard.staged" 2>/dev/null; assert_exit "staged and worktree drift is reported" 1 "$?"
+assert_eq "restore keeps the snapshot's staged version" 'staged' "$(git -C "$rg" show :a.txt)"
+assert_eq "restore keeps the snapshot's worktree version" 'worktree' "$(cat "$rg/a.txt")"
+assert_eq "distinct staged and worktree versions remain distinct" 'MM a.txt' "$(git -C "$rg" status --porcelain -- a.txt)"
+# Staging an already-dirty snapshot changes only index state; verify must still see and undo it.
+git -C "$rg" reset -q HEAD -- a.txt
+gid4="$PREFIX-guard-index-only"; rm -rf "/tmp/$gid4"
+printf 'dirty-index-only\n' > "$rg/a.txt"
+"$SC/repo_guard" snapshot --id "$gid4" --workdir "$rg" >/dev/null 2>&1
+git -C "$rg" add a.txt
+"$SC/repo_guard" verify --id "$gid4" --workdir "$rg" > "$TMP/guard.index-only" 2>/dev/null; assert_exit "index-only drift is reported" 1 "$?"
+assert_file_contains "index-only drift names the path" 'index modified: a.txt' "$TMP/guard.index-only"
+assert_eq "index-only drift reports no worktree change" '1' "$(wc -l < "$TMP/guard.index-only" | tr -d ' ')"
+"$SC/repo_guard" verify --id "$gid4" --workdir "$rg" --restore >/dev/null 2>&1; assert_exit "index-only restore reports drift" 1 "$?"
+assert_eq "index-only restore keeps the dirty worktree bytes" 'dirty-index-only' "$(cat "$rg/a.txt")"
+assert_eq "index-only restore returns the original index entry" 'orig' "$(git -C "$rg" show :a.txt)"
+assert_eq "index-only restore leaves the file unstaged" ' M a.txt' "$(git -C "$rg" status --porcelain -- a.txt)"
+# A run created before index.entries existed can recover the saved stage-0 index from its stash parent.
+gid5="$PREFIX-guard-legacy-index"; rm -rf "/tmp/$gid5"
+"$SC/repo_guard" snapshot --id "$gid5" --workdir "$rg" >/dev/null 2>&1
+rm -f "/tmp/$gid5/guard/index.entries"
+git -C "$rg" add a.txt
+"$SC/repo_guard" verify --id "$gid5" --workdir "$rg" --restore > "$TMP/guard.legacy-index" 2>/dev/null; assert_exit "legacy snapshot index drift is restored" 1 "$?"
+assert_file_contains "legacy snapshot reports index-only drift" 'index modified: a.txt' "$TMP/guard.legacy-index"
+assert_eq "legacy snapshot keeps dirty worktree bytes" 'dirty-index-only' "$(cat "$rg/a.txt")"
+assert_eq "legacy snapshot restores the saved index entry" 'orig' "$(git -C "$rg" show :a.txt)"
+# A legacy clean snapshot of a merge commit must use the merge tree, not its second parent's tree.
+rg_merge="$TMP/guard-merge"; mkdir -p "$rg_merge"
+(
+  cd "$rg_merge" || exit 1
+  git init -q -b main
+  git config user.name test
+  git config user.email test@example.invalid
+  printf 'base\n' > base.txt
+  git add base.txt
+  git commit -qm base
+  git checkout -qb topic
+  printf 'topic\n' > topic.txt
+  git add topic.txt
+  git commit -qm topic
+  git checkout -q main
+  printf 'main\n' > main.txt
+  git add main.txt
+  git commit -qm main
+  git merge --no-ff -qm 'merge topic' topic
+)
+gid8="$PREFIX-guard-legacy-merge"; rm -rf "/tmp/$gid8"
+merge_index_before="$(git -C "$rg_merge" ls-files --stage)"
+"$SC/repo_guard" snapshot --id "$gid8" --workdir "$rg_merge" >/dev/null 2>&1
+rm -f "/tmp/$gid8/guard/index.entries"
+"$SC/repo_guard" verify --id "$gid8" --workdir "$rg_merge" --restore > "$TMP/guard.legacy-merge" 2> "$TMP/guard.legacy-merge.err"; assert_exit "legacy clean merge snapshot reports no drift" 0 "$?"
+assert_eq "legacy clean merge emits no drift" '' "$(cat "$TMP/guard.legacy-merge")"
+assert_eq "legacy clean merge keeps all index entries" "$merge_index_before" "$(git -C "$rg_merge" ls-files --stage)"
+assert_eq "legacy clean merge remains clean" '' "$(git -C "$rg_merge" status --porcelain)"
+# A stash-like message without the stash parent structure is ambiguous and must not be guessed.
+git -C "$rg_merge" commit --amend -qm 'WIP on main: ambiguous baseline'
+gid9="$PREFIX-guard-legacy-ambiguous"; rm -rf "/tmp/$gid9"
+"$SC/repo_guard" snapshot --id "$gid9" --workdir "$rg_merge" >/dev/null 2>&1
+rm -f "/tmp/$gid9/guard/index.entries"
+"$SC/repo_guard" verify --id "$gid9" --workdir "$rg_merge" > "$TMP/guard.legacy-ambiguous" 2> "$TMP/guard.legacy-ambiguous.err"; assert_exit "ambiguous legacy stash-like baseline fails closed" 2 "$?"
+assert_file_contains "ambiguous legacy baseline explains the failure" 'ambiguous stash-shaped baseline' "$TMP/guard.legacy-ambiguous.err"
+# A path first staged after the snapshot returns to untracked state; its worktree bytes are left alone.
+gid6="$PREFIX-guard-new-index"; rm -rf "/tmp/$gid6"
+"$SC/repo_guard" snapshot --id "$gid6" --workdir "$rg" >/dev/null 2>&1
+printf 'new staged file\n' > "$rg/new.txt"
+git -C "$rg" add new.txt
+"$SC/repo_guard" verify --id "$gid6" --workdir "$rg" --restore > "$TMP/guard.new-index" 2>/dev/null; assert_exit "new index path is reported" 1 "$?"
+assert_file_contains "new index path has an index drift entry" 'index added: new.txt' "$TMP/guard.new-index"
+assert_eq "new staged path is removed from the index" '' "$(git -C "$rg" ls-files -- new.txt)"
+assert_eq "new staged path remains outside the tracked-file boundary" 'new staged file' "$(cat "$rg/new.txt")"
+# A failed stash snapshot during a merge conflict must stop the review instead of falling back to HEAD.
+rg_conflict="$TMP/guard-conflict"; mkdir -p "$rg_conflict"
+git -C "$rg_conflict" init -q -b main
+git -C "$rg_conflict" config user.name test
+git -C "$rg_conflict" config user.email test@example.invalid
+printf 'base\n' > "$rg_conflict/a.txt"
+git -C "$rg_conflict" add a.txt
+git -C "$rg_conflict" commit -qm base
+git -C "$rg_conflict" checkout -qb topic
+printf 'topic\n' > "$rg_conflict/a.txt"
+git -C "$rg_conflict" commit -qam topic
+git -C "$rg_conflict" checkout -q main
+printf 'main\n' > "$rg_conflict/a.txt"
+git -C "$rg_conflict" commit -qam main
+git -C "$rg_conflict" merge topic >/dev/null 2>&1 || true
+gid7="$PREFIX-guard-conflict"; rm -rf "/tmp/$gid7"
+"$SC/repo_guard" snapshot --id "$gid7" --workdir "$rg_conflict" > "$TMP/guard.conflict.out" 2> "$TMP/guard.conflict.err"; assert_exit "unmerged tracked state refuses an invalid baseline" 2 "$?"
+assert_file_contains "snapshot explains why the unmerged state was refused" 'cannot snapshot dirty tracked state without a valid stash baseline' "$TMP/guard.conflict.err"
+rm -rf "/tmp/$gid" "/tmp/$gid2" "/tmp/$gid3" "/tmp/$gid4" "/tmp/$gid5" "/tmp/$gid6" "/tmp/$gid7" "/tmp/$gid8" "/tmp/$gid9"
 
 # ---------------------------------------------------------------------------
 section "birth_index — mechanical Round-0 state / flags / coverage"
