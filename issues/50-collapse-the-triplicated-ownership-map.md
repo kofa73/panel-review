@@ -2,7 +2,7 @@
 
 Priority: 50
 
-Status: Pending
+Status: Completed
 
 Source: Simplification panel (Opus §1.2), 2026-08-16
 
@@ -48,3 +48,10 @@ Sequence this after issues 42 and 44 so the removed rows are not corrected twice
 - Do not delete `.claude/rules/scripts.md`. It is the file that loads exactly when it is needed.
 - Do not move the trust model, hard constraints, or session requirements out of README. Those are
   what a user must read before the first run.
+
+## Resolution
+
+Replaced README's per-script component table with a short overview of the command skills, referee,
+seats, round orchestration, seat contract, and wrappers, with links to `CONTRACTS.md` and the script
+editing map. The detailed ownership references remain in their intended locations; README's session
+requirements, design decisions, trust model, and hard constraints remain in place.
