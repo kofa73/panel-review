@@ -348,11 +348,11 @@ def check_tree(errors, root):
                 "uses the retired background-helper description",
             )
         for required in (
-            "Subagent spawn limit reached",
+            "Concurrent subagent limit reached",
+            "refuses to start this Agent dispatch",
             "do not perform the referee's work",
-            "do not retry the Agent call",
+            "or retry the dispatch",
             "Leave the run intact",
-            "stop here without applying",
             "/clear",
             "panel-review:resume",
         ):
@@ -363,6 +363,18 @@ def check_tree(errors, root):
                     f"skills/{name}/SKILL.md",
                     f"missing `{required}` handling",
                 )
+        delivery_instruction = (
+            "continue to Step 5"
+            if name == "start"
+            else "continue to `start`'s artifact-delivery flow"
+        )
+        if delivery_instruction not in command_text:
+            fail(
+                errors,
+                "agent-spawn-budget",
+                f"skills/{name}/SKILL.md",
+                f"does not continue to artifact validation after a refused dispatch",
+            )
 
     if "Step 4 form" not in commands["start"].partition("**Await its single return")[2]:
         fail(
@@ -374,10 +386,10 @@ def check_tree(errors, root):
 
     start_delivery = normalized(commands["start"].partition("## Step 5")[2])
     for required in (
-        "PANEL_REVIEW_FAILED",
-        "fixed status does not disclose",
-        "start a fresh conversation",
-        "every other returned status or Agent-tool failure",
+        "whether it returns, fails, or is refused",
+        "Do not use the return status to decide whether an artifact exists",
+        "Check the artifact for `PANEL_REVIEW_FAILED id=<ID>` and Agent-tool failures too",
+        "After every referee Agent dispatch",
         "/clear",
         "panel-review:resume",
     ):
@@ -392,7 +404,8 @@ def check_tree(errors, root):
     bootstrap_text = normalized(bootstrap)
     bootstrap_lower = bootstrap_text.lower()
     for required in (
-        "subagent spawn limit reached",
+        "concurrent subagent limit reached",
+        "another orchestration reason",
         "do not perform the missing agent's work",
         "do not retry either agent call",
         "do not treat this as an ordinary down-seat pass",
@@ -405,6 +418,48 @@ def check_tree(errors, root):
                 "agent-spawn-budget",
                 "skills/panel-review-for-agent/SKILL.md",
                 f"missing `{required}` handling",
+            )
+
+    for relative, text in (
+        ("README.md", readme),
+        ("skills/start/SKILL.md", commands["start"]),
+        ("skills/resume/SKILL.md", commands["resume"]),
+        ("skills/continue/SKILL.md", commands["continue"]),
+    ):
+        if re.search(r"(?i)subagent spawn limit reached|session spawn limit", text):
+            fail(
+                errors,
+                "agent-spawn-budget",
+                relative,
+                "retains the removed per-session spawn-limit guidance",
+            )
+
+    for required in (
+        "after every referee agent call",
+        "including a failed call",
+        "panel_review_failed",
+        "saved artifact",
+    ):
+        if required not in normalized(readme).lower():
+            fail(
+                errors,
+                "artifact-after-agent-failure",
+                "README.md",
+                f"missing `{required}` recovery guidance",
+            )
+
+    for required in (
+        "after every agent call",
+        "including a failed tool call",
+        "fixed failure return",
+        "saved artifact",
+    ):
+        if required not in verdict.lower():
+            fail(
+                errors,
+                "artifact-after-agent-failure",
+                "rendered:verdict",
+                f"missing `{required}` recovery guidance",
             )
 
     barrier_text = normalized(barrier)
@@ -464,8 +519,10 @@ def check_tree(errors, root):
     if "only way forward" in readme_lower:
         fail(errors, "divergence-recovery", "README.md", "still presents discard as the only recovery")
     for required in (
-        "subagent spawn limit reached",
+        "concurrent subagent limit reached",
         "not a down-seat pass",
+        "including a failed call or a `panel_review_failed` return",
+        "valid report even if the final return failed",
         "/clear",
         "panel-review:resume",
     ):
@@ -476,6 +533,14 @@ def check_tree(errors, root):
                 "README.md",
                 f"public recovery guidance is missing `{required}`",
             )
+
+    if "refuses a dispatch before this protocol starts" not in verdict.lower():
+        fail(
+            errors,
+            "artifact-after-agent-failure",
+            "rendered:verdict",
+            "does not distinguish a refused dispatch from a failed final response",
+        )
 
     forbidden_debate_commands = (
         (r'\$SC/merge_payload\b', "merge_payload"),

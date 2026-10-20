@@ -198,14 +198,32 @@ class ContractConsistencyTest(unittest.TestCase):
             (
                 "agent-spawn-budget",
                 "skills/panel-review-for-agent/SKILL.md",
-                "Subagent spawn limit reached",
-                "Subagent capacity unavailable",
+                "Concurrent subagent limit reached",
+                "Concurrent agent limit reached",
+            ),
+            (
+                "agent-spawn-budget",
+                "README.md",
+                "including a failed call or a `PANEL_REVIEW_FAILED` return",
+                "including a successful call or a `PANEL_REVIEW_FAILED` return",
             ),
             (
                 "agent-spawn-budget",
                 "skills/start/SKILL.md",
-                "fixed status does not disclose",
-                "fixed status discloses",
+                "refuses to start this Agent dispatch",
+                "refuses this Agent dispatch after the referee starts",
+            ),
+            (
+                "agent-spawn-budget",
+                "skills/start/SKILL.md",
+                "Check the artifact for `PANEL_REVIEW_FAILED id=<ID>`",
+                "Skip artifact validation for `PANEL_REVIEW_FAILED id=<ID>`",
+            ),
+            (
+                "artifact-after-agent-failure",
+                "skills/panel-review-for-agent/references/protocol.md",
+                "including a failed tool",
+                "including a successful tool",
             ),
             (
                 "bash-timeout-contract",

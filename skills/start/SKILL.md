@@ -193,11 +193,10 @@ prompt: |
 The agent reconstructs all state from `/tmp/<id>/`, runs the loop, persists the verdict artifact, and
 cleans up only after successful persistence. Run from cwd = repo root.
 
-If this Agent call fails with the exact Claude Code error `Subagent spawn limit reached`, fail closed:
-do not perform the referee's work in the main context and do not retry the Agent call in this
-conversation. Leave the run intact, tell the user to start a fresh conversation (normally `/clear`),
-then invoke `panel-review:resume`. Apply the same handling to the low-severity gate's Step 4-form
-re-dispatch below, then stop here without applying the artifact-delivery flow.
+If Claude Code refuses to start this Agent dispatch with `Concurrent subagent limit reached`, fail
+closed: do not perform the referee's work in the main context or retry the dispatch. Leave the run
+intact and continue to Step 5, which checks for a saved artifact before reporting the refusal. Apply
+the same handling to the low-severity gate's Step 4-form re-dispatch below.
 
 **Await its single return — do not poke it.** Internally, each pass issues the foreground CLI-barrier
 and Claude-seat Agent calls together, and the referee resumes only after both return. The paired calls
@@ -209,20 +208,14 @@ act only on its final return. (A genuine interruption — the human cancels — 
 
 ## Step 5 — validate artifact-only delivery (and handle the low-severity gate)
 
-Apply this after every referee Agent call in this command, whether it returns or fails, including the
-gate-time `mode=resume` call below, except the exact outer spawn-limit failure stopped in Step 4 and
-the fixed review-failure early stop defined next. An Agent's return is only a small status stub; it is
-never a report transport. Do not parse artifact YAML or copy the verdict body into the main
-conversation.
+Apply this after every referee Agent call in this command, whether it returns, fails, or is refused,
+including the gate-time `mode=resume` call below. Do not use the return status to decide whether an
+artifact exists. A status stub is never a report transport. Do not parse artifact YAML or copy the
+verdict body into the main conversation. Check the artifact for `PANEL_REVIEW_FAILED id=<ID>` and
+Agent-tool failures too.
 
-- **The Agent returned `PANEL_REVIEW_FAILED id=<ID>`** → report that the review failed before a
-  validated report was produced and the run was kept. The fixed status does not disclose whether a
-  nested Agent call hit the session spawn limit, so use the safe resumable recovery: tell the user to
-  start a fresh conversation (normally `/clear`) and invoke `panel-review:resume`. Stop without
-  cleanup or artifact delivery.
-
-For every other returned status or Agent-tool failure, ask the deterministic reader to validate and
-classify the artifact against the run minted above:
+After every referee Agent dispatch, ask the deterministic reader to validate and classify the artifact
+against the run minted above:
 
 ```bash
 if DELIVERY="$("$SC/read_verdict_artifact" --delivery --id "$ID" --scope "$scope" --diff-hash "$DH" --run-epoch "$EPOCH")"; then
@@ -234,9 +227,11 @@ else
 fi
 ```
 
-- **Reader failure** → if the Agent also failed, surface its failure normally. If the Agent returned
-  its ready stub but validation failed, report that no validated final report was produced. In either
-  case leave the run for `panel-review:resume`; never claim completion or advertise the artifact.
+- **Reader failure** → if Claude Code refused the dispatch, report that refusal. If the Agent tool
+  failed, surface its failure normally. If the Agent returned `PANEL_REVIEW_FAILED id=<ID>`, report
+  that no validated final report was produced. If run state remains, tell the user to start a fresh
+  conversation (normally `/clear`) and invoke `panel-review:resume`. Never claim completion or
+  advertise an invalid artifact.
 - **`DELIVERY` is exactly `Done. Final report: /tmp/<ID>.md`** → run
   `"$SC/cleanup" --id "$ID" --workdir "$PWD"` idempotently, then present `DELIVERY` exactly and stop.
   This closes the crash window where artifact persistence succeeded but the referee's cleanup or final

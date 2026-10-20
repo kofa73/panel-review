@@ -2,7 +2,7 @@
 
 Priority: 26
 
-Status: Pending
+Status: Completed
 
 Source: Claude Code documentation review (2.1.222 → 2.1.233), 2026-08-15
 
@@ -57,6 +57,14 @@ The fail-closed *behavior* is right and stays. Only the trigger it names is wron
   cannot read.
 - Do not remove the fail-closed guidance; only re-aim it.
 - Do not fold in the depth-limit documentation — that is issue 22.
+
+## Resolution
+
+Updated the README and runtime instructions to cover `Concurrent subagent limit reached` while
+preserving fail-closed recovery. Refused dispatches and failures after execution now share artifact
+validation, so a failed final response cannot hide a completed report. Updated the `agent-spawn-budget`
+contract and its mutation tests. Bumped the plugin patch version to 1.0.35. Verified
+`scripts/check_contracts --root .` and `./tests/run_tests.sh` (`PASS: 419`, `FAIL: 0`).
 
 ## Comments
 

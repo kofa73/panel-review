@@ -316,9 +316,13 @@ Four more behaviors worth knowing before you run it:
   then retry. Resume and continue proceed only if the resolved diff hash matches the saved diff hash.
   Editing a tracked `.gitignore` changes the reviewed diff too. For a deliberate scope change,
   `panel-review:discard` the run and `panel-review:start` fresh.
-- **Agent-budget exhaustion fails closed.** If Claude Code reports `Subagent spawn limit reached`,
-  panel-review keeps the current checkpoint and stops; this is an orchestration failure, not a
-  down-seat pass. Start a fresh conversation (normally `/clear`) and invoke `panel-review:resume`.
+- **Agent orchestration failures fail closed.** If Claude Code refuses a referee dispatch before it
+  starts with `Concurrent subagent limit reached`, do not run referee work in the main context or
+  retry the dispatch. A nested Agent failure also stops the review and keeps the checkpoint. After
+  every referee Agent call, including a failed call or a `PANEL_REVIEW_FAILED` return, the command
+  validates the saved artifact. It delivers a valid report even if the final return failed. If no
+  valid artifact exists, start a fresh conversation (normally `/clear`) and invoke
+  `panel-review:resume`. Treat these failures as orchestration failures, not a down-seat pass.
 
 The loop is bounded by a per-issue counter (`--issue-rounds`, default 2) and a global ceiling
 (`--max-rounds`, default 4), so it always terminates.
@@ -638,11 +642,12 @@ Neither hook carries or reconstructs the verdict; the artifact reader below rema
 authority. These checks are bounded runtime conformance enforcement, not an absolute isolation or
 security guarantee.
 
-After every referee Agent completion, including a failed final response, `start`, `resume`, and
-`continue` call `read_verdict_artifact --delivery` with the run's expected ID, scope, diff hash, and
-continuation epoch. Only a validated finished artifact or canonical low-only snapshot produces a
-filename; existence alone is not treated as completion. The report body never passes through the
-main conversation. If a hard session/quota limit leaves no main-conversation turn for that check,
+After every referee Agent call, including a refused dispatch, a failed tool call, a failed final
+response, or a `PANEL_REVIEW_FAILED` return, `start`, `resume`, and `continue` call
+`read_verdict_artifact --delivery` with the run's expected ID, scope, diff hash, and continuation
+epoch. Only a validated finished artifact or canonical low-only snapshot produces a filename;
+existence alone is not treated as completion. The report body never passes through the main
+conversation. If a hard session/quota limit leaves no main-conversation turn for that check,
 reset the quota and run `panel-review:result <ID>`. This read-only command validates `/tmp/<ID>.md`
 and prints the recorded review-profile path/hash followed by the verdict body, without depending on
 the normally removed workspace marker or re-running any seat. Legacy artifacts without profile

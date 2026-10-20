@@ -96,10 +96,10 @@ prompt: |
   Persist the canonical verdict artifact, then return only PANEL_VERDICT_READY id=<id>.
 ```
 
-If this Agent call fails with the exact Claude Code error `Subagent spawn limit reached`, fail closed:
-do not perform the referee's work in the main context and do not retry the Agent call in this
-conversation. Leave the run intact, tell the user to start a fresh conversation (normally `/clear`),
-then invoke `panel-review:resume`, then stop here without applying `start`'s artifact-delivery flow.
+If Claude Code refuses to start this Agent dispatch with `Concurrent subagent limit reached`, fail
+closed: do not perform the referee's work in the main context or retry the dispatch. Leave the run
+intact, then continue to `start`'s artifact-delivery flow. If no valid artifact exists, that flow
+directs the user to a fresh conversation (normally `/clear`) and `panel-review:resume`.
 
 **Await its single return — do not poke it.** Each pass issues the foreground CLI-barrier and
 Claude-seat Agent calls together, and the referee resumes only after both return; the paired calls may

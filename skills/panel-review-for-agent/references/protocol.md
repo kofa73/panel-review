@@ -895,6 +895,11 @@ After persistence and conditional cleanup, use the bootstrap's success return. T
 command derives gate/continuation status from the validated artifact and retained canonical index;
 never return the verdict body or a second copy of those counts.
 
+The launching command validates the saved artifact after every Agent call, including a failed tool
+call or a fixed failure return. A failure status does not prove that no report was persisted before
+the final response failed. If Claude Code refuses a dispatch before this protocol starts, the command
+still checks for any artifact saved by an earlier pass before reporting the refusal.
+
 If an error or abort prevents verdict persistence, also do **not** clean up: leave the run state
 intact for `panel-review:resume` and use the bootstrap's review-failure return.
 
