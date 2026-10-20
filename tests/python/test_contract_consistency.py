@@ -28,6 +28,40 @@ class ContractConsistencyTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("instruction contracts: OK", result.stdout)
 
+    def test_session_launcher_must_delegate_prerequisites_to_preflight(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_contract_tree(root)
+            launcher = root / "bin/panel-review-session"
+            text = launcher.read_text(encoding="utf-8")
+            launcher.write_text(
+                text.replace('"$plugin_root/scripts/preflight"', ":", 1),
+                encoding="utf-8",
+            )
+
+            result = self.run_check(root)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("session-launcher-contract", result.stderr)
+            self.assertIn("runs the shared preflight", result.stderr)
+
+    def test_session_launcher_must_ignore_directories_without_run_markers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_contract_tree(root)
+            launcher = root / "bin/panel-review-session"
+            text = launcher.read_text(encoding="utf-8")
+            launcher.write_text(
+                text.replace('[ -f "$marker/.panel-run" ] || continue', ":", 1),
+                encoding="utf-8",
+            )
+
+            result = self.run_check(root)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("session-launcher-contract", result.stderr)
+            self.assertIn("ignores directories without a run marker", result.stderr)
+
     def test_stale_entrypoints_cannot_delete_run_state(self):
         cases = (
             ("start", "- **`stale`**"),
@@ -194,6 +228,7 @@ class ContractConsistencyTest(unittest.TestCase):
             config_dir = root / "claude-config"
             environment = os.environ.copy()
             environment["CLAUDE_DIR"] = str(config_dir)
+            environment["PANEL_REVIEW_BIN_DIR"] = str(config_dir / "bin")
 
             result = subprocess.run(
                 [str(ROOT / "install.sh")],
@@ -235,6 +270,7 @@ class ContractConsistencyTest(unittest.TestCase):
         shutil.copy2(ROOT / "scripts/run_agy", root / "scripts/run_agy")
         shutil.copy2(ROOT / "CONTRACTS.md", root / "CONTRACTS.md")
         shutil.copy2(ROOT / "README.md", root / "README.md")
+        shutil.copytree(ROOT / "bin", root / "bin")
         rules = root / ".claude" / "rules"
         rules.mkdir(parents=True)
         shutil.copy2(ROOT / ".claude/rules/scripts.md", rules / "scripts.md")

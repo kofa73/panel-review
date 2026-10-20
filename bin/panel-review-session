@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+source_path="${BASH_SOURCE[0]}"
+while [ -L "$source_path" ]; do
+  source_dir="$(cd -P "$(dirname "$source_path")" >/dev/null 2>&1 && pwd)"
+  link_target="$(readlink "$source_path")"
+  case "$link_target" in
+    /*) source_path="$link_target" ;;
+    *) source_path="$source_dir/$link_target" ;;
+  esac
+done
+
+bin_dir="$(cd -P "$(dirname "$source_path")" >/dev/null 2>&1 && pwd)"
+plugin_root="$(cd "$bin_dir/.." >/dev/null 2>&1 && pwd)"
+
+# The setting must be visible to preflight and the new Claude process, but the
+# launcher's parent shell keeps its original environment.
+export CLAUDE_CODE_FORK_SUBAGENT=0
+if "$plugin_root/scripts/preflight"; then
+  :
+else
+  preflight_status=$?
+  echo "panel-review-session: preflight failed; Claude Code was not started." >&2
+  exit "$preflight_status"
+fi
+
+marker_root="$PWD/.panel-review"
+shopt -s nullglob
+markers=()
+for marker in "$marker_root"/*/; do
+  [ -f "$marker/.panel-run" ] || continue
+  markers+=("$marker")
+done
+shopt -u nullglob
+
+if [ "${#markers[@]}" -eq 0 ]; then
+  echo "No saved review marker found. Use panel-review:start to begin a review."
+elif [ "${#markers[@]}" -eq 1 ]; then
+  marker="${markers[0]%/}"
+  echo "Saved review marker found: ${marker#"$PWD/"}/"
+  echo "Use panel-review:resume or panel-review:continue. Run panel-review:status to inspect it."
+else
+  marker_ids=()
+  for marker in "${markers[@]}"; do
+    marker="${marker%/}"
+    marker_ids+=("${marker##*/}")
+  done
+  printf 'Multiple review markers found under .panel-review/: %s\n' "${marker_ids[*]}"
+  echo "Run panel-review:status to inspect them before choosing a command."
+fi
+
+exec claude "$@"

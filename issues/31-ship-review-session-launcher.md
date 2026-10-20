@@ -2,7 +2,7 @@
 
 Priority: 31
 
-Status: Pending
+Status: Completed
 
 Source: usability review, 2026-08-16
 
@@ -59,29 +59,23 @@ guard. Under the repo's own trust model this is the honest-accident case the gua
 If the panel owner still wants the check removed after that, it is their call — but it should be a
 recorded decision, not a side effect of adding the launcher.
 
-## Open questions
+## Resolved choices
 
-- **Name.** `panel-review-session`, `claude-review`, `panel-review-shell`. `claude-review` matches
-  the README's existing alias example; a `panel-review-` prefix keeps the plugin's namespace.
-- **Install location.** `~/.local/bin` symlink by default vs. print-the-instruction only. A symlink
-  is a write outside the plugin tree, which `install.sh` does not currently do.
-- **Non-repo directories.** `preflight` requires a git work tree and a writable cwd, so the launcher
-  would refuse to start a session anywhere else. That is correct for a review session and wrong for a
-  general-purpose shell alias — which argues for the `panel-review-` prefixed name over
-  `claude-review`.
-- **Failure policy.** Refuse on any preflight hard failure (recommended, since `start` would refuse
-  anyway) vs. warn and launch.
+- **Name.** `panel-review-session` keeps the command specific to this plugin; it requires a review
+  worktree and is not a general Claude launcher.
+- **Install location.** `install.sh` links into `~/.local/bin` by default. `PANEL_REVIEW_BIN_DIR`
+  overrides the link directory, and `PANEL_REVIEW_INSTALL_LAUNCHER=0` skips the link.
+- **Non-repo directories.** The launcher preserves `preflight`'s refusal outside a writable git
+  worktree.
+- **Failure policy.** The launcher refuses on a preflight failure and prints the check's output.
 
 ## Verification
 
-- Launcher started from a clean repo: preflight passes, session starts, `panel-review:status` inside
-  it reports fork mode acceptable.
-- Launcher started from a directory with no git work tree, or with neither `codex` nor `agy`
-  installed: refuses, prints preflight's output, does not start a session.
-- Launcher started in a workdir with a saved review: says so before launching.
-- `CLAUDE_CODE_FORK_SUBAGENT` remains unset in the parent shell afterward.
-- `preflight`'s fork-mode check and its tests are unchanged.
-- `install.sh` reports what it linked and is idempotent across reruns; `./tests/run_tests.sh` passes.
+- Shell tests exercise startup from a git worktree and refusal outside one, with mock `claude` and
+  Codex commands. They verify forwarded arguments, scoped fork mode, and saved-marker messages.
+- Installer tests verify the executable copy, PATH symlink, rerun behavior, and opt-out.
+- `preflight`'s fork-mode check and its existing tests remain unchanged.
+- `./tests/run_tests.sh` passes.
 
 ## Non-goals
 
@@ -89,3 +83,11 @@ recorded decision, not a side effect of adding the launcher.
 - Do not make the launcher run a review; it only starts a correctly configured session.
 - Do not duplicate any preflight check inside the launcher — call `preflight`.
 - Do not write to shell rc files or export the variable beyond the launched process.
+
+## Resolution (2026-10-20)
+
+Added `bin/panel-review-session`. It resolves its plugin root when called through a PATH symlink,
+sets fork mode off for preflight and Claude, refuses on a preflight failure, reports saved markers,
+and execs `claude` with the supplied arguments. `install.sh` copies the launcher and links it into a
+configurable PATH directory by default. The README documents direct use, installer options, and the
+marketplace alias fallback. The `preflight` fork-mode check remains in place.

@@ -105,6 +105,103 @@ for bad_value in "" "1" "false" "off"; do
   case "$out" in *"CLAUDE_CODE_FORK_SUBAGENT=0 claude"*) ok "block names the remedy ($label)";; *) bad "block names the remedy ($label)";; esac
 done
 
+section "panel-review-session — scoped fork mode, preflight, and saved markers"
+launcher_repo="$TMP/launcher-repo"; mkdir -p "$launcher_repo"
+git -C "$launcher_repo" init -q
+launcher_mockbin="$TMP/launcher-mockbin"; mkdir -p "$launcher_mockbin"
+launcher_bin="$TMP/launcher-bin"; mkdir -p "$launcher_bin"
+launcher_link="$launcher_bin/panel-review-session"
+ln -s "$root/bin/panel-review-session" "$launcher_link"
+launcher_config="$TMP/launcher-config"; mkdir -p "$launcher_config"
+cat > "$launcher_mockbin/codex" <<'EOF'
+#!/bin/sh
+if [ "$1" = login ] && [ "$2" = status ]; then
+  printf '%s\n' 'Logged in using test account' >&2
+fi
+EOF
+cat > "$launcher_mockbin/agy" <<'EOF'
+#!/bin/sh
+exit 1
+EOF
+cat > "$launcher_mockbin/claude" <<'EOF'
+#!/bin/sh
+{
+  printf 'fork=%s\n' "$CLAUDE_CODE_FORK_SUBAGENT"
+  printf 'argc=%s\n' "$#"
+  for arg in "$@"; do printf 'arg=<%s>\n' "$arg"; done
+} > "$LAUNCH_CAPTURE"
+EOF
+chmod +x "$launcher_mockbin/codex" "$launcher_mockbin/agy" "$launcher_mockbin/claude"
+launcher_capture="$TMP/launcher-capture"
+fork_was_set="${CLAUDE_CODE_FORK_SUBAGENT+x}"
+fork_saved="${CLAUDE_CODE_FORK_SUBAGENT-}"
+unset CLAUDE_CODE_FORK_SUBAGENT
+(
+  cd "$launcher_repo" || exit 1
+  CLAUDE_CONFIG_DIR="$launcher_config" LAUNCH_CAPTURE="$launcher_capture" \
+    PATH="$launcher_mockbin:$PATH" "$launcher_link" --print "two words"
+) > "$TMP/launcher-start.out" 2>&1; rc=$?
+assert_exit "launcher passes preflight and starts Claude" 0 "$rc"
+assert_file_contains "launcher sets fork mode for Claude" 'fork=0' "$launcher_capture"
+assert_file_contains "launcher forwards each argument unchanged" 'arg=<two words>' "$launcher_capture"
+assert_file_contains "launcher reports that a new review can start" \
+  'Use panel-review:start to begin a review.' "$TMP/launcher-start.out"
+assert_eq "launcher leaves the parent fork variable unset" 'unset' "${CLAUDE_CODE_FORK_SUBAGENT-unset}"
+
+mkdir -p "$launcher_repo/.panel-review/stray-run"
+(
+  cd "$launcher_repo" || exit 1
+  CLAUDE_CONFIG_DIR="$launcher_config" LAUNCH_CAPTURE="$launcher_capture" \
+    PATH="$launcher_mockbin:$PATH" "$launcher_link"
+) > "$TMP/launcher-stray.out" 2>&1; rc=$?
+assert_exit "launcher starts Claude with only an unmarked directory" 0 "$rc"
+assert_file_contains "launcher ignores a directory without a run marker" \
+  'No saved review marker found.' "$TMP/launcher-stray.out"
+
+mkdir -p "$launcher_repo/.panel-review/saved-run"
+printf '%s\n' 'saved-run' > "$launcher_repo/.panel-review/saved-run/.panel-run"
+(
+  cd "$launcher_repo" || exit 1
+  CLAUDE_CONFIG_DIR="$launcher_config" LAUNCH_CAPTURE="$launcher_capture" \
+    PATH="$launcher_mockbin:$PATH" "$launcher_link"
+) > "$TMP/launcher-resume.out" 2>&1; rc=$?
+assert_exit "launcher starts Claude when a saved marker exists" 0 "$rc"
+assert_file_contains "launcher identifies the saved review marker" \
+  'Saved review marker found: .panel-review/saved-run/' "$TMP/launcher-resume.out"
+assert_file_contains "launcher points to resume or continue" \
+  'Use panel-review:resume or panel-review:continue.' "$TMP/launcher-resume.out"
+assert_file_not_contains "launcher ignores an unmarked directory beside a saved review" \
+  'Multiple review markers found' "$TMP/launcher-resume.out"
+
+mkdir -p "$launcher_repo/.panel-review/second-run"
+printf '%s\n' 'second-run' > "$launcher_repo/.panel-review/second-run/.panel-run"
+(
+  cd "$launcher_repo" || exit 1
+  CLAUDE_CONFIG_DIR="$launcher_config" LAUNCH_CAPTURE="$launcher_capture" \
+    PATH="$launcher_mockbin:$PATH" "$launcher_link"
+) > "$TMP/launcher-multiple.out" 2>&1; rc=$?
+assert_exit "launcher starts Claude with multiple saved markers" 0 "$rc"
+assert_file_contains "launcher reports multiple marked reviews" \
+  'Multiple review markers found under .panel-review/: saved-run second-run' "$TMP/launcher-multiple.out"
+assert_file_not_contains "launcher excludes a stray directory from multiple markers" \
+  'stray-run' "$TMP/launcher-multiple.out"
+
+launcher_no_repo="$TMP/launcher-no-repo"; mkdir -p "$launcher_no_repo"
+rm -f "$launcher_capture"
+(
+  cd "$launcher_no_repo" || exit 1
+  CLAUDE_CONFIG_DIR="$launcher_config" LAUNCH_CAPTURE="$launcher_capture" \
+    PATH="$launcher_mockbin:$PATH" "$launcher_link"
+) > "$TMP/launcher-fail.out" 2>&1; rc=$?
+assert_exit "launcher refuses when preflight finds no git work tree" 1 "$rc"
+assert_file_contains "launcher preserves preflight failure output" \
+  'ERROR: run from inside a git work tree' "$TMP/launcher-fail.out"
+assert_file_contains "launcher reports Claude was not started" \
+  'preflight failed; Claude Code was not started.' "$TMP/launcher-fail.out"
+assert_eq "launcher does not start Claude after preflight failure" 'no' \
+  "$([ -e "$launcher_capture" ] && echo yes || echo no)"
+if [ "$fork_was_set" = x ]; then export CLAUDE_CODE_FORK_SUBAGENT="$fork_saved"; else unset CLAUDE_CODE_FORK_SUBAGENT; fi
+
 section "preflight — outside-workdir read block (issue 62)"
 pf_repo="$TMP/preflight-repo"; mkdir -p "$pf_repo/.claude"
 git -C "$pf_repo" init -q

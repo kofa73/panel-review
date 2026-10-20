@@ -22,9 +22,10 @@ or helper internals.
 | Referee-to-command return statuses | `skills/panel-review-for-agent/SKILL.md` | the referee agent references this return contract; the hook validates `SubagentHandback` in auto mode and the final response in other modes; command skills validate the artifact independently |
 | Agent status-stub runtime gate | `hooks/hooks.json` and `hooks/enforce_agent_status_stub` | Claude Code invokes the hook on `SubagentHandback` and `SubagentStop`; the script scopes checks to the Claude-seat and referee Agent types, allows at most one invalid hand-back denial per subagent, and substitutes a fixed failure stub when further denial is unsafe |
 | Agent identity, context isolation, and role limits | the corresponding file under `agents/` | prompts and protocol instructions do not redefine agent identity |
+| Review-session startup mode, preflight, and marker notice | `bin/panel-review-session` | `install.sh` links the launcher for skills-directory installs; `README.md` documents direct use and the marketplace fallback |
 | Public behavior and operator guidance | `README.md` | explanatory only; never used as machine validation |
 
 `scripts/check_contracts` verifies the machine-readable seat contract, rendered prompt variants,
 Round-0 retry/resume call shapes, Claude-specific block ownership, command dispatch shapes, inline
-and fenced transaction ownership, status-stub boundaries, and model-pin form. Its checks cover
-structural and executable invariants.
+and fenced transaction ownership, status-stub boundaries, model-pin form, and session-launcher
+ownership. Its checks cover structural and executable invariants.

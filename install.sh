@@ -30,7 +30,7 @@ echo "Installing the panel-review plugin into: $PLUGIN_DST"
 rm -rf -- "$PLUGIN_DST"
 mkdir -p "$PLUGIN_DST"
 
-for part in .claude-plugin skills agents scripts hooks prompts profiles assets CONTRACTS.md; do
+for part in .claude-plugin skills agents scripts hooks prompts profiles assets bin CONTRACTS.md; do
   if [ -e "$REPO/$part" ]; then
     cp -a "$REPO/$part" "$PLUGIN_DST/$part"
   fi
@@ -42,6 +42,31 @@ SCRIPTS_DST="$PLUGIN_DST/scripts"
 chmod +x "$SCRIPTS_DST"/*
 chmod -x "$SCRIPTS_DST/_panel_common.sh"
 chmod +x "$PLUGIN_DST/hooks/enforce_agent_status_stub"
+chmod +x "$PLUGIN_DST/bin/panel-review-session"
+
+if [ "${PANEL_REVIEW_INSTALL_LAUNCHER:-1}" = 0 ]; then
+  echo "Skipped the panel-review-session PATH link (PANEL_REVIEW_INSTALL_LAUNCHER=0)."
+else
+  launcher_bin_dir="${PANEL_REVIEW_BIN_DIR:-$HOME/.local/bin}"
+  launcher_link="$launcher_bin_dir/panel-review-session"
+  plugin_dst_abs="$(cd "$PLUGIN_DST" && pwd -P)"
+  launcher_target="$plugin_dst_abs/bin/panel-review-session"
+
+  mkdir -p "$launcher_bin_dir"
+  if [ -L "$launcher_link" ] && [ "$(readlink "$launcher_link")" = "$launcher_target" ]; then
+    echo "Already linked: $launcher_link -> $launcher_target"
+  elif [ -e "$launcher_link" ] || [ -L "$launcher_link" ]; then
+    echo "WARNING: $launcher_link already exists; the panel-review-session link was not installed."
+  else
+    ln -s "$launcher_target" "$launcher_link"
+    echo "Linked: $launcher_link -> $launcher_target"
+  fi
+
+  case ":$PATH:" in
+    *":$launcher_bin_dir:"*) ;;
+    *) echo "NOTE: $launcher_bin_dir is not on PATH; run $launcher_link directly or add the directory to PATH." ;;
+  esac
+fi
 
 # Shadow check: a project- or user-level agents/panel-review-*.md outranks
 # the plugin's own agents of the same name (lowest priority), so either would

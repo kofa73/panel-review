@@ -76,17 +76,25 @@ than a written instruction. Measurements: `issues/25-fork-mode-backgrounds-seat-
 
 **Don't export it globally.** Putting `CLAUDE_CODE_FORK_SUBAGENT=0` in `~/.bashrc` turns forks off
 for *all* your Claude Code work, including sessions that have nothing to do with panel-review and
-benefit from `/subtask`. Scope it to review sessions instead — an alias:
+benefit from `/subtask`. If you installed with `install.sh`, start a review from its repository with:
+
+```bash
+panel-review-session
+```
+
+The launcher runs `scripts/preflight` and stops if a hard check fails. It counts only
+`.panel-review/<ID>/` directories containing the `.panel-run` marker file as saved reviews, then
+starts `claude` with its arguments. The fork-mode setting stays in the launcher and Claude process;
+it does not change the parent shell.
+`install.sh` links the launcher into `~/.local/bin` by default. Set `PANEL_REVIEW_BIN_DIR=/path`
+to choose another link directory, or set `PANEL_REVIEW_INSTALL_LAUNCHER=0` to skip the link.
+
+For a marketplace install, keep your shell in the repository under review and invoke the launcher's
+full path under the installed plugin tree. The launcher is at `bin/panel-review-session` there, and
+the marketplace does not add that tree to `PATH`. You can also use an alias:
 
 ```bash
 alias claude-review='CLAUDE_CODE_FORK_SUBAGENT=0 claude'
-```
-
-or a small wrapper on your `PATH`, `claude-review`:
-
-```bash
-#!/usr/bin/env bash
-exec env CLAUDE_CODE_FORK_SUBAGENT=0 claude "$@"
 ```
 
 A `settings.json` `env` entry does work, but don't use it: it scopes to a *location* — your whole
@@ -191,11 +199,14 @@ container the panel runs in — not on per-seat sandboxes.
 Two independent ways to install, pick one:
 
 - **`./install.sh`** (script-based). Copies `.claude-plugin/`, `skills/`, `agents/`, `scripts/`,
-  `hooks/`, `prompts/`, `profiles/`, `assets/`, and `CONTRACTS.md` into
+  `hooks/`, `prompts/`, `profiles/`, `assets/`, `bin/`, and `CONTRACTS.md` into
   `~/.claude/skills/panel-review` as a skills-directory plugin (override target with
-  `CLAUDE_DIR=/path ./install.sh`). Warns if a user- or project-level agent file could shadow a
-  plugin agent. Remove any reported stale files yourself. Run `/reload-plugins` (or restart Claude
-  Code) afterward.
+  `CLAUDE_DIR=/path ./install.sh`). It links `panel-review-session` into `~/.local/bin` by default.
+  Set `PANEL_REVIEW_BIN_DIR=/path` to choose another directory or
+  `PANEL_REVIEW_INSTALL_LAUNCHER=0` to skip the link. It leaves an existing path entry in place and
+  reports that it did not replace it. If the link directory is not on `PATH`, the installer prints
+  its path. It also warns if a user- or project-level agent file could shadow a plugin agent. Remove
+  any reported stale agent files yourself. Run `/reload-plugins` (or restart Claude Code) afterward.
 - **`/plugin marketplace add` + `/plugin install`** (Claude Code's plugin manager). This repo's
   `.claude-plugin/marketplace.json` lists itself as a plugin whose `source` is `.` (the repo root),
   so it doubles as its own local marketplace — no separate marketplace repo needed:
@@ -205,7 +216,8 @@ Two independent ways to install, pick one:
 
   Claude Code copies the plugin into its own versioned cache (`~/.claude/plugins/cache`), separate
   from `install.sh`'s target. `/plugin marketplace update panel-review` refreshes it after you pull
-  new commits.
+  new commits. The marketplace install does not create a PATH link; run `bin/panel-review-session`
+  from the plugin tree or use the alias above.
 
 ---
 
@@ -561,7 +573,8 @@ derived, regenerable cache; state is never inferred from them.
 | Path | Holds |
 |------|-------|
 | `.panel-review/<ID>/issue-<id>.md` | the blind cards (kept in the repo so any seat running in a constrained/sandboxed workspace — e.g. a seat under an externally-imposed read-only mount — can still read them; git-excluded and kept out of every scope so they never contaminate an `--uncommitted` review) |
-| `.panel-review/<ID>/` (the dir) | the per-worktree marker / lock — its name carries `<ID>` |
+| `.panel-review/<ID>/.panel-run` | the run-marker file, published last after canonical `/tmp/<ID>/` state is in place |
+| `.panel-review/<ID>/` (the dir) | the per-worktree marker / lock — its name carries `<ID>`; only directories containing `.panel-run` count as published runs |
 | `/tmp/<ID>/work/<seat-token>/` | seat scratch — each seat's own throwaway scripts and temp files, in a subdir it names itself. Deliberately outside the repository under review, so no seat's repository-wide search can return another seat's work as a hit |
 | `/tmp/<ID>/manifest.json` | scope, limits, diff hash, and review-profile source path/size/SHA-256 |
 | `/tmp/<ID>/review-profile.md` | exact saved profile bytes used by every seat and every phase; the original source path is provenance only |
@@ -578,9 +591,10 @@ derived, regenerable cache; state is never inferred from them.
 | `/tmp/<ID>/epochs/epoch-<n>/` | a snapshot of a finished debate cycle, taken by `reopen` when `panel-review:continue` starts the next cycle. Because per-round artifacts are named `round<N>`/`round-<N>` with **no epoch component**, the new cycle's round 1 overwrites the previous cycle's round 1 in place; this archive preserves the prior cycle's raws/prompts/sweeps/audit/index/verdict. **For inspection only — never read back by the process** |
 
 Writes are atomic (temp + `sync` + `rename`, prior version rotated to `.bak`). Init writes `/tmp`
-state first and the marker **last**, so a marker means initialization completed before publication;
-later corruption or missing files can still make the run stale. A clean finish removes both the
-cards and `/tmp/<ID>/`; an interruption leaves them for `panel-review:resume`. If status, start,
+state first and `.panel-review/<ID>/.panel-run` **last**, so a marker directory counts as a published
+run only after initialization completes; later corruption or missing files can still make the run
+stale. A clean finish removes both the cards and `/tmp/<ID>/`; an interruption leaves them for
+`panel-review:resume`. If status, start,
 resume, or continue finds missing or invalid run state, it leaves the marker and any existing
 `/tmp/<ID>/` files intact for manual recovery. Use `panel-review:discard` only to abandon and remove
 the stale run.

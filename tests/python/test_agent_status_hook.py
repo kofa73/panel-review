@@ -631,6 +631,7 @@ class AgentStatusHookTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as claude_dir:
             env = os.environ.copy()
             env["CLAUDE_DIR"] = claude_dir
+            env["PANEL_REVIEW_BIN_DIR"] = str(Path(claude_dir) / "bin")
             result = subprocess.run(
                 [str(ROOT / "install.sh")],
                 cwd=ROOT,
@@ -646,10 +647,90 @@ class AgentStatusHookTest(unittest.TestCase):
                 / "hooks"
                 / "enforce_agent_status_stub"
             )
+            installed_launcher = (
+                Path(claude_dir)
+                / "skills"
+                / "panel-review"
+                / "bin"
+                / "panel-review-session"
+            )
+            launcher_link = Path(claude_dir) / "bin" / "panel-review-session"
 
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertTrue(installed.is_file())
             self.assertTrue(os.access(installed, os.X_OK))
+            self.assertTrue(installed_launcher.is_file())
+            self.assertTrue(os.access(installed_launcher, os.X_OK))
+            self.assertTrue(launcher_link.is_symlink())
+            self.assertEqual(launcher_link.resolve(), installed_launcher.resolve())
+            self.assertIn("Linked:", result.stdout)
+
+            rerun = subprocess.run(
+                [str(ROOT / "install.sh")],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(rerun.returncode, 0, rerun.stderr)
+            self.assertIn("Already linked:", rerun.stdout)
+
+            project = Path(claude_dir) / "project"
+            project.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=project, check=True)
+            mockbin = Path(claude_dir) / "mockbin"
+            mockbin.mkdir()
+            (mockbin / "codex").write_text(
+                "#!/bin/sh\n"
+                'if [ "$1" = login ] && [ "$2" = status ]; then '
+                'printf "%s\\n" "Logged in using test account" >&2; fi\n',
+                encoding="utf-8",
+            )
+            (mockbin / "agy").write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+            capture = Path(claude_dir) / "launcher-capture"
+            (mockbin / "claude").write_text(
+                "#!/bin/sh\n"
+                "printf 'fork=%s\\narg=%s\\n' \"$CLAUDE_CODE_FORK_SUBAGENT\" "
+                "\"$1\" > \"$LAUNCH_CAPTURE\"\n",
+                encoding="utf-8",
+            )
+            for command in mockbin.iterdir():
+                command.chmod(0o755)
+            launch_env = env.copy()
+            launch_env["CLAUDE_CONFIG_DIR"] = claude_dir
+            launch_env["PATH"] = str(mockbin) + os.pathsep + launch_env["PATH"]
+            launch_env["LAUNCH_CAPTURE"] = str(capture)
+            launch_env.pop("CLAUDE_CODE_FORK_SUBAGENT", None)
+            launched = subprocess.run(
+                [str(launcher_link), "--version"],
+                cwd=project,
+                env=launch_env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(launched.returncode, 0, launched.stdout + launched.stderr)
+            self.assertEqual(capture.read_text(encoding="utf-8"), "fork=0\narg=--version\n")
+
+    def test_skills_directory_installer_can_skip_session_launcher_link(self):
+        with tempfile.TemporaryDirectory() as claude_dir:
+            env = os.environ.copy()
+            env["CLAUDE_DIR"] = claude_dir
+            env["PANEL_REVIEW_BIN_DIR"] = str(Path(claude_dir) / "bin")
+            env["PANEL_REVIEW_INSTALL_LAUNCHER"] = "0"
+            result = subprocess.run(
+                [str(ROOT / "install.sh")],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("Skipped the panel-review-session PATH link", result.stdout)
+            self.assertFalse((Path(claude_dir) / "bin" / "panel-review-session").exists())
 
     def test_malformed_hook_input_fails_closed(self):
         result = subprocess.run(

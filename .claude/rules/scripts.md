@@ -1,5 +1,6 @@
 ---
 paths:
+  - "bin/**"
   - "scripts/**"
   - "hooks/**"
   - "tests/**"
@@ -16,6 +17,10 @@ The persistence model these scripts read/write lives in `CLAUDE.md`.
 The referee never hand-rolls flags, writes, index math, or parsing — it calls these so operations are
 byte-exact.
 
+- `bin/panel-review-session` — the shell entry point for a review session. It resolves the plugin
+  root through PATH symlinks, sets fork mode off for preflight and Claude, calls `preflight`, reports
+  only saved `.panel-review/<ID>/` directories with a `.panel-run` marker file, and then execs Claude.
+  It does not duplicate prerequisite checks.
 - `index` — the **only** writer of `/tmp/<ID>/index.json`; all state/flag/counter math lives here.
   `put` installs the Round-0 index. `commit-sweep` applies a whole debate round atomically and
   idempotently (guarded by `committed_rounds`) and writes that round's inspection-only

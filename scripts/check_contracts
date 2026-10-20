@@ -198,6 +198,54 @@ def check_card_cache_contract(errors, root):
         )
 
 
+def check_session_launcher_contract(errors, root):
+    """Keep session startup delegated to preflight and package the launcher with the plugin."""
+    relative = "bin/panel-review-session"
+    path = root / relative
+    if not path.is_file():
+        fail(errors, "session-launcher-contract", relative, "launcher is missing")
+        return
+    if not path.stat().st_mode & 0o111:
+        fail(errors, "session-launcher-contract", relative, "launcher is not executable")
+
+    launcher = read(root, relative)
+    for marker, invariant in (
+        ('"$plugin_root/scripts/preflight"', "runs the shared preflight"),
+        ("CLAUDE_CODE_FORK_SUBAGENT=0", "sets fork mode off for this session"),
+        ('exec claude "$@"', "execs Claude with the caller arguments"),
+        (".panel-review", "reports saved review markers"),
+        ('[ -f "$marker/.panel-run" ] || continue', "ignores directories without a run marker"),
+    ):
+        if marker not in launcher:
+            fail(errors, "session-launcher-contract", relative, f"must {invariant}")
+
+    duplicate_checks = (
+        "command -v jq",
+        "command -v git",
+        "git rev-parse --is-inside-work-tree",
+        "no peer seat available",
+        '[ -w "." ]',
+    )
+    for marker in duplicate_checks:
+        if marker in launcher:
+            fail(errors, "session-launcher-contract", relative, f"duplicates a preflight check: {marker}")
+
+    installer = read(root, "install.sh")
+    copied_parts = installer.partition("for part in")[2].partition("; do")[0]
+    if not re.search(r"\bbin\b", copied_parts):
+        fail(errors, "session-launcher-contract", "install.sh", "must copy the bin directory")
+
+    readme = read(root, "README.md")
+    if "panel-review-session" not in readme or ".panel-run" not in readme:
+        fail(errors, "session-launcher-contract", "README.md", "must document the launcher and its run marker")
+    protocol_path = "skills/panel-review-for-agent/references/protocol.md"
+    if ".panel-run" not in read(root, protocol_path):
+        fail(errors, "session-launcher-contract", protocol_path, "must name the run-marker file retained by stale-run handoff")
+    scripts_rule = read(root, ".claude/rules/scripts.md")
+    if relative not in scripts_rule:
+        fail(errors, "session-launcher-contract", ".claude/rules/scripts.md", "must document launcher ownership")
+
+
 def check_retired_script_surface(errors, root):
     """Keep retired verbs out of the public CLI and model-facing command inventory."""
     command_lists = {}
@@ -353,6 +401,7 @@ def check_tree(errors, root):
     check_merge_payload_contract(errors, root)
     check_repo_guard_contract(errors, root)
     check_card_cache_contract(errors, root)
+    check_session_launcher_contract(errors, root)
     check_retired_script_surface(errors, root)
     check_stale_run_handoffs(errors, root)
     check_shared_python_helper_ownership(errors, root)
@@ -405,6 +454,7 @@ def check_tree(errors, root):
         "scripts/write_card",
         "skills/panel-review-for-agent/SKILL.md",
         "hooks/enforce_agent_status_stub",
+        "bin/panel-review-session",
     ):
         if owner not in owner_map:
             fail(errors, "contract-ownership-map", "CONTRACTS.md", f"missing owner {owner}")
