@@ -120,26 +120,40 @@ Debate rounds; the referee's judgment steps (clustering, claim resolution, verdi
 between workflows; resuming a run; a Claude seat that finishes after the barrier; real Codex and
 Gemini seats; auto mode (`issues/64`); the desktop app and VS Code; a workflow-disabled account.
 
-## Decisions required
+## Open questions for the owner
 
-1. **Where the referee's judgment lives.** Options:
-   - as agents inside the workflow: the wrapped prompt breaks the referee hook's run-ID check, so
-     the hook would need changing;
-   - as a referee subagent called between per-phase workflows;
-   - in the main conversation (this costs main-context tokens).
-
-   The seat dispatch and wait are what need the workflow; judgment does not.
-2. **How a seat receives its prompt.** Options:
-   - an agent copies it, as measured (exact, but it costs tokens and is a risk on large prompts);
-   - a short pointer prompt ("read your task from `<path>`"), which changes the seat's delivery
-     contract. The seat must still read only its own prompt file.
-3. **Stub hook or schema, per agent type.** Keep plain-text stubs and the hook, which is proven, or
-   adopt schemas and exempt schema returns from the hook. Today the hook blocks every schema return
-   and gates none of them.
-4. **What happens without workflows.** Workflows need a paid plan, are off by default on Pro, and can
-   be disabled by the user or the organization (`disableWorkflows`). Either keep the current
-   Agent-based path, with `CLAUDE_CODE_FORK_SUBAGENT=0`, as a fallback, or require workflows.
-   Recommended: keep the fallback until the workflow path has a full real run behind it.
+1. **Where should the referee's judgment run?**
+   - (a) As fresh, typed referee agents inside one workflow per phase. **Recommended:** the workflow
+     can hold the seat fan-out until every result settles, and the main conversation need not carry
+     the review material. Keep judgment in referee agents and orchestration/waiting in the script.
+     The workflow prompt wrapper requires the status hook to recognize the run ID in the wrapped
+     prompt.
+   - (b) As a referee subagent between per-phase workflows. This keeps the referee prompt outside
+     the workflow wrapper, but the main conversation must coordinate each phase; in manual mode,
+     each separate workflow may also require approval unless the user has approved reuse.
+   - (c) In the main conversation. This is the simplest dispatch shape, but moves review material
+     into the long-lived context and spends its token budget.
+   The seat dispatch and wait are what need the workflow; judgment must remain model-owned.
+2. **How should a seat receive its prompt?**
+   - (a) Copy the complete prompt into the workflow agent call. The prototype copied the 12,337-byte
+     Claude prompt exactly, but this adds prompt-copy tokens and has not been checked at larger sizes.
+   - (b) Give the seat a pointer to its prepared prompt file and instruct it to read only that file.
+     **Recommended:** this avoids another model-mediated copy and keeps the prepared file as the
+     authoritative prompt. Verify that each seat can read its own file under the existing `/tmp`
+     access contract before adoption.
+3. **Should workflow agents return plain-text stubs or structured output?**
+   - (a) Keep plain-text stubs and the current status hook. **Recommended:** the prototype showed
+     that this path gates the return; the schema probe showed that the hook blocks but does not gate
+     a structured return.
+   - (b) Use schemas and replace or selectively bypass the hook for schema agents. This needs a
+     measured replacement that rejects invalid returns; the current schema path does not provide
+     that guarantee.
+4. **What should happen when workflows are unavailable or disabled?**
+   - (a) Keep the current Agent-based path as a fallback, requiring
+     `CLAUDE_CODE_FORK_SUBAGENT=0` on that path. **Recommended:** retain a working option until the
+     workflow path completes a full real review.
+   - (b) Require workflows and refuse to start when they are unavailable. This removes the fallback
+     and prevents reviews for users or organizations with workflows disabled.
 
 ## Constraints a design must respect
 
@@ -159,7 +173,7 @@ Gemini seats; auto mode (`issues/64`); the desktop app and VS Code; a workflow-d
 
 ## Expected behavior
 
-1. Decisions 1-4 are recorded here.
+1. The owner's choices for questions 1-4 are recorded here before runtime implementation.
 2. Round 0 ships as a plugin workflow (`workflows/` at the plugin root). `start` launches it, waits
    for its single completion notification, and then validates as it does today.
 3. `preflight`'s fork-mode hard block applies only to the fallback path.
