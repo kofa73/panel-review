@@ -71,6 +71,37 @@ Interactive terminal sessions have no limit, so the supported setup is not affec
 - `scripts/check_contracts --root .` and `./tests/run_tests.sh` pass.
 - One real terminal review still completes with all three seats engaged.
 
+## Partial implementation (2026-10-20)
+
+The CLI barrier now sets a 45-minute timeout on its detached Bash call. This covers the barrier's
+~43-minute wait budget in unattended sessions and stays below Claude Code's two-hour maximum. The
+README, protocol, script ownership map, contract check, and tests describe or enforce the same value.
+
+The desktop and VS Code foreground-dispatch measurement remains open. `claude --version` reports
+2.1.304 on this machine, but this environment does not provide either client surface. The issue stays
+Pending until that measurement and the session-policy decision are resolved.
+
+The end-to-end smoke review completed in Claude Code 2.1.304 through `claude -p`. All three seats
+engaged in Round 0 with parse status 0; there were no timeouts, retries, or down seats, and the guard
+reported no tracked-file drift. The verdict is `/tmp/panel-20261020-100917-164b8c23.md`. The smoke
+uses temporary seat models, so it confirms dispatch, not review quality.
+
+## Open questions for the owner
+
+1. Which client can you use to measure whether the `start` skill's referee call blocks with
+   `CLAUDE_CODE_FORK_SUBAGENT=0`?
+   - (a) VS Code, recommended because it matches the issue's configured `claudeCode.environmentVariables`
+     scenario.
+   - (b) Desktop app.
+   - (c) Defer until either surface is available.
+   Record the Claude Code version and whether the referee call blocks.
+2. If the measurement confirms backgrounding, how should the plugin handle desktop and VS Code?
+   - (a) Document the terminal CLI requirement and warn when `CLAUDE_CODE_ENTRYPOINT` is not `cli`,
+     recommended because this reports the limitation without rejecting a session based on an
+     undocumented variable.
+   - (b) Document the terminal CLI requirement without a preflight check, which avoids depending on
+     the undocumented variable but leaves `preflight` admitting those sessions.
+
 ## Non-goals
 
 - Do not reintroduce a referee-side polling wait to work around backgrounding. `issues/15` removed it.

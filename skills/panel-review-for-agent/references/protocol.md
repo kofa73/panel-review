@@ -78,8 +78,10 @@ it is an absolute path under `/tmp/<id>/work`, deliberately outside every reposi
 **CLI seats are long-running.** Run their prepared command only through the
 `panel-review-cli-barrier` Agent; never run or background `await_seats` yourself. Pass the Agent the
 `command`, `done`, and `sentinel` paths produced by `round prepare-*`. The barrier's own agent
-definition owns how it launches and waits; on return, consume only its `await_seats_rc` result and
-the status files through `round collect-*`.
+definition owns how it launches and waits. Its background `Bash` call sets `timeout: 2700000` ms
+(45 minutes), above the ~43-minute wait budget and below Claude Code's two-hour maximum for
+unattended background commands. On return, consume only its `await_seats_rc` result and the status
+files through `round collect-*`.
 
 Dispatch the CLI-barrier and fresh Claude-seat Agent calls together in one assistant response, both
 with `run_in_background: false`. Multiple foreground Agent calls in one response run concurrently,

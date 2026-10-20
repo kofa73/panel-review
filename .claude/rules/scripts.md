@@ -120,10 +120,11 @@ byte-exact.
 - `await_seats` — the barrier that owns CLI-seat waiting; runs every CLI seat concurrently (each via
   `run_seat`) in ONE job with a per-seat outer timeout, writes per-seat status + a combined `--done`
   summary. **Run it via the `panel-review-cli-barrier` Agent, never as a referee-backgrounded Bash
-  job.** The referee issues that barrier and the Claude-seat Agent together in one assistant response,
-  both with `run_in_background: false`; the calls run concurrently and block the referee until both
-  return. There are no referee `date`/`ps`/`cat status.*`/narration turns between dispatch and the
-  combined return.
+  job.** The barrier sets `timeout: 2700000` ms on its detached Bash call so unattended-session
+  limits exceed the ~43-minute wait budget. The referee issues that barrier and the Claude-seat Agent
+  together in one assistant response, both with `run_in_background: false`; the calls run
+  concurrently and block the referee until both return. There are no referee
+  `date`/`ps`/`cat status.*`/narration turns between dispatch and the combined return.
 - `birth_index` — the **only** builder of the Round-0 `index.json` from the referee's clustered
   finding-to-issue map; assigns birth state/flags/`evaluated_by` by the birth-unanimity rule (referee
   still owns the clustering). Output installs via `index put`.

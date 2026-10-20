@@ -62,9 +62,12 @@ Your prompt gives you exactly:
 ## Procedure (follow exactly)
 
 1. **Launch the barrier in the background, capturing its exit code.** One `Bash` call with
-   `run_in_background: true`. Run `<command>` **as-is**, but wrap it so `await_seats`' exit code is
-   always recorded to `sentinel` (temp + rename, so the file appears atomically and only once the job
-   is truly over):
+   `run_in_background: true`; set the Bash tool's `timeout` parameter to `2700000` ms (45 minutes).
+   Claude Code applies this timeout to unattended background commands, where the default is 30
+   minutes or 10 minutes for a text-prompt `-p` run. This value exceeds the barrier's ~43-minute wait
+   budget and stays below Claude Code's two-hour maximum. Run `<command>` **as-is**, but wrap it so
+   `await_seats`' exit code is always recorded to `sentinel` (temp + rename, so the file appears
+   atomically and only once the job is truly over):
 
    ```bash
    cd "<workdir>" && bash "<command>"; rc=$?; printf '%s\n' "$rc" > "<sentinel>.part" && mv -f "<sentinel>.part" "<sentinel>"

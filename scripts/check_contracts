@@ -339,6 +339,7 @@ def check_tree(errors, root):
         "10-minute maximum",
         "moves the call to the background instead of stopping it",
         "explicitly backgrounds `await_seats`",
+        "timeout` parameter to `2700000` ms (45 minutes)",
         "owns the launch and completion-sentinel lifecycle",
         "before the bash tool can auto-background the wait",
     ):

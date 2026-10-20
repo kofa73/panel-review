@@ -322,18 +322,17 @@ The loop is bounded by a per-issue counter (`--issue-rounds`, default 2) and a g
 
 ### Slow seats and timeouts (optional)
 
-**You normally set nothing.** A review needs no timeout configuration: each CLI seat is allowed up to
-~40 min (`await_seats`' `--seat-timeout`, default 2400 s), and the CLI-seat barrier waits for them in
-short (< 2 min) polling chunks that stay under Claude Code's Bash-tool timeout, so nothing is
-truncated out of the box. (You do **not** need `BASH_DEFAULT_TIMEOUT_MS` /
-`BASH_MAX_TIMEOUT_MS`: the barrier never asks for a longer single Bash call, so raising the Bash
-ceiling has no effect here.)
+**You normally set nothing.** Each CLI seat is allowed up to ~40 min (`await_seats`'
+`--seat-timeout`, default 2400 s). The barrier polls in short (< 2 min) foreground Bash calls and sets
+`timeout: 2700000` ms (45 min) on its detached Bash call. That exceeds the barrier's ~43-minute wait
+budget and stays below Claude Code's two-hour maximum for unattended background commands. You do not
+need `BASH_DEFAULT_TIMEOUT_MS` or `BASH_MAX_TIMEOUT_MS`; those variables affect foreground Bash
+timeouts, not the detached call's explicit background limit.
 
 You only tune this if you deliberately let seats run **longer than ~40 min** — e.g. you raise the
-per-seat cap with `PANEL_REVIEW_SEAT_TIMEOUT=<seconds>`. Then raise the barrier's retry cap in
-`agents/panel-review-cli-barrier.md` step 2 (currently 26) so `cap × ~100 s` comfortably exceeds your
-new per-seat cap. Otherwise a slow seat is abandoned mid-run and the review degrades to the seats
-that did finish.
+per-seat cap with `PANEL_REVIEW_SEAT_TIMEOUT=<seconds>`. Then raise the background `timeout` in step
+1 and the barrier's retry cap in step 2 (currently 26) so both budgets exceed your new per-seat cap.
+Otherwise a slow seat is abandoned mid-run and the review degrades to the seats that did finish.
 
    Add exactly (match the value to your longest seat, in ms — e.g. 60 min):
 
