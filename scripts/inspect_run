@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # inspect_run — pure, READ-ONLY per-run inspector for `panel-review:status`.
 #
-# Unlike resume_check, this script:
-#   - never repairs anything (no index.json.bak recovery write);
+# This script:
+#   - never repairs anything (a corrupt index is stale even if index.json.bak parses);
 #   - inspects ONE already-known marker id, not the whole .panel-review/ dir
 #     (status enumerates markers itself and calls this once per id);
 #   - compares against the manifest's OWN stored scope/limits, not caller-
@@ -20,7 +20,7 @@
 #
 # "state" is one of: interrupted (>=1 open issue) | continuable (0 open, >=1
 # unresolved/contested) | diverged (diff hash no longer matches) | stale
-# (marker present but /tmp/<ID> state missing/unreadable).
+# (marker present but /tmp/<ID> state missing, empty, or invalid).
 #
 # Never writes anything — not even a .bak rotation. Exit 0 always once --id/
 # --workdir are valid; the JSON's "state" field carries the result.
@@ -44,7 +44,7 @@ idx="/tmp/$id/index.json"
 stale() { jq -n --arg id "$id" '{id:$id, state:"stale"}'; exit 0; }
 
 [ -s "$man" ] && [ -s "$idx" ] || stale
-jq -e . "$idx" >/dev/null 2>&1 || stale   # read-only: NOT repaired from .bak here
+jq -e . "$idx" >/dev/null 2>&1 || stale
 
 m_scope=$(jq -r '.scope' "$man" 2>/dev/null) || stale
 m_instr=$(jq -r '.instructions // ""' "$man" 2>/dev/null) || stale

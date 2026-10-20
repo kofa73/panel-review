@@ -47,7 +47,10 @@ ids=(); [ -d "$base" ] && for d in "$base"/*/; do [ -f "$d/.panel-run" ] && ids+
 
 ```bash
 man="/tmp/$id/manifest.json"
-[ -s "$man" ] || { "$SC/cleanup" --id "$id" --workdir "$PWD"; echo "No saved review. Start one: panel-review:start <scope>."; exit 0; }
+[ -s "$man" ] || {
+  echo "Saved review metadata is missing. No state was changed. Inspect it with panel-review:status; run panel-review:discard only if you want to abandon any recoverable state."
+  exit 1
+}
 scope="$(jq -r '.scope' "$man")"
 ISS="$(jq -r '.limits.issue_rounds' "$man")"
 MAX="$(jq -r '.limits.max_rounds' "$man")"
@@ -92,13 +95,11 @@ rm -f "$DIFF_FILE"
   diagnostics are unavailable or the scope change was deliberate, it can't be resumed; use
   `panel-review:discard` before `panel-review:start`.
   Stop.
-- **`stale $id`** → the marker's `/tmp/<ID>` state is gone. Clean it (you mutate anyway, unlike
-  `status`), then report it was cleared:
-  ```bash
-  "$SC/cleanup" --id "$id" --workdir "$PWD"
-  ```
-  > The saved review's state had already been cleaned up (`.panel-review/<ID>/` removed). No saved
-  > review. Start one: `panel-review:start <scope>`.
+- **`stale $id`** → the marker's `/tmp/<ID>` state is missing or invalid. A malformed `index.json`
+  stays untouched during the check, even if `index.json.bak` parses. Do not call `cleanup` or remove
+  any existing run files. Report that no review resumed and that the state was left intact; name
+  `.panel-review/<ID>/` and `/tmp/<ID>/`. The user can attempt manual recovery or run
+  `panel-review:discard` to abandon the run before starting fresh.
   Stop.
 - **`fresh`/`ambiguous`** → shouldn't occur here (Step 2 already confirmed exactly one valid marker);
   if it somehow does, treat `fresh` as "no saved review" and `ambiguous` as the Step 2 ambiguous

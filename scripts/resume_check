@@ -15,17 +15,16 @@
 #   fresh                  no marker dir -> nothing to resume/continue
 #   resume <ID>            run still has open issues -> can resume
 #   continuable <ID>       finished run (no open issues) with unresolved/contested left -> continue
-#   stale <ID>             marker but /tmp/<ID> missing/empty -> drop & start fresh
+#   stale <ID>             marker but /tmp/<ID> state is missing, empty, or invalid
 #   diverged <ID>          the diff hash no longer matches — the code under review
 #                          changed since the snapshot; can't resume or continue
 # On divergence only, a second line is emitted as `divergence <JSON>` with details
 # from scope_diagnostics; the first-line verdict remains stable for command skills.
 #   ambiguous              more than one marker dir -> needs manual cleanup
 #
-# Unlike `inspect_run` (status's pure/read-only inspector), this script MAY
-# repair a corrupt index.json from its .bak sibling — the action commands are
-# already mutating the run, so a same-session repair is safe here but would be
-# a hidden write status (a read-only report) must never perform.
+# Like `inspect_run`, this check never repairs state. A corrupt index is stale
+# even when its .bak sibling parses; recovery must not happen as a side effect
+# of deciding whether a run can resume.
 #
 # Limits and instructions are NOT part of the resume identity: limits are
 # explicitly overridable (set_limits), and instructions are shown/adopted, not
@@ -59,13 +58,7 @@ panel_valid_id "$id" || { echo "ambiguous"; exit 0; }   # unexpected name -> han
 man="/tmp/$id/manifest.json"
 if [ ! -s "/tmp/$id/index.json" ] || [ ! -s "$man" ]; then echo "stale $id"; exit 0; fi
 
-if ! jq -e . "/tmp/$id/index.json" >/dev/null 2>&1; then
-  if [ -s "/tmp/$id/index.json.bak" ] && jq -e . "/tmp/$id/index.json.bak" >/dev/null 2>&1; then
-    panel_atomic_write "/tmp/$id/index.json" < "/tmp/$id/index.json.bak"
-  else
-    echo "stale $id"; exit 0
-  fi
-fi
+if ! jq -e . "/tmp/$id/index.json" >/dev/null 2>&1; then echo "stale $id"; exit 0; fi
 
 # A corrupt/partially-written manifest must NOT crash the check (set -e) — that
 # would block the caller. Degrade to "stale" so it can cleanly start fresh.

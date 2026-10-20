@@ -68,10 +68,10 @@ fi
     snapshot. Editing a tracked `.gitignore` also changes the reviewed diff. If diagnostics are
     unavailable or the mismatch is deliberate, the run can't be resumed or continued; offer
     `panel-review:discard` before `panel-review:start`.
-  - `stale` → the marker's `/tmp/<ID>/` state is gone. **Do not say you cleared it** — you are
-    read-only. Report it as remaining stale and name `.panel-review/<ID>/`: "a stale marker remains at
-    `.panel-review/<ID>/` (its `/tmp` state is gone); `panel-review:start`/`resume`/`continue` will
-    clean it, or remove it yourself."
+  - `stale` → the marker's `/tmp/<ID>/` state is missing or invalid. **Do not say you cleared it** —
+    you are read-only. Report it as remaining stale and name `.panel-review/<ID>/` and `/tmp/<ID>/`.
+    `start`, `resume`, and `continue` leave stale state untouched; the user can attempt manual
+    recovery or run `panel-review:discard` to abandon it.
 
 - **More than one entry in `ids`, or any entry in `names`** → flag the abnormal state explicitly:
   > More than one saved review (only possible if `.panel-review/`/`/tmp/` was edited out of band —

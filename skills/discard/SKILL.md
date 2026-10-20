@@ -20,13 +20,13 @@ SC="$ROOT/scripts"
 "$SC/discard" --workdir "$PWD"
 ```
 
-Present its output **verbatim** — each removed `.panel-review/<ID>/` + `/tmp/<ID>/` pair, and any
-removed invalid-name marker whose `/tmp` state could not be mapped (left untouched), or the no-op
-message if there was nothing to discard. Do not add commentary.
+Present the script's output **verbatim**. It prints one summary line for the workdir, or a no-op
+message when `.panel-review/` does not exist. Do not add further explanation; the script's output is
+the complete report.
 
-In the normal one-session case this removes exactly one pair. If it removed more than one, that's
-fine — it only happens after out-of-band interference (`.panel-review:status` would have flagged it as
-"ambiguous"); the report names every pair so the action is auditable.
+In the normal one-session case this removes one run. If it removes more than one, that only happens
+after out-of-band interference (`.panel-review:status` would have flagged it as "ambiguous"). The
+summary does not itemize the removed runs.
 
 ## Notes
 

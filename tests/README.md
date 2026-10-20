@@ -76,8 +76,9 @@ Each exits `3` when its CLI is not installed, which the suite reports as a skip.
   flagged pre-emit while domain vocabulary passes; file input; invalid tags and missing arguments.
 - **instruction contracts** (`test_contract_consistency.py`): the live tree passes the ownership
   checker; known barrier/path/return/panel/health/delivery/stance drift is reintroduced one case at a
-  time and must fail with the invariant name; the Round-0 copied-finding consequence and referee
-  co-raiser drop are pinned; direct normal-debate transaction helpers are rejected.
+  time and must fail with the invariant name; stale command paths cannot delete run state, the
+  Round-0 copied-finding consequence and referee co-raiser drop are pinned, and direct normal-debate
+  transaction helpers are rejected.
 - **decide_round** (`test_decide_round.py`): round-1/round-2 transitions;
   effective-value enum convergence (stays-open, ceiling→detail_contested,
   true-unanimity→adopt); split support/reject cannot adopt a unilateral revision;
@@ -144,8 +145,12 @@ Each exits `3` when its CLI is not installed, which the suite reports as a skip.
 - **init_run / stage_review_profile**: built-in and external exact-byte snapshots plus resolved
   source-path/size/SHA-256 metadata; missing, empty, non-UTF-8, over-64-KiB, non-regular, and duplicate
   profile inputs fail before marker publication.
+- **resume_check / inspect_run**: malformed `index.json` is stale even with a valid `.bak`; neither
+  check rewrites the live index or backup. Command skills preserve stale state until manual recovery
+  or explicit discard.
 - **cleanup / discard**: `PANEL_REVIEW_KEEP_TMP=true` preserves `/tmp/<id>` while
-  removing the marker / `.panel-review`; the default still removes `/tmp/<id>`.
+  removing the marker / `.panel-review`; the default still removes valid `/tmp/<id>` paths, and
+  discard removes invalidly named markers without mapping them to `/tmp` and emits one summary line.
 - **Protocol/template contracts**: runs `seat_contract.py render` through runtime parsing and pins
   the documented batch-completeness,
   dropped-seat cleanup, Round-0 retry/resume boundary, low-only gate, coverage,

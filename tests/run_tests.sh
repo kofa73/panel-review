@@ -1064,6 +1064,26 @@ resume_output="$("$SC/resume_check" --workdir "$divergence_repo" --scope uncommi
 assert_eq "the unchanged run can resume after hash restoration" "resume $id" "$resume_output"
 PANEL_REVIEW_KEEP_TMP=false "$SC/cleanup" --id "$id" --workdir "$divergence_repo"
 
+section "resume_check / inspect_run — malformed index is stale without backup recovery"
+corrupt_repo="$TMP/corrupt-index-repo"; mkdir -p "$corrupt_repo"; git -C "$corrupt_repo" init -q
+id="$("$SC/init_run" --workdir "$corrupt_repo" --scope 'question=test' --issue-rounds 2 --max-rounds 4 \
+  --diff-hash "$(printf '' | "$SC/diff_hash")" --instructions '')"
+# A parseable backup ensures the former recovery branch would have rewritten the live index.
+cp "/tmp/$id/index.json" "/tmp/$id/index.json.bak"
+backup_before="$(cat "/tmp/$id/index.json.bak")"
+printf '{malformed index\n' > "/tmp/$id/index.json"
+corrupt_before="$(cat "/tmp/$id/index.json")"
+inspection="$("$SC/inspect_run" --id "$id" --workdir "$corrupt_repo")"
+assert_eq "status marks a malformed index stale" 'stale' "$(jq -r '.state' <<<"$inspection")"
+assert_eq "status leaves the malformed index untouched" "$corrupt_before" "$(cat "/tmp/$id/index.json")"
+assert_eq "status leaves the valid backup untouched" "$backup_before" "$(cat "/tmp/$id/index.json.bak")"
+resume_output="$("$SC/resume_check" --workdir "$corrupt_repo" --scope 'question=test' \
+  --diff-hash "$(printf '' | "$SC/diff_hash")")"
+assert_eq "resume check marks a malformed index stale" "stale $id" "$resume_output"
+assert_eq "resume check leaves the malformed index untouched" "$corrupt_before" "$(cat "/tmp/$id/index.json")"
+assert_eq "resume check leaves the valid backup untouched" "$backup_before" "$(cat "/tmp/$id/index.json.bak")"
+PANEL_REVIEW_KEEP_TMP=false "$SC/cleanup" --id "$id" --workdir "$corrupt_repo"
+
 section "large uncommitted divergence snapshots and reports"
 large_divergence_repo="$TMP/large-divergence-repo"; mkdir -p "$large_divergence_repo"; git -C "$large_divergence_repo" init -q
 git -C "$large_divergence_repo" config user.name test
@@ -1137,6 +1157,14 @@ mkdir -p "$keeprepo/.panel-review/$id"; echo "$id" > "$keeprepo/.panel-review/$i
 PANEL_REVIEW_KEEP_TMP=false "$SC/discard" --workdir "$keeprepo" >/dev/null
 assert_eq "KEEP_TMP=false discard removes /tmp/<id>" 'gone'   "$([ -d "/tmp/$id" ] && echo kept || echo gone)"
 rm -rf "/tmp/$id"
+invalid_id="$PREFIX-invalid name"; mkdir -p "$keeprepo/.panel-review/$invalid_id" "/tmp/$invalid_id"
+printf '%s\n' "$invalid_id" > "$keeprepo/.panel-review/$invalid_id/.panel-run"
+discard_output="$(env -u PANEL_REVIEW_KEEP_TMP "$SC/discard" --workdir "$keeprepo")"
+assert_eq "discard prints one summary for valid or invalid marker names" \
+  'Cleared .panel-review/ for this workdir.' "$discard_output"
+assert_eq "discard removes an invalidly named marker" 'gone' "$([ -d "$keeprepo/.panel-review" ] && echo here || echo gone)"
+assert_eq "discard leaves an unmappable /tmp path alone" 'kept' "$([ -d "/tmp/$invalid_id" ] && echo kept || echo gone)"
+rm -rf -- "/tmp/$invalid_id"
 
 section "reopen — archives the finished epoch, then resets for the next cycle"
 # A finished run: i1 accepted (settled a prior round), i2 contested (the leftover).

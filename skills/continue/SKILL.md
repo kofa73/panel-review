@@ -62,7 +62,9 @@ longer resolves, emit the same diverged-family message `resume` does and stop.
   `.git/info/exclude` for stray untracked files before retrying `panel-review:continue`. The run
   proceeds only if its resolved diff hash matches the saved snapshot; otherwise use
   `panel-review:discard` before starting a fresh review. Stop.
-- **`stale $id`** → same as `resume`'s Step 4: clean it, report cleared, "No saved review." Stop.
+- **`stale $id`** → same as `resume`'s Step 4: leave any existing marker and `/tmp/<ID>/` state
+  untouched, report that the state is missing or invalid and no review resumed, and direct the user
+  to manual recovery or `panel-review:discard` if they want to abandon it. Stop.
 - **`fresh`/`ambiguous`** → same fallback as `resume`'s Step 4. Stop.
 
 ## Step 5 — confirm the category has leftovers, reopen, write back limits, dispatch

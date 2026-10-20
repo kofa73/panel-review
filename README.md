@@ -373,10 +373,10 @@ mid-run and the review degrades to the seats that did finish.
 
 | File | Kind | What it is | Invoked by |
 |------|------|------------|------------|
-| `skills/start/SKILL.md` | skill | Parses scope + review profile + instructions + limits, refuses if a session already exists, mints the run, spawns the referee. | you, via `panel-review:start` |
-| `skills/status/SKILL.md` | skill | **Read-only.** Lists the saved session(s) + prereqs. | you, via `panel-review:status` (also model-invocable) |
-| `skills/resume/SKILL.md` | skill | Picks up an interrupted run (limit overrides only; scope/instructions adopted from the manifest). | you, via `panel-review:resume` |
-| `skills/continue/SKILL.md` | skill | Re-debates a finished run's `unresolved`/`contested` leftovers. | you, via `panel-review:continue` |
+| `skills/start/SKILL.md` | skill | Parses scope + review profile + instructions + limits, refuses if a session already exists, mints the run, and spawns the referee; a stale run is retained for manual recovery or explicit discard. | you, via `panel-review:start` |
+| `skills/status/SKILL.md` | skill | **Read-only.** Lists the saved session(s) + prereqs and reports missing or invalid run state as stale. | you, via `panel-review:status` (also model-invocable) |
+| `skills/resume/SKILL.md` | skill | Picks up an interrupted run (limit overrides only; scope/instructions adopted from the manifest); stale state is retained for manual recovery or explicit discard. | you, via `panel-review:resume` |
+| `skills/continue/SKILL.md` | skill | Re-debates a finished run's `unresolved`/`contested` leftovers; stale state is retained for manual recovery or explicit discard. | you, via `panel-review:continue` |
 | `skills/result/SKILL.md` | skill | **Read-only.** Validates and retrieves a finished durable verdict by exact artifact ID; never resumes or re-runs seats. | you, via `panel-review:result <ID>` (also model-invocable) |
 | `skills/discard/SKILL.md` | skill | Deletes all saved sessions for this workdir (the reset). | you, via `panel-review:discard` |
 | `skills/panel-review-for-agent/SKILL.md` | skill | **The referee bootstrap and return contract.** Preloaded into the referee agent (`user-invocable: false`); validates its task, exposes narrow phase loading, and owns fixed referee returns. Hidden from the `/` menu. | the referee agent (preloaded) |
@@ -541,7 +541,7 @@ These hooks provide bounded runtime enforcement, not a security boundary.
 | `diff_hash` | Stable hash of the resolved diff, for the manifest and the resume/diverged check |
 | `assemble` | Splice scope + a diff **reference** (or card paths) + the rendered seat contract into a prompt template without an LLM retyping them |
 | `seat_contract.py` | Authoritative seat-output contract: defines fields, examples, stance values, phase-required blocks/cardinality, normalization, and renders panel-size-correct Round-0/debate instructions. Its Python interface is shared by runtime validators; its `render` command supports exceptional manual prompt assembly |
-| `check_contracts` | Validate `CONTRACTS.md` ownership rows, shared Python-helper ownership, public `index`/`sweep` verbs, prompt sentinels and seat-block ownership, rendered seat-contract blocks against the runtime parser, Round-0 retry/resume command shapes, referee dispatch and artifact-delivery interfaces, inline and fenced transaction ownership, status-stub ownership, barrier command shape, agy model-pin form, and script-owned cache/index invariants; failures name the violated invariant and location |
+| `check_contracts` | Validate `CONTRACTS.md` ownership rows, shared Python-helper ownership, public `index`/`sweep` verbs, prompt sentinels and seat-block ownership, rendered seat-contract blocks against the runtime parser, Round-0 retry/resume command shapes, stale-run cleanup boundaries, referee dispatch and artifact-delivery interfaces, inline and fenced transaction ownership, status-stub ownership, barrier command shape, agy model-pin form, and script-owned cache/index invariants; failures name the violated invariant and location |
 | `resolve_instructions` | Resolve `manifest.instructions` to the seat-facing text for the two deterministic cases (verbatim author text, or the "(none …)" line); returns a compose **sentinel** (exit 3) for `auto`, the only case that needs the referee to write neutral context |
 | `stage_review_profile` | Resolve and validate one built-in or external profile source, atomically snapshot its exact bytes, and return its source-path/size/SHA-256 metadata; the source is never reloaded after run creation |
 | `run_codex` | The **only** way to call the Codex seat — defaults `--profile panel-review` (auto-creates the profile from a shipped default) and runs with the sandbox **bypassed** (`--dangerously-bypass-approvals-and-sandbox`, the only mode where Codex's MCP/tilth runs and it can write scratch; integrity is enforced by `repo_guard`, not this sandbox). Runs in Codex's human output mode, which reports the model that actually bound; with `CODEX_SEAT_MODEL_FILE` set it records that binding (the profile pin is outranked by a reviewed repository's own Codex config) |
@@ -555,10 +555,10 @@ These hooks provide bounded runtime enforcement, not a security boundary.
 | `birth_index` | Turn the referee's clustered Round-0 finding-to-issue map into the full `index.json` — assigns each issue's birth state, vetting flags, and `evaluated_by` coverage by the birth-unanimity rule using `panel_common`'s shared issue and evidence schema (the referee still owns clustering) |
 | `decide_round` / `decide_degraded_round` | Build normal (≥2 seats) and degraded (0–1 seat) debate payloads. Both update private `evaluated_by` coverage in the same atomic commit; the degraded path only emits terminal unresolved/contested states and eligible `fully_vetted` flags |
 | `merge_payload` | Validate the base and referee addendum, reject unknown keys and explicitly malformed consumed structures (including `null` and `false`), then fold additions into the `decide_round` payload with `commit-sweep`'s per-key semantics (`set_state` replace, `revise` field-merge); a rejected addendum leaves the canonical payload and index untouched, while the referee still decides whether folded evidence conflicts with the current outcome |
-| `init_run` / `resume_check` / `cleanup` | Mint a run (marker-last), record an uncommitted-scope path snapshot, decide resume/continuable/diverged/stale/ambiguous, and tear down after the verdict |
-| `inspect_run` | Pure, read-only per-run inspector for `panel-review:status` — never repairs, never writes |
+| `init_run` / `resume_check` / `cleanup` | Mint a run (marker-last), record an uncommitted-scope path snapshot, decide resume/continuable/diverged/stale/ambiguous, and tear down after the verdict. `resume_check` is read-only; it reports a malformed index as stale without restoring it from `.bak`. The command skills retain stale state for manual recovery or explicit discard |
+| `inspect_run` | Pure, read-only per-run inspector for `panel-review:status` — reports missing or invalid state as stale and never repairs or writes |
 | `scope_diagnostics` | Capture the tracked diff hash and untracked paths for an uncommitted run; compare them on divergence, falling back to the saved diff's path list for older runs |
-| `discard` | The fault-tolerant traversal behind `panel-review:discard` — removes every session for the workdir |
+| `discard` | Removes each valid run's `/tmp/<ID>/` state unless `PANEL_REVIEW_KEEP_TMP=true`, then removes the whole `.panel-review/` tree. It validates marker names before mapping them to `/tmp/` and prints one summary, which the command skill presents verbatim |
 | `set_limits` | Writes a `--issue-rounds`/`--max-rounds` override back into a run's manifest, for `resume`/`continue` |
 | `reopen` | The engine behind `panel-review:continue` — revives a **finished** run's `unresolved`/`contested` leftovers for another debate cycle: `index reopen` bumps `run_epoch` and clears `committed_rounds`, then `/tmp/<ID>/sweeps/` is cleared so `resume` starts a clean debate at round 1. Before that, it snapshots the finished cycle into `/tmp/<ID>/epochs/epoch-<n>/` (best-effort) so the next cycle's round-1 filenames don't destroy the previous cycle's transcripts/verdict. Counterpart to `init_run` |
 | `index` | The **only** writer of the canonical issue index (`/tmp/<id>/index.json`): `put` installs the Round-0 index, `commit-sweep` applies each debate round atomically, and `reopen` starts another debate epoch. `gate-status` and `delivery-status` read index state |
@@ -606,9 +606,12 @@ derived, regenerable cache; state is never inferred from them.
 | `/tmp/<ID>/epochs/epoch-<n>/` | a snapshot of a finished debate cycle, taken by `reopen` when `panel-review:continue` starts the next cycle. Because per-round artifacts are named `round<N>`/`round-<N>` with **no epoch component**, the new cycle's round 1 overwrites the previous cycle's round 1 in place; this archive preserves the prior cycle's raws/prompts/sweeps/audit/index/verdict. **For inspection only — never read back by the process** |
 
 Writes are atomic (temp + `sync` + `rename`, prior version rotated to `.bak`). Init writes `/tmp`
-state first and the marker **last**, so a marker always implies valid state. A clean finish removes
-both the cards and `/tmp/<ID>/`; an interruption leaves them for `panel-review:resume`. Use
-`panel-review:status` to inspect a saved session and `panel-review:discard` to remove it.
+state first and the marker **last**, so a marker means initialization completed before publication;
+later corruption or missing files can still make the run stale. A clean finish removes both the
+cards and `/tmp/<ID>/`; an interruption leaves them for `panel-review:resume`. If status, start,
+resume, or continue finds missing or invalid run state, it leaves the marker and any existing
+`/tmp/<ID>/` files intact for manual recovery. Use `panel-review:discard` only to abandon and remove
+the stale run.
 
 Setting **`PANEL_REVIEW_KEEP_TMP=true`** makes both `cleanup` and `discard` keep `/tmp/<ID>/` (the
 manifest, index, sweeps, raw seat output, audit trail, and the seats' scratch) for post-mortem inspection while still

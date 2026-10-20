@@ -178,6 +178,12 @@ byte-exact.
   the profile snapshot, uncommitted-scope divergence snapshot, manifest, and index exist.
   `scope_diagnostics` owns that tracked-diff/untracked-path snapshot and its read-only comparison;
   `inspect_run`, `resume_check`, and `round` report the results without weakening the hash gate.
+  `inspect_run` and `resume_check` leave a malformed `index.json` untouched and report the run as
+  stale, even when `index.json.bak` parses. The `start`, `resume`, and `continue` skills retain stale
+  marker and `/tmp/<id>/` state for manual recovery or explicit discard; they do not route stale
+  state through `cleanup`. `discard` removes all marker directories together and maps a marker name
+  to `/tmp/<id>/` only after `panel_valid_id` accepts it; its command skill presents the single
+  summary verbatim.
 - `_panel_common.sh` (bash) / `panel_common.py` (Python) — shared-helper libraries: validated run IDs,
   atomic writes, and git-exclude helpers; Python additionally owns issue/evidence predicates, fence
   extraction, and shared debate stance-integrity validation. Python scripts import `panel_common.py`;

@@ -28,6 +28,53 @@ class ContractConsistencyTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("instruction contracts: OK", result.stdout)
 
+    def test_stale_entrypoints_cannot_delete_run_state(self):
+        cases = (
+            ("start", "- **`stale`**"),
+            ("resume", "- **`stale $id`**"),
+            ("continue", "- **`stale $id`**"),
+        )
+        for name, label in cases:
+            with self.subTest(command=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.copy_contract_tree(root)
+                skill = root / f"skills/{name}/SKILL.md"
+                text = skill.read_text(encoding="utf-8")
+                start = text.index(label)
+                following = re.search(r"(?m)^\s*-\s+\*\*", text[start + len(label) :])
+                end = start + len(label) + following.start()
+                branch = text[start:end]
+                self.assertIn("panel-review:discard", branch)
+                branch = branch.replace("panel-review:discard", "$SC/cleanup", 1)
+                skill.write_text(text[:start] + branch + text[end:], encoding="utf-8")
+
+                result = self.run_check(root)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("stale-run-handoff", result.stderr)
+
+    def test_resume_missing_manifest_guard_cannot_delete_run_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_contract_tree(root)
+            skill = root / "skills/resume/SKILL.md"
+            text = skill.read_text(encoding="utf-8")
+            marker = '[ -s "$man" ] || {'
+            self.assertIn(marker, text)
+            skill.write_text(
+                text.replace(
+                    marker,
+                    marker + '\n  "$SC/cleanup" --id "$id" --workdir "$PWD"',
+                    1,
+                ),
+                encoding="utf-8",
+            )
+
+            result = self.run_check(root)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("stale-run-handoff", result.stderr)
+
     def test_card_cache_contract_rejects_metadata_and_late_cleanup(self):
         cases = [
             ("scripts/project_card", "printf '<!-- panel stale -->\\n'\\n"),

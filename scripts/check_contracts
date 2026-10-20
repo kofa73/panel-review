@@ -57,6 +57,54 @@ def instruction_code(text):
     return [match.group("fenced") or match.group("inline") for match in pattern.finditer(text)]
 
 
+def markdown_bullet_section(text, label):
+    """Return one command-skill bullet and its nested instructions, if present."""
+    start = text.find(label)
+    if start < 0:
+        return None
+    following = re.search(r"(?m)^\s*-\s+\*\*", text[start + len(label) :])
+    end = start + len(label) + following.start() if following else len(text)
+    return text[start:end]
+
+
+def contains_run_deletion_instruction(text):
+    code = "\n".join(instruction_code(text))
+    return bool(re.search(r"\$SC/cleanup\b|\brm\s+-rf\b", code))
+
+
+def check_stale_run_handoffs(errors, root):
+    """Stale entrypoints preserve possibly recoverable state for an explicit decision."""
+    labels = {
+        "start": "- **`stale`**",
+        "resume": "- **`stale $id`**",
+        "continue": "- **`stale $id`**",
+    }
+    for name, label in labels.items():
+        relative = f"skills/{name}/SKILL.md"
+        skill = read(root, relative)
+        branch = markdown_bullet_section(skill, label)
+        if branch is None:
+            fail(errors, "stale-run-handoff", relative, "missing stale-state branch")
+            continue
+        if contains_run_deletion_instruction(branch):
+            fail(
+                errors,
+                "stale-run-handoff",
+                relative,
+                "stale-state branch can delete the run before explicit recovery or discard",
+            )
+
+    resume = read(root, "skills/resume/SKILL.md")
+    manifest_step = resume.partition("## Step 3")[2].partition("## Step 4")[0]
+    if contains_run_deletion_instruction(manifest_step):
+        fail(
+            errors,
+            "stale-run-handoff",
+            "skills/resume/SKILL.md",
+            "missing-manifest guard can delete the run before explicit recovery or discard",
+        )
+
+
 def redefines_seat_blocks(text, include_inline_tokens=False):
     block_names = r"(?:findings|stances|new_findings)"
     return bool(
@@ -306,6 +354,7 @@ def check_tree(errors, root):
     check_repo_guard_contract(errors, root)
     check_card_cache_contract(errors, root)
     check_retired_script_surface(errors, root)
+    check_stale_run_handoffs(errors, root)
     check_shared_python_helper_ownership(errors, root)
 
     templates = {

@@ -147,11 +147,11 @@ ids=(); [ -d "$base" ] && for d in "$base"/*/; do [ -f "$d/.panel-run" ] && ids+
   RESULT="$("$SC/inspect_run" --id "$id" --workdir "$PWD")"
   state="$(jq -r '.state' <<<"$RESULT")"
   ```
-  - **`stale`** → the marker's `/tmp/<ID>` state is gone (volume cleaned). Drop the dead marker and
-    proceed to Step 4 — no need to ask:
-    ```bash
-    "$SC/cleanup" --id "$id" --workdir "$PWD"
-    ```
+  - **`stale`** → the marker's `/tmp/<ID>` state is missing or invalid. It may still contain
+    recoverable files, such as `index.json.bak`, raw responses, or checkpoints. Do not call
+    `cleanup` or remove any existing state. Stop and report that the stale run was left intact;
+    direct the user to manual recovery or `panel-review:discard` if they want to abandon it before
+    retrying `panel-review:start`.
   - **`interrupted`** or **`continuable`** (resumable / finished-with-leftovers) → stop:
     > A saved review exists (`<scope>`; instructions: «`<instructions>`»). `panel-review:resume` /
     > `panel-review:continue` to keep working it, or `panel-review:discard` to remove it.
