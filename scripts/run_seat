@@ -61,11 +61,17 @@ case "$tag" in findings) phase=round0 ;; *) phase=debate ;; esac
 [ -n "$label" ] || label="$seat"
 
 # Dispatch the seat, capturing its output to the raw file and never aborting on a
-# seat failure (a down seat = empty/partial output = parse_block exit 4; we degrade,
-# not crash). The CLI wrapper's own stderr passes through to ours for logging.
-set +e
-"$cli" < "$prompt" > "$raw"
-set -e
+# seat failure (we degrade, not crash). The CLI wrapper's own stderr passes through
+# to ours for logging. If the wrapper itself exits non-zero (CLI error or both
+# models timed out in run_agy), clear --raw and --parsed and report status 4
+# directly so truncated output from a failed run is never parsed as engaged or
+# handed to status-4 referee salvage.
+if ! "$cli" < "$prompt" > "$raw"; then
+  : > "$raw"
+  : > "$parsed"
+  printf '4\n'
+  exit 0
+fi
 
 # Parse the block; its exit status (0 engaged · 4 no block · 5 malformed) is the
 # engagement signal the caller reads from stdout.

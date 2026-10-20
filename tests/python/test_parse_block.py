@@ -97,10 +97,20 @@ class TestParseBlock(unittest.TestCase):
         self.assertEqual(res.returncode, 5)
 
     def test_no_block(self):
-        # round0.gemini.timeout.txt -> exit 4
-        fixture = os.path.join(self.fixtures_dir, 'round0.gemini.timeout.txt')
-        res = self.run_script(['findings', fixture, 'gemini'])
-        self.assertEqual(res.returncode, 4)
+        # All three observed agy --print-timeout stdout shapes -> exit 4 (no block):
+        # - round0.gemini.timeout.txt: <=1.1.18 (stdout ends with `Error: timed out waiting for response`)
+        # - round0.gemini.timeout-1.1.20.txt: 1.1.20 (0 bytes on stdout; error on stderr)
+        # - round0.gemini.timeout-1.1.28.txt: 1.1.28+ / 1.4.3 (truncated partial prose on stdout; warning on stderr)
+        for name in (
+            'round0.gemini.timeout.txt',
+            'round0.gemini.timeout-1.1.20.txt',
+            'round0.gemini.timeout-1.1.28.txt',
+        ):
+            fixture = os.path.join(self.fixtures_dir, name)
+            res = self.run_script(['findings', fixture, 'gemini'])
+            self.assertEqual(res.returncode, 4, name)
+            res_resp = self.run_script(['--response', 'round0', 'findings', fixture, 'gemini'])
+            self.assertEqual(res_resp.returncode, 4, f"--response round0 {name}")
 
     def test_stances_byte_identical(self):
         for seat in ['codex', 'gemini', 'claude']:

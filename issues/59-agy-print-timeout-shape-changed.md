@@ -2,7 +2,7 @@
 
 Priority: 59
 
-Status: Pending
+Status: Completed
 
 Source: External use of the agy CLI outside panel-review, 2026-08-26 — measured on installed
 agy **1.1.20** against `scripts/run_agy` itself
@@ -154,3 +154,40 @@ Consequences for the plan above:
   `PRINT_TIMEOUT="10s"`).
 - Expected behavior item 4 gains a third fixture: exit 0, partial stdout, warning on stderr.
 - This issue now outranks `issues/61`. Re-ordered in `issues/README.md`.
+
+## Resolution
+
+**Completed 2026-10-20.**
+
+### Measured on agy 1.4.3
+
+A single short print-mode probe against a listed Gemini label (`Gemini 3.8 Flash (High)`,
+`--print-timeout=6s`, `--dangerously-skip-permissions`) and inspection of `/home/developer/.local/bin/agy`
+(1.4.3, `poll.go:188` and `session.go`) established the 1.1.28+ wording:
+
+```
+rc=0, 9s
+stdout: <partial output streamed so far; 0 bytes when still in thinking steps>
+stderr: [agy] print timeout after 6s with turn in progress; returning partial output
+log:    W1020 06:35:30.420699 1 poll.go:188] Print mode: print timeout after 6s with turn in progress after 236 polls (printed=3)
+```
+
+Format strings in the 1.4.3 binary:
+- Mid-turn `--print-timeout` (`poll.go:188`): `[agy] print timeout after %s with turn in progress; returning partial output\n` on stderr, exit `0`.
+- Pre-cascade `--print-timeout` (`session.go`): `error: timeout waiting for cascade to start running` on stderr, exit `1`.
+- Error after partial output (`1.1.28+` truncation note): appends ` (response may be truncated)` to the stderr error message (`exit 0` on 1.1.28–1.2.9, `exit 3` with `AGY_ERROR:` since 1.2.10).
+- Incidentally recorded for `issues/63`: `Gemini 3.8 Flash (High)` logged `Propagating selected model override to backend: label="Gemini 3.8 Flash (High)"` in the `--log-file` during this probe.
+
+### Changes
+
+- `scripts/run_agy` captures each attempt's stderr to a temp file (`$errfile`, cleaned up on `EXIT`), immediately forwards it verbatim to `>&2`, and passes both `$outfile` and `$errfile` to `agy_ended_with_timeout`; when both models fail or time out, `run_agy` suppresses `$outfile` on stdout so truncated partial output from the fallback is never emitted.
+- `scripts/run_seat` checks the CLI wrapper's exit code and, on a non-zero exit, clears `--raw` and `--parsed` and reports status `4` without invoking `parse_block`, preventing partial output from a failed or timed-out run from being parsed as engaged or handed to status-4 referee salvage.
+- `agy_ended_with_timeout` matches `[Ee]rror: timed? ?out waiting for response` on the final 160 bytes of stdout (anchored to end-of-output so mid-content quotes in a review do not match) and matches `([Ee]rror: timed? ?out waiting for (response|cascade to start running)|\[agy\] print timeout after |\(response may be truncated\))` on stderr.
+- `scripts/run_agy`'s model-order bullet points to `PRIMARY_MODEL` and `FALLBACK_MODEL` and states the consequence of the Pro→Flash order in force since the 2026-08-22 reversal (`issues/21`).
+- `scripts/run_agy` and `README.md` document all three dated/versioned `--print-timeout` shapes (`≤1.1.18`, `1.1.20`, and `1.1.28+` / measured on `1.4.3`) without folding in `issues/42` item 3.
+- Added `tests/fixtures/parse_block/round0.gemini.timeout-1.1.20.txt` (empty stdout) and `tests/fixtures/parse_block/round0.gemini.timeout-1.1.28.txt` (truncated partial prose without a fenced block), extended `tests/python/test_parse_block.py` (`test_no_block`), and extended `tests/run_tests.sh` to cover all three timeout shapes, the `(response may be truncated)` stderr note, the mid-stdout quote guard, and the both-models-timeout path through `run_agy` and `run_seat`.
+
+### Verification
+
+- `scripts/check_contracts --root .` and `./tests/run_tests.sh` pass (`0` failures).
+- Repeating the two-attempt `scripts/run_agy` live probe as-is and running a full live review with the Gemini seat engaged remain gated on `issues/63` replacing the retired `PRIMARY_MODEL` and `FALLBACK_MODEL` pins (`Gemini 3.1 Pro (High)` and `Gemini 3.7 Flash (High)` fail at startup on agy 1.4.x).

@@ -1,0 +1,1 @@
+I inspected `src/foo.c` and traced the caller in `src/bar.c:42`. When `count == 0`, the buffer pointer is left uninitialized before the early return path reaches

@@ -603,7 +603,19 @@ chmod +x "$seat_mockbin/codex"
 cat > "$seat_mockbin/agy" <<'EOF'
 #!/usr/bin/env bash
 cat >/dev/null
-printf '```findings\n%s\n```\n' '{"claim":"g","location":"a.c:1","category":"correctness","severity":"high","points":[{"assertion":"x","location":"a.c:1"}]}'
+fb='```findings
+{"claim":"g","location":"a.c:1","category":"correctness","severity":"high","points":[{"assertion":"x","location":"a.c:1"}]}
+```'
+case "${MOCK_MODE:-good}" in
+  timeout_1128_prose)
+    printf 'I traced the caller in a.c and noticed that when len == 0 the\n'
+    printf '[agy] print timeout after 15m with turn in progress; returning partial output\n' >&2 ;;
+  timeout_1128_with_block)
+    printf '%s\nStill investigating second file before timeout...\n' "$fb"
+    printf '[agy] print timeout after 15m with turn in progress; returning partial output\n' >&2 ;;
+  *)
+    printf '%s\n' "$fb" ;;
+esac
 EOF
 chmod +x "$seat_mockbin/agy"
 seat_home="$TMP/seathome"; mkdir -p "$seat_home"
@@ -633,11 +645,25 @@ st="$(run_seat_codex malformed new_findings nf1)"
 assert_eq "malformed new_findings -> status 5"     '5' "$st"
 assert_eq "malformed new_findings single dispatch" '1' "$(cat "$TMP/seat.count.nf1")"
 
-section "run_seat — gemini routes through run_agy"
+section "run_seat — gemini routes through run_agy (and suppresses partial stdout when both models time out)"
 st="$(timeout 30 env MOCK_MODE=good MOCK_TAG=findings PATH="$seat_mockbin:$PATH" HOME="$seat_home" \
   "$SC/run_seat" --seat gemini --tag findings --prompt "$TMP/seat.prompt" --raw "$TMP/seat.raw.gem" --parsed "$TMP/seat.parsed.gem" 2>/dev/null)"
 assert_eq "gemini seat -> status 0"      '0' "$st"
 assert_eq "gemini parsed _source=gemini" 'gemini' "$(jq -r '._source' "$TMP/seat.parsed.gem")"
+
+printf 'stale\n' > "$TMP/seat.parsed.gem_to"
+st="$(timeout 30 env MOCK_MODE=timeout_1128_prose MOCK_TAG=findings PATH="$seat_mockbin:$PATH" HOME="$seat_home" \
+  "$SC/run_seat" --seat gemini --tag findings --prompt "$TMP/seat.prompt" --raw "$TMP/seat.raw.gem_to" --parsed "$TMP/seat.parsed.gem_to" 2>/dev/null)"
+assert_eq "gemini both-model 1.1.28+ timeout (prose) -> status 4" '4' "$st"
+assert_eq "gemini both-model timeout leaves --raw empty (no partial prose for salvage)" '' "$(cat "$TMP/seat.raw.gem_to")"
+assert_eq "gemini both-model timeout clears --parsed" '' "$(cat "$TMP/seat.parsed.gem_to")"
+
+printf 'stale\n' > "$TMP/seat.parsed.gem_tob"
+st="$(timeout 30 env MOCK_MODE=timeout_1128_with_block MOCK_TAG=findings PATH="$seat_mockbin:$PATH" HOME="$seat_home" \
+  "$SC/run_seat" --seat gemini --tag findings --prompt "$TMP/seat.prompt" --raw "$TMP/seat.raw.gem_tob" --parsed "$TMP/seat.parsed.gem_tob" 2>/dev/null)"
+assert_eq "gemini both-model 1.1.28+ timeout (with partial block) -> status 4, never engaged" '4' "$st"
+assert_eq "gemini both-model timeout with block leaves --raw empty" '' "$(cat "$TMP/seat.raw.gem_tob")"
+assert_eq "gemini both-model timeout with block clears --parsed" '' "$(cat "$TMP/seat.parsed.gem_tob")"
 
 section "run_seat — usage guards"
 "$SC/run_seat" --seat mistral --tag findings --prompt "$TMP/seat.prompt" --raw "$TMP/x" --parsed "$TMP/y" >/dev/null 2>&1; assert_exit "unknown seat -> usage exit 2" 2 "$?"
@@ -800,9 +826,50 @@ fb='```findings
 {"claim":"g","location":"a.c:1","category":"correctness","severity":"high","points":[{"assertion":"x","location":"a.c:1"}]}
 ```'
 case "${AGY_MODE:-good}" in
-  good)              printf '%s\n' "$fb" ;;
-  timeout_then_good) if [ "$n" -eq 1 ]; then printf 'Error: timed out waiting for response\n'; else printf '%s\n' "$fb"; fi ;;
-  always_timeout)    printf 'Error: timed out waiting for response\n' ;;
+  good)
+    printf '%s\n' "$fb" ;;
+  quote_timeout_mid_content)
+    printf 'Note: run_agy treats `Error: timed out waiting for response` and `[agy] print timeout after 15m with turn in progress; returning partial output` as timeout markers.\n\n%s\n' "$fb" ;;
+  timeout_then_good)
+    # agy <=1.1.18: prints error as the last line of stdout and exits 0.
+    if [ "$n" -eq 1 ]; then printf 'Partial analysis...\nError: timed out waiting for response\n'; else printf '%s\n' "$fb"; fi ;;
+  always_timeout)
+    printf 'Error: timed out waiting for response\n' ;;
+  timeout_1120_then_good)
+    # agy 1.1.20: prints `Error: timeout waiting for response` on stderr, 0 bytes on stdout, exits 1.
+    if [ "$n" -eq 1 ]; then printf 'Error: timeout waiting for response\n' >&2; exit 1; else printf '%s\n' "$fb"; fi ;;
+  always_timeout_1120)
+    printf 'Error: timeout waiting for response\n' >&2; exit 1 ;;
+  timeout_1120_exit0_then_good)
+    # Wording-tolerant stderr detector check even if exit code is 0.
+    if [ "$n" -eq 1 ]; then printf 'Error: timeout waiting for response\n' >&2; else printf '%s\n' "$fb"; fi ;;
+  timeout_1128_then_good)
+    # agy 1.1.28+ (measured on 1.4.3): partial stdout, warning on stderr, exits 0.
+    if [ "$n" -eq 1 ]; then
+      printf 'I traced the caller in a.c and noticed that when len == 0 the'
+      printf '[agy] print timeout after 15m with turn in progress; returning partial output\n' >&2
+    else
+      printf '%s\n' "$fb"
+    fi ;;
+  always_timeout_1128)
+    printf 'TRUNCATED_PARTIAL_STDOUT\n'
+    printf '[agy] print timeout after 15m with turn in progress; returning partial output\n' >&2 ;;
+  truncated_1128_then_good)
+    # agy 1.1.28+: truncation note on stderr after partial output.
+    if [ "$n" -eq 1 ]; then
+      printf 'Partial output before stream drop\n'
+      printf 'error: stream reset (response may be truncated)\n' >&2
+    else
+      printf '%s\n' "$fb"
+    fi ;;
+  cascade_timeout_then_good)
+    # agy 1.1.20+ / 1.4.3 pre-cascade timeout on stderr.
+    if [ "$n" -eq 1 ]; then
+      printf 'error: timeout waiting for cascade to start running\n' >&2
+      exit 1
+    else
+      printf '%s\n' "$fb"
+    fi ;;
 esac
 exit 0
 EOF
@@ -841,17 +908,63 @@ assert_file_contains "prompt reaches agy via stdin" 'SENTINEL-7Q' "$TMP/agy.stdi
 assert_eq "primary success = single dispatch" '1' "$(cat "$TMP/agy.count.p1")"
 assert_file_contains "primary output carries the findings block" '```findings' "$TMP/agy.out.p1"
 
-section "run_agy — print-timeout (exit 0 + error tail) triggers the fallback model"
-run_agy_t timeout_then_good p2; assert_exit "fallback recovers -> exit 0" 0 "$?"
-assert_eq "primary timeout + fallback = two dispatches" '2' "$(cat "$TMP/agy.count.p2")"
+run_agy_t quote_timeout_mid_content p1q; assert_exit "quoting timeout phrase mid-stdout -> exit 0" 0 "$?"
+assert_eq "mid-stdout quote does not trigger fallback" '1' "$(cat "$TMP/agy.count.p1q")"
+assert_file_contains "mid-stdout quote preserves findings block" '```findings' "$TMP/agy.out.p1q"
+
+section "run_agy — print-timeout (<=1.1.18, 1.1.20, 1.1.28+/1.4.3) triggers the fallback model"
+# 1) agy <=1.1.18: exit 0 + `Error: timed out waiting for response` at end of stdout
+run_agy_t timeout_then_good p2; assert_exit "<=1.1.18 timeout: fallback recovers -> exit 0" 0 "$?"
+assert_eq "<=1.1.18 timeout + fallback = two dispatches" '2' "$(cat "$TMP/agy.count.p2")"
 assert_eq "second dispatch --model receives the exact fallback pin" "$FALLBACK_PIN" "$(agy_model_arg "$TMP/agy.argv.p2" 2)"
 assert_file_contains "fallback output carries the findings block" '```findings' "$TMP/agy.out.p2"
+assert_file_not_contains "primary's partial stdout is not leaked on fallback success" 'Partial analysis' "$TMP/agy.out.p2"
 assert_file_contains "logs the fallback switch" 'retrying with fallback' "$TMP/agy.err.p2"
 
-section "run_agy — both models time out -> seat fails (exit 1)"
-run_agy_t always_timeout p3; assert_exit "both fail -> exit 1" 1 "$?"
-assert_eq "both attempts dispatched" '2' "$(cat "$TMP/agy.count.p3")"
-assert_file_contains "reports both-model failure" 'both primary' "$TMP/agy.err.p3"
+# 2) agy 1.1.20: exit 1 + `Error: timeout waiting for response` on stderr, empty stdout
+run_agy_t timeout_1120_then_good p2_1120; assert_exit "1.1.20 timeout (exit 1 + stderr): fallback recovers -> exit 0" 0 "$?"
+assert_eq "1.1.20 timeout + fallback = two dispatches" '2' "$(cat "$TMP/agy.count.p2_1120")"
+assert_eq "1.1.20 second dispatch --model receives the exact fallback pin" "$FALLBACK_PIN" "$(agy_model_arg "$TMP/agy.argv.p2_1120" 2)"
+assert_file_contains "1.1.20 stderr timeout line forwarded verbatim" 'Error: timeout waiting for response' "$TMP/agy.err.p2_1120"
+assert_file_contains "1.1.20 fallback output carries the findings block" '```findings' "$TMP/agy.out.p2_1120"
+
+run_agy_t timeout_1120_exit0_then_good p2_1120_e0; assert_exit "1.1.20 stderr wording caught even on exit 0 -> fallback recovers" 0 "$?"
+assert_eq "1.1.20 stderr wording on exit 0 triggers fallback" '2' "$(cat "$TMP/agy.count.p2_1120_e0")"
+
+run_agy_t cascade_timeout_then_good p2_casc; assert_exit "pre-cascade timeout on stderr: fallback recovers -> exit 0" 0 "$?"
+assert_eq "pre-cascade timeout + fallback = two dispatches" '2' "$(cat "$TMP/agy.count.p2_casc")"
+assert_file_contains "pre-cascade timeout forwarded on stderr" 'error: timeout waiting for cascade to start running' "$TMP/agy.err.p2_casc"
+
+# 3) agy 1.1.28+ (measured on 1.4.3): exit 0 + partial stdout + `[agy] print timeout ...` on stderr
+run_agy_t timeout_1128_then_good p2_1128; assert_exit "1.1.28+/1.4.3 timeout (exit 0 + partial stdout + stderr warning): fallback recovers -> exit 0" 0 "$?"
+assert_eq "1.1.28+ timeout + fallback = two dispatches" '2' "$(cat "$TMP/agy.count.p2_1128")"
+assert_eq "1.1.28+ second dispatch --model receives the exact fallback pin" "$FALLBACK_PIN" "$(agy_model_arg "$TMP/agy.argv.p2_1128" 2)"
+assert_file_contains "1.1.28+ stderr timeout warning forwarded verbatim" '[agy] print timeout after 15m with turn in progress; returning partial output' "$TMP/agy.err.p2_1128"
+assert_file_not_contains "1.1.28+ primary's partial stdout is discarded when fallback succeeds" 'I traced the caller' "$TMP/agy.out.p2_1128"
+assert_file_contains "1.1.28+ fallback output carries the findings block" '```findings' "$TMP/agy.out.p2_1128"
+
+# 4) agy 1.1.28+ truncation note on stderr (`(response may be truncated)`)
+run_agy_t truncated_1128_then_good p2_trunc; assert_exit "1.1.28+ truncation note on stderr triggers fallback -> exit 0" 0 "$?"
+assert_eq "1.1.28+ truncation note + fallback = two dispatches" '2' "$(cat "$TMP/agy.count.p2_trunc")"
+assert_file_contains "1.1.28+ truncation note forwarded on stderr" '(response may be truncated)' "$TMP/agy.err.p2_trunc"
+
+section "run_agy — both models time out -> seat fails (exit 1) across all shapes"
+run_agy_t always_timeout p3; assert_exit "<=1.1.18 both fail -> exit 1" 1 "$?"
+assert_eq "<=1.1.18 both attempts dispatched" '2' "$(cat "$TMP/agy.count.p3")"
+assert_eq "<=1.1.18 both fail -> stdout suppressed" '' "$(cat "$TMP/agy.out.p3")"
+assert_file_contains "<=1.1.18 reports both-model failure" 'both primary' "$TMP/agy.err.p3"
+
+run_agy_t always_timeout_1120 p3_1120; assert_exit "1.1.20 both fail -> exit 1" 1 "$?"
+assert_eq "1.1.20 both attempts dispatched" '2' "$(cat "$TMP/agy.count.p3_1120")"
+assert_eq "1.1.20 both fail -> stdout empty" '' "$(cat "$TMP/agy.out.p3_1120")"
+assert_file_contains "1.1.20 stderr timeout forwarded" 'Error: timeout waiting for response' "$TMP/agy.err.p3_1120"
+assert_file_contains "1.1.20 reports both-model failure" 'both primary' "$TMP/agy.err.p3_1120"
+
+run_agy_t always_timeout_1128 p3_1128; assert_exit "1.1.28+ both fail -> exit 1" 1 "$?"
+assert_eq "1.1.28+ both attempts dispatched" '2' "$(cat "$TMP/agy.count.p3_1128")"
+assert_eq "1.1.28+ both fail -> fallback partial stdout suppressed" '' "$(cat "$TMP/agy.out.p3_1128")"
+assert_file_contains "1.1.28+ stderr timeout warning forwarded" '[agy] print timeout after 15m with turn in progress; returning partial output' "$TMP/agy.err.p3_1128"
+assert_file_contains "1.1.28+ reports both-model failure" 'both primary' "$TMP/agy.err.p3_1128"
 
 section "run_agy — records the label agy logged as bound (issue 63)"
 # With AGY_SEAT_MODEL_FILE set, run_agy probes `agy --help` (agy prints it to stderr) for
@@ -879,6 +992,12 @@ if [ "${AGY_FAIL_FIRST:-0}" = 1 ] && { [ "$n" -eq 1 ] || [ "${AGY_FAIL_ALL:-0}" 
   echo "error: invalid model selection" >&2
   exit 1
 fi
+if [ "${AGY_TIMEOUT_1128_FIRST:-0}" = 1 ] && [ "$n" -eq 1 ]; then
+  [ -n "$log" ] && printf 'I1020 model_config_manager.go:340] Propagating selected model override to backend: label="%s"\n' "$model" >> "$log"
+  printf 'Partial primary output...\n'
+  printf '[agy] print timeout after 15m with turn in progress; returning partial output\n' >&2
+  exit 0
+fi
 [ -n "$log" ] && printf 'I1020 model_config_manager.go:340] Propagating selected model override to backend: label="%s"\n' "$model" "$model" >> "$log"
 printf 'OK\n'
 EOF
@@ -898,6 +1017,8 @@ run_agy_rec r2 AGY_FAIL_FIRST=1; assert_exit "fallback recovers while recording"
 assert_eq "fallback success -> records the fallback label" "model=$FALLBACK_PIN" "$(sed -n 1p "$TMP/agyrec.r2/agy-model.txt")"
 assert_file_not_contains "a failed attempt's propagation line is not recorded" 'Settings Default' "$TMP/agyrec.r2/agy-model.txt"
 assert_eq "each attempt gets its own log" '2' "$(find "$TMP/agyrec.r2/agy-logs" -type f | wc -l | tr -d ' ')"
+run_agy_rec r2_to AGY_TIMEOUT_1128_FIRST=1; assert_exit "1.1.28+ exit-0 timeout on primary -> fallback recovers while recording" 0 "$?"
+assert_eq "1.1.28+ primary timeout -> records the fallback label, not the timed-out primary" "model=$FALLBACK_PIN" "$(sed -n 1p "$TMP/agyrec.r2_to/agy-model.txt")"
 # Both attempts fail: neither failed attempt's log (which names the settings.json
 # default) may create a record.
 run_agy_rec r4 AGY_FAIL_FIRST=1 AGY_FAIL_ALL=1; assert_exit "both attempts fail while recording -> exit 1" 1 "$?"

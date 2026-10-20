@@ -32,13 +32,14 @@
 #    full agentic tool user, so this does not newly "unsandbox" it. Repo integrity is
 #    enforced by scripts/repo_guard (snapshot + auto-revert), not by agy, on top of
 #    the disposable-container trust model.
-#  - PRIMARY Gemini 3.7 Flash (High), FALLBACK Gemini 3.1 Pro (High). 3.7 Flash is
-#    the current best Gemini seat model; 3.1 Pro is the previous pin, kept as the
-#    fallback so a primary failure still gets a full-quality second attempt from a
-#    DIFFERENT model family (the two failure modes are unlikely to coincide). NOTE:
-#    unlike the old Pro->Flash order, the fallback is NOT the faster model, so a
-#    primary --print-timeout expiry costs a second full PRINT_TIMEOUT budget before
-#    the seat is declared down; WALL_TIMEOUT bounds each attempt separately.
+#  - PRIMARY_MODEL AND FALLBACK_MODEL (defined below: Pro primary, Flash fallback
+#    since the 2026-08-22 reversal in issues/21). The two pins come from DIFFERENT
+#    Gemini model families so a primary failure gets a full-quality second attempt
+#    whose failure modes are unlikely to coincide. Because the Flash fallback is the
+#    faster model, a primary --print-timeout expiry is followed by a quicker second
+#    attempt rather than a second Pro-length wait; WALL_TIMEOUT bounds each attempt
+#    separately. Read PRIMARY_MODEL and FALLBACK_MODEL below rather than copying
+#    label literals into prose.
 #  - PIN THE EXACT DISPLAY LABEL ("Gemini 3.7 Flash (High)"), NEVER the slug
 #    ("gemini-3.7-flash-high"). The label form is the contract: it bound exactly on
 #    every version tested (1.1.10 and 1.1.13). Slugs are not reliable across
@@ -73,12 +74,29 @@
 #    interface, so nothing depends on this record: an agy without `--log-file` (it is
 #    probed in `agy --help`, which agy prints to stderr), or a log with no recognized
 #    line, costs only the record, never the attempt.
-#  - "Error: timed out waiting for response" IS --print-timeout firing. agy prints
-#    that line and exits 0 (a clean exit, NOT a hang), leaving truncated output with
-#    no findings block. attempt() therefore treats output that ENDS with that line
-#    as a failure (see agy_ended_with_timeout) so the fallback model is tried; a real
-#    review that merely QUOTES the phrase mid-content is unaffected (the match is
-#    anchored to the final bytes). A genuine hang is caught by `timeout WALL_TIMEOUT`.
+#  - HOW --print-timeout EXPIRY SURFACES HAS CHANGED ACROSS AGY VERSIONS; DO NOT
+#    RELY ON ANY ONE SHAPE AS PERMANENT:
+#    * agy <=1.1.18 (measured 2026-08): prints `Error: timed out waiting for response`
+#      as the last line of stdout and exits 0 (leaving truncated, block-less stdout).
+#    * agy 1.1.20 (measured 2026-08-26): prints `Error: timeout waiting for response`
+#      on stderr, writes 0 bytes to stdout, and exits 1 (or `error: timeout waiting
+#      for cascade to start running` on stderr if the timeout fires before the
+#      cascade starts).
+#    * agy 1.1.28+ (measured on 1.4.3, 2026-10-20): returns whatever partial output
+#      it has on stdout, prints `[agy] print timeout after <duration> with turn in
+#      progress; returning partial output` on stderr, and exits 0; when a turn ends
+#      on an error after partial output, stderr also appends `(response may be
+#      truncated)` (exit 0 on 1.1.28-1.2.9, exit 3 with `AGY_ERROR:` since 1.2.10).
+#    On the exit-0 shapes (<=1.1.18 and 1.1.28+), relying on the exit code alone
+#    would skip the fallback model and hand a truncated answer to parse_block and
+#    referee salvage. attempt() therefore captures each attempt's stderr to a temp
+#    file, forwards it verbatim to our stderr, and checks both the tail of stdout
+#    and the captured stderr via agy_ended_with_timeout so any of the three shapes
+#    is treated as a failed attempt and triggers the fallback model. When both
+#    models fail or time out, stdout is suppressed so truncated partial output is
+#    never emitted to the caller. A real review that merely quotes the phrase
+#    mid-stdout is unaffected (the stdout match is anchored to the final bytes).
+#    A genuine hang is caught by `timeout WALL_TIMEOUT`.
 
 set -euo pipefail
 
@@ -93,19 +111,28 @@ MODEL_FILE="${AGY_SEAT_MODEL_FILE:-}"
 
 command -v agy >/dev/null 2>&1 || { echo "run_agy: agy CLI not found" >&2; exit 127; }
 
-# True only when agy's output TERMINATES with its --print-timeout error line —
-# "Error: " prefix required, anchored to the END of the output (tr drops newlines
-# so the regex `$` matches the true end). agy writes this as the last thing when
-# --print-timeout fires; a valid review that quotes the phrase has it mid-content,
-# not as the final bytes.
+# True when an attempt ended in an agy --print-timeout or truncated-turn warning:
+#  - stdout tail ($1): `Error: timed out waiting for response` (<=1.1.18) or the
+#    `timeout` spelling, anchored to the final bytes (tr drops newlines so `$`
+#    matches the true end; a review that quotes the phrase mid-stdout before its
+#    fenced block does not match).
+#  - stderr ($2): `Error: timeout waiting for response` / `error: timeout waiting
+#    for cascade to start running` (1.1.20+), `[agy] print timeout after <d> with
+#    turn in progress; returning partial output` (1.1.28+, measured on 1.4.3), or
+#    `(response may be truncated)` (1.1.28+).
 agy_ended_with_timeout() {
-  tail -c 160 "$1" 2>/dev/null | tr -d '\n' \
-    | grep -qE 'Error: timed out waiting for response[[:space:]]*$'
+  local out="$1" err="${2:-/dev/null}"
+  if tail -c 160 "$out" 2>/dev/null | tr -d '\n' \
+       | grep -qE '[Ee]rror: timed? ?out waiting for response[[:space:]]*$'; then
+    return 0
+  fi
+  grep -qE '([Ee]rror: timed? ?out waiting for (response|cascade to start running)|\[agy\] print timeout after |\(response may be truncated\))' "$err" 2>/dev/null
 }
 
 promptfile="$(mktemp /tmp/agy_prompt.XXXXXX)"
 outfile="$(mktemp /tmp/agy_out.XXXXXX)"
-trap 'rm -f "$promptfile" "$outfile"' EXIT
+errfile="$(mktemp /tmp/agy_err.XXXXXX)"
+trap 'rm -f "$promptfile" "$outfile" "$errfile"' EXIT
 
 # Only probe for --log-file when a record was asked for: an agy that predates the flag
 # would hard-error on it, and passing it blindly would take the seat down to gain a
@@ -134,16 +161,19 @@ else
   cat > "$promptfile"   # prompt on stdin; cat reaches EOF here
 fi
 
-# Run one model. agy's stdout -> $outfile (relayed verbatim by the caller on the
-# chosen attempt); its stderr stays on our stderr (the caller captures it).
+# Run one model. agy's stdout -> $outfile (relayed verbatim on stdout only when the
+# attempt succeeds); its stderr -> $errfile and is immediately forwarded verbatim to
+# our stderr (the caller captures it for diagnosis) while remaining inspectable by
+# agy_ended_with_timeout.
 # Returns 0 on success, non-zero to trigger the fallback. Two failure paths: the
-# attempt exits non-zero (agy error, or `timeout` killing a true hang), OR it exits
-# 0 but its output ENDS with agy's --print-timeout error line (a fired print-timeout
-# is a clean exit-0 with truncated, block-less output — see agy_ended_with_timeout).
+# attempt exits non-zero (agy error, 1.1.20 print-timeout exit 1, or `timeout`
+# killing a true hang), OR it exits 0 but agy_ended_with_timeout matches the stdout
+# tail (<=1.1.18) or stderr warning (1.1.28+ partial output on timeout).
 attempt() {
   local model="$1" rc
   local log_args=()
   : > "$outfile"
+  : > "$errfile"
   logfile=""
   if [ -n "$log_dir" ]; then
     logfile="$(mktemp "$log_dir/$(date -u +%Y%m%dT%H%M%SZ).XXXXXX" 2>/dev/null)" || logfile=""
@@ -160,12 +190,14 @@ attempt() {
        --model "$model" \
        --dangerously-skip-permissions \
        ${log_args[@]+"${log_args[@]}"} \
-       < "$promptfile" > "$outfile"; then rc=0; else rc=$?; fi
-  # A fired --print-timeout makes agy print its error line and exit 0 (a clean
-  # exit, not a hang). Treat that truncated output as a failure so the fallback
-  # model is tried — otherwise a timed-out attempt looks like success and the
-  # caller relays output with no findings block.
-  if agy_ended_with_timeout "$outfile"; then return 1; fi
+       < "$promptfile" > "$outfile" 2> "$errfile"; then rc=0; else rc=$?; fi
+  cat "$errfile" >&2
+  # A fired --print-timeout on <=1.1.18 or 1.1.28+ exits 0 (a clean exit, not a
+  # hang), leaving empty or truncated output on stdout. Treat any print-timeout
+  # marker on the stdout tail or stderr as a failure so the fallback model is
+  # tried — otherwise a timed-out attempt looks like success and the caller
+  # relays partial output to parse_block and referee salvage.
+  if agy_ended_with_timeout "$outfile" "$errfile"; then return 1; fi
   return "$rc"
 }
 
@@ -202,8 +234,9 @@ if attempt "$FALLBACK_MODEL"; then
   exit 0
 fi
 
-# Both failed. Relay the last attempt's output (so the caller logs agy's own
-# message) and exit non-zero so the referee degrades the Gemini seat.
-cat "$outfile"
+# Both failed. Do not relay $outfile: on a print-timeout or mid-turn truncation
+# error, $outfile holds partial stdout that must not reach parse_block or
+# status-4 referee salvage. Each attempt's stderr was already forwarded above;
+# leave stdout empty and exit non-zero so the referee degrades the Gemini seat.
 echo "run_agy: both primary ('$PRIMARY_MODEL') and fallback ('$FALLBACK_MODEL') models failed" >&2
 exit 1
