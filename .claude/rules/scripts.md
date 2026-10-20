@@ -98,9 +98,9 @@ byte-exact.
   every phase/panel rendering, runtime-valid examples, and narrow forbidden legacy wording checks.
   Failures name the invariant and location.
 - `check_draft` — the **seat-facing** pre-emit validator (spliced into prompts as `{{CHECK}}`; the
-  referee never calls it). Thin wrapper over `parse_block --diagnose` — don't re-implement the
-  finding/stance checks. Lets a seat catch bad items before emitting (closes `parse_block`'s
-  silent-drop of individual malformed lines).
+  referee never calls it). Wrapper over `parse_block --diagnose` and the shared seat-contract
+  normalizers — don't re-implement the finding/stance checks. Reports rejected items and retained
+  items whose points, revision fields, or evidence objects would be silently dropped by normal parsing.
 - `write_seat_raw` — the Claude seat's sole write outside its scratch directory. It derives the
   expected Round-0 or debate raw path from a validated run ID/round/batch, requires the phase's exact
   block set and every item to pass the shared seat-contract validation, and only then atomically

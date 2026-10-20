@@ -2,16 +2,17 @@
 # check_draft — SEAT-FACING pre-emit validator. A reviewer seat runs this on the
 # JSONL it is ABOUT to put inside its ```findings / ```new_findings / ```stances
 # fence, BEFORE emitting, so it can fix malformed items while the content is still
-# in context. It shells out to the SAME validator the referee parses with
-# (`parse_block --diagnose`) rather than re-checking the schema itself, so there is
-# no second schema to drift: "valid here" == "kept by the pipeline".
+# in context. It uses `parse_block --diagnose` and the shared seat-contract
+# normalizers, so diagnostics cover rejected items and retained items whose points,
+# revision fields, or evidence objects would be discarded.
 #
 # Why this exists: parse_block validates per-line and, unless the WHOLE block is
 # unparseable (its exit 5), it merely DISCARDS malformed lines with a stderr note
 # the seat never sees (parse_block still exits 0 as long as one line survived). So
 # a seat that emits 5 findings with 2 malformed silently loses those 2 and no
-# repair fires. This check surfaces the bad items at emission time instead — the
-# only point where the seat still holds the content needed to fix them.
+# repair fires. It can also discard invalid points or optional stance fields while
+# retaining the surrounding item. This check surfaces those losses at emission time
+# instead — the only point where the seat still holds the content needed to fix them.
 #
 # Usage:
 #   check_draft <findings|new_findings|stances> [file]

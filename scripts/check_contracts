@@ -113,6 +113,13 @@ def check_rendered_contracts(errors):
                 )
             if f"configured panel has {panel_size} reviewer seats, including you" not in rendered:
                 fail(errors, "configured-panel-wording", label, "panel size is absent or incorrect")
+            if "any field or evidence point the parser would discard" not in rendered:
+                fail(
+                    errors,
+                    "pre-emit-loss-diagnostics",
+                    label,
+                    "the seat instructions do not explain that the validator reports dropped fields and points",
+                )
             problem = response_problem(rendered, phase)
             if problem is not None:
                 fail(errors, "seat-block-cardinality", label, problem[1])

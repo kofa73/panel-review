@@ -2,7 +2,7 @@
 
 Priority: 36
 
-Status: Pending
+Status: Completed
 
 Source: Panel review `panel-20260816-080558-5ab680af` (Claude + Codex + Gemini), 2026-08-16 — accepted unanimously
 
@@ -57,3 +57,10 @@ exits — and the loss is only visible, if at all, as a missing revision in the 
 - Do not make `parse_block` reject a whole block because one item is lossy. The silent-drop
   behaviour at parse time is deliberate (a partial block still beats a discarded round); this issue
   is about telling the seat *before* it emits.
+
+## Resolution
+
+Completed 2026-10-20: diagnostics now report invalid revision fields, rejected revisions, invalid
+evidence objects, and finding points that normal parsing would discard. The shared revision
+normalizer keeps diagnostics aligned with runtime filtering; tests confirm partial finding parsing
+still retains valid points.

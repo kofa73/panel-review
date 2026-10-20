@@ -1,7 +1,8 @@
 """Coverage for check_draft — the seat-facing pre-emit validator.
 
-check_draft is a thin wrapper over `parse_block --diagnose`; these tests pin the
-seat-facing contract (exit codes, bare-JSONL vs fenced input, stdin vs file) and,
+check_draft wraps `parse_block --diagnose` and the shared seat-contract rules; these
+tests pin its seat-facing contract (exit codes, dropped-field diagnostics,
+bare-JSONL vs fenced input, stdin vs file) and,
 crucially, that it CATCHES the mixed valid/invalid block that parse_block's normal
 mode silently accepts by dropping the bad lines.
 """
@@ -10,6 +11,7 @@ import unittest
 import subprocess
 import os
 import tempfile
+import json
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 CHECK = os.path.join(ROOT, "scripts", "check_draft")
@@ -21,6 +23,9 @@ VALID_FINDING = ('{"claim":"ok","location":"f.c:1","category":"correctness",'
 INVALID_FINDING = ('{"location":"f.c:2","category":"correctness","severity":"high",'
                    '"points":[{"assertion":"x","location":"f.c:2"}]}')
 VALID_STANCE = '{"id":"i1","stance":"support","rationale":"ok"}'
+VALID_FULL_STANCE = ('{"id":"i1","stance":"support","revision":{"severity":"high",'
+                     '"category":"correctness","claim":"corrected","location":"f.c:1"},'
+                     '"new_evidence":{"assertion":"x","location":"f.c:2"}}')
 INVALID_STANCE = '{"id":"i2","stance":"maybe","rationale":"bad enum"}'
 # issue 34: a tally in text the referee promotes verbatim onto a card
 TALLY_STANCE = ('{"id":"i3","stance":"reject",'
@@ -44,6 +49,14 @@ class TestCheckDraft(unittest.TestCase):
         res = self.run_stdin(["stances"], VALID_STANCE + "\n")
         self.assertEqual(res.returncode, 0)
         self.assertIn("Safe to emit", res.stdout)
+
+    def test_valid_revision_and_evidence_keep_the_existing_ok_summary(self):
+        res = self.run_stdin(["stances"], VALID_FULL_STANCE + "\n")
+        self.assertEqual(res.returncode, 0)
+        self.assertEqual(
+            res.stdout,
+            "OK — 1 item(s), 0 invalid. Safe to emit your ```stances block.\n",
+        )
 
     def test_new_findings_uses_findings_rules(self):
         res = self.run_stdin(["new_findings"], VALID_FINDING + "\n")
@@ -81,6 +94,63 @@ class TestCheckDraft(unittest.TestCase):
     def test_domain_vocabulary_rationale_passes(self):
         res = self.run_stdin(["stances"], DOMAIN_STANCE + "\n")
         self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+
+    def test_invalid_revision_severity_is_reported_even_when_other_revision_fields_survive(self):
+        draft = ('{"id":"i1","stance":"support","revision":{"severity":"moderate",'
+                 '"claim":"corrected"}}\n')
+        res = self.run_stdin(["stances"], draft)
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("invalid `revision.severity`", res.stdout)
+        self.assertIn("would be dropped", res.stdout)
+
+    def test_invalid_new_evidence_reports_missing_location(self):
+        draft = ('{"id":"i1","stance":"support","new_evidence":{"assertion":"new fact"}}\n')
+        res = self.run_stdin(["stances"], draft)
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("invalid `new_evidence` will be discarded", res.stdout)
+        self.assertIn("missing `location`", res.stdout)
+
+    def test_reject_revision_is_reported_before_it_is_discarded(self):
+        draft = ('{"id":"i1","stance":"reject","rationale":"counter-evidence",'
+                 '"revision":{"severity":"high"}}\n')
+        res = self.run_stdin(["stances"], draft)
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("`revision` will be discarded from a reject stance", res.stdout)
+
+    def test_all_invalid_revision_and_evidence_fields_are_reported(self):
+        draft = ('{"id":"i1","stance":"support","revision":{"severity":"moderate",'
+                 '"extra":"x"},"new_evidence":{"assertion":"new fact"},'
+                 '"evidence":{"location":"f.c:3"}}\n')
+        res = self.run_stdin(["stances"], draft)
+        self.assertEqual(res.returncode, 1)
+        for expected in (
+            "invalid `revision.severity`",
+            "unknown `revision.extra` field",
+            "`revision` would be removed",
+            "invalid `new_evidence` will be discarded",
+            "invalid `evidence` will be discarded",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, res.stdout)
+
+    def test_partial_point_loss_is_reported_and_parse_still_keeps_the_valid_point(self):
+        invalid = '{"assertion":"missing location"}'
+        draft = VALID_FINDING[:-2] + "," + invalid + "]}"
+        res = self.run_stdin(["findings"], draft + "\n")
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("1 point(s) in `points[]` would be dropped", res.stdout)
+        self.assertIn("point 2: missing `location`", res.stdout)
+
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as tf:
+            tf.write(f"```findings\n{draft}\n```\n")
+            tmp = tf.name
+        try:
+            parsed = subprocess.run([PARSE, "findings", tmp, "claude"], capture_output=True, text=True)
+            self.assertEqual(parsed.returncode, 0, parsed.stderr)
+            normalized = json.loads(parsed.stdout)
+            self.assertEqual(len(normalized["points"]), 1)
+        finally:
+            os.remove(tmp)
 
     def test_bad_tag_is_usage_error(self):
         res = self.run_stdin(["bogus"], "")

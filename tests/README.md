@@ -68,9 +68,9 @@ Each exits `3` when its CLI is not installed, which the suite reports as a skip.
   sub-field stripping; empty-vs-real stances block idiom; `--response` phase block
   cardinality (missing and duplicate blocks).
 - **check_draft** (`test_check_draft.py`): valid bare JSONL and already-fenced input; empty drafts;
-  findings, stances, and new-findings validation; mixed valid/invalid item detection; a tally in a
-  rationale flagged pre-emit while domain vocabulary passes; file input;
-  invalid tags and missing arguments.
+  findings, stances, and new-findings validation; mixed valid/invalid item detection; dropped
+  revision/evidence fields and partial point loss reported before emit; a tally in a rationale
+  flagged pre-emit while domain vocabulary passes; file input; invalid tags and missing arguments.
 - **instruction contracts** (`test_contract_consistency.py`): the live tree passes the ownership
   checker; known barrier/path/return/panel/health/delivery/stance drift is reintroduced one case at a
   time and must fail with the invariant name; direct normal-debate transaction helpers are rejected.

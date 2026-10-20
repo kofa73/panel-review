@@ -119,8 +119,50 @@ def normalize_points(obj):
     return []
 
 
-def ok_points(obj):
-    return len(normalize_points(obj)) > 0
+def point_problem(value):
+    """Explain why valid_point rejects a value so diagnostics can name lost evidence."""
+    if valid_point(value):
+        return None
+    if type(value) is not dict:
+        return "not a JSON object"
+    if type(value.get("assertion")) is not str:
+        return "missing or non-string `assertion`"
+    if "location" not in value:
+        return "missing `location`"
+    if not valid_location(value["location"]):
+        return 'invalid `location` (a non-empty "file:line" string, or an array of such)'
+    for key in ("precondition", "impact"):
+        if key in value and type(value[key]) is not str:
+            return f"non-string `{key}`"
+    return "invalid evidence point"
+
+
+def normalize_revision(revision):
+    """Share revision filtering so diagnostics cannot drift from runtime normalization."""
+    if not isinstance(revision, dict):
+        return None, ["`revision` would be discarded: expected an object"]
+
+    normalized = {}
+    dropped = []
+    for key, value in revision.items():
+        field = f"revision.{key}"
+        if key not in {"category", "severity", "claim", "location"}:
+            dropped.append(f"unknown `{field}` field would be dropped")
+        elif key == "category" and not (isinstance(value, str) and value in CATEGORIES):
+            dropped.append(f"invalid `{field}` (one of: {', '.join(CATEGORIES)}) would be dropped")
+        elif key == "severity" and not (isinstance(value, str) and value in SEVERITIES):
+            dropped.append(f"invalid `{field}` (one of: {', '.join(SEVERITIES)}) would be dropped")
+        elif key == "claim" and not isinstance(value, str):
+            dropped.append(f"non-string `{field}` would be dropped")
+        elif key == "location" and not valid_location(value):
+            dropped.append(f"invalid `{field}` (a non-empty location string or array) would be dropped")
+        else:
+            normalized[key] = value
+
+    if not normalized:
+        dropped.append("`revision` would be removed because it has no valid fields")
+        return None, dropped
+    return normalized, dropped
 
 
 def ok_id(obj):
@@ -148,8 +190,29 @@ def diag_findings(obj):
         return "missing/invalid `category` (one of: security, correctness, performance, maintainability, style)"
     if not ok_severity(obj):
         return "missing/invalid `severity` (one of: critical, high, medium, low, style)"
-    if not ok_points(obj):
-        return "no valid `points[]`: every finding needs a non-empty points array; each point needs a string `assertion` and a valid `location` (do not put precondition/impact at the top level)"
+    points = obj.get("points", [])
+    normalized_points = normalize_points(obj)
+    if not normalized_points:
+        problem = "no valid `points[]`: every finding needs a non-empty points array; each point needs a string `assertion` and a valid `location` (do not put precondition/impact at the top level)"
+        if isinstance(points, list):
+            details = [
+                f"point {index}: {point_problem(point)}"
+                for index, point in enumerate(points, 1)
+                if not valid_point(point)
+            ]
+            if details:
+                return "; ".join([problem] + details)
+        elif not valid_point(points):
+            return f"{problem}; point: {point_problem(points)}"
+        return problem
+    if isinstance(points, list):
+        dropped = [
+            f"point {index}: {point_problem(point)}"
+            for index, point in enumerate(points, 1)
+            if not valid_point(point)
+        ]
+        if dropped:
+            return f"{len(dropped)} point(s) in `points[]` would be dropped: " + "; ".join(dropped)
     return "valid"
 
 
@@ -185,15 +248,26 @@ def diag_stances(obj):
         return f"missing/invalid `stance` (one of: {', '.join(STANCE_VALUES)})"
     if not ok_reject_rationale(obj):
         return "reject requires non-empty `rationale` counter-evidence"
-    # Unlike every other diagnostic here, a blindness match does not discard the ITEM: the stance
-    # still counts and any revision is still adopted. Only the offending STRING is withheld from
-    # the card. It is reported as invalid anyway because check_draft's exit code is the sole
-    # seat-facing channel, and rewording now costs the seat nothing.
+    problems = []
+    if obj["stance"] == "reject" and "revision" in obj:
+        problems.append("`revision` will be discarded from a reject stance")
+    elif "revision" in obj:
+        _, dropped = normalize_revision(obj["revision"])
+        problems.extend(dropped)
+
+    for key in ("new_evidence", "evidence"):
+        if key in obj:
+            reason = point_problem(obj[key])
+            if reason:
+                problems.append(f"invalid `{key}` will be discarded: {reason}")
+
+    # A blindness match does not discard the stance or its revision; only the offending string is
+    # withheld from the card. Keep it in the same seat-facing diagnostic so the seat can reword it.
     for field, value in blindness_fields(obj):
         span = blindness_match(value)
         if span:
-            return f"`{field}` ({span!r}) {BLINDNESS_ADVICE}"
-    return "valid"
+            problems.append(f"`{field}` ({span!r}) {BLINDNESS_ADVICE}")
+    return "; ".join(problems) if problems else "valid"
 
 
 def valid_stances(obj):
@@ -203,25 +277,9 @@ def valid_stances(obj):
     if obj["stance"] == "reject":
         obj.pop("revision", None)
     elif "revision" in obj:
-        revision = obj["revision"]
-        if isinstance(revision, dict):
-            normalized = {}
-            for key, value in revision.items():
-                if key not in {"category", "severity", "claim", "location"}:
-                    continue
-                if key == "category" and not (isinstance(value, str) and value in CATEGORIES):
-                    continue
-                if key == "severity" and not (isinstance(value, str) and value in SEVERITIES):
-                    continue
-                if key == "claim" and not isinstance(value, str):
-                    continue
-                if key == "location" and not valid_location(value):
-                    continue
-                normalized[key] = value
-            if normalized:
-                obj["revision"] = normalized
-            else:
-                del obj["revision"]
+        normalized, _ = normalize_revision(obj["revision"])
+        if normalized is not None:
+            obj["revision"] = normalized
         else:
             del obj["revision"]
 
@@ -304,9 +362,11 @@ security|correctness|performance|maintainability|style):
 
 ## Validate before you emit
 
-A malformed finding is silently dropped downstream. Write the JSONL planned for the fence to a
-scratch file and run `{check_command}` with that file path appended. Exit status 0 means every item
-is valid. Fix every reported item before emitting. An empty draft is valid when you found nothing.
+The validator reports malformed findings and any field or evidence point the parser would discard.
+Write the JSONL planned for the fence to a scratch file and run `{check_command}` with that file
+path appended.
+Exit status 0 means no draft content will be silently lost. Fix every reported item or point before
+emitting. An empty draft is valid when you found nothing.
 """
 
     return f"""You are continuing a blind peer review in the debate phase. {context}
@@ -346,10 +406,10 @@ block is required-emptyable: use `[]` or leave it empty when there is no new iss
 
 ## Validate before you emit
 
-A malformed item is silently dropped downstream. Validate the stances JSONL by running
-`{check_command}` with the draft path appended. Validate new findings by replacing `stances` in that
-command with `new_findings`. Exit status 0 means every item is valid; fix all reported items before
-emitting.
+The validator reports malformed items and any field or evidence point the parser would discard.
+Validate the stances JSONL by running `{check_command}` with the draft path appended. Validate new
+findings by replacing `stances` in that command with `new_findings`. Exit status 0 means no draft
+content will be silently lost; fix all reported items or fields before emitting.
 """
 
 
